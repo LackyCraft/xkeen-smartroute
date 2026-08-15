@@ -1,5 +1,7 @@
 # Grok / x.ai -- resolved IPv4 snapshot, auto-generated 2026-08-15 by scripts/update_lists.py
 # Informational only: NOT used for routing (CDN IPs rotate; this is a point-in-time DNS snapshot).
 # source domains: grok.com, x.ai, api.x.ai, www.x.ai, grok.x.ai
-8.47.69.6
-8.6.112.6
+104.18.18.80
+104.18.19.80
+104.18.28.234
+104.18.29.234
