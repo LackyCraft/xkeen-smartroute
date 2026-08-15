@@ -1,4 +1,4 @@
-name: Update custom domain lists
+name: Update domain/IP lists
 
 on:
   schedule:
@@ -14,17 +14,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Verify + refresh lists/custom/*.lst from scripts/seeds.json
-        run: bash scripts/update-lists.sh
+      - name: Verify candidates, refresh lists/custom + lists/ip, build changelog
+        id: refresh
+        run: python3 scripts/update_lists.py
 
-      - name: Commit changes if any
+      - name: Commit changes
+        if: steps.refresh.outputs.has_changes == 'true'
         run: |
           git config user.name "xkeen-smartroute-bot"
           git config user.email "actions@users.noreply.github.com"
-          if git diff --quiet -- lists/custom; then
-            echo "No changes to domain lists."
-          else
-            git add lists/custom
-            git commit -m "chore: auto-refresh custom domain lists"
-            git push
-          fi
+          git add lists/custom lists/ip
+          git commit -m "chore: auto-refresh domain/IP lists ($(date -u +%Y-%m-%d))"
+          git push
+
+      - name: Publish a Release with the changelog
+        if: steps.refresh.outputs.has_changes == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="lists-$(date -u +%Y-%m-%d)-${{ github.run_number }}"
+          gh release create "$tag" \
+            --title "Domain/IP lists — $(date -u +%Y-%m-%d)" \
+            --notes-file RELEASE_NOTES.md

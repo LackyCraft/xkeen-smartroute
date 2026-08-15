@@ -1,12 +1,35 @@
 {
-  "_comment": "Candidate domains for services missing from v2fly geosite. The update-domain-lists workflow checks each candidate (DNS + TLS reachability) and rewrites lists/custom/<key>.lst with only the ones that are actually alive. Add new candidates here over time — dead ones get dropped automatically, no need to remove them by hand.",
-  "character-ai": [
-    "character.ai", "neo.character.ai", "plus.character.ai", "www.character.ai"
-  ],
-  "grok": [
-    "grok.com", "x.ai", "api.x.ai", "www.x.ai", "grok.x.ai"
-  ],
-  "npm": [
-    "registry.npmjs.org", "npmjs.com", "www.npmjs.com"
-  ]
+  "_comment": "Watched services for scripts/update_lists.py. 'routing: true' services also get a lists/custom/<key>.lst domain list that SmartRoute actually routes on (used for services genuinely missing from Xray's geosite database). Every service (routing true or false) gets a lists/ip/<key>.lst resolved-IP snapshot for reference/allowlisting -- NOT used for routing itself, since CDN-backed services rotate IPs constantly and a periodic DNS snapshot is inherently incomplete. Add candidates over time; dead ones drop out automatically.",
+  "services": {
+    "character-ai": {
+      "routing": true,
+      "label": "Character.AI",
+      "candidates": ["character.ai", "neo.character.ai", "plus.character.ai", "www.character.ai"]
+    },
+    "grok": {
+      "routing": true,
+      "label": "Grok / x.ai",
+      "candidates": ["grok.com", "x.ai", "api.x.ai", "www.x.ai", "grok.x.ai"]
+    },
+    "npm": {
+      "routing": true,
+      "label": "npm registry",
+      "candidates": ["registry.npmjs.org", "npmjs.com", "www.npmjs.com"]
+    },
+    "youtube": {
+      "routing": false,
+      "label": "YouTube (already in geosite -- IP snapshot is informational only)",
+      "candidates": ["youtube.com", "www.youtube.com", "googlevideo.com", "ytimg.com"]
+    },
+    "discord": {
+      "routing": false,
+      "label": "Discord (already in geosite -- IP snapshot is informational only)",
+      "candidates": ["discord.com", "discord.gg", "gateway.discord.gg", "cdn.discordapp.com"]
+    },
+    "claude": {
+      "routing": false,
+      "label": "Claude / Anthropic (already in geosite as 'anthropic' -- IP snapshot is informational only)",
+      "candidates": ["claude.ai", "anthropic.com", "console.anthropic.com"]
+    }
+  }
 }
