@@ -1,0 +1,7 @@
+# Grok / x.ai — NOT covered by v2fly geosite (verified 2026-08-15: no "grok"
+# or "x-ai" category exists in v2fly/domain-list-community). Domains verified
+# reachable directly (DNS+TLS handshake OK) on the same date.
+# Maintained by .github/workflows/update-domain-lists.yml — see scripts/seeds.json.
+grok.com
+x.ai
+api.x.ai

@@ -1,0 +1,12 @@
+{
+  "_comment": "Candidate domains for services missing from v2fly geosite. The update-domain-lists workflow checks each candidate (DNS + TLS reachability) and rewrites lists/custom/<key>.lst with only the ones that are actually alive. Add new candidates here over time — dead ones get dropped automatically, no need to remove them by hand.",
+  "character-ai": [
+    "character.ai", "neo.character.ai", "plus.character.ai", "www.character.ai"
+  ],
+  "grok": [
+    "grok.com", "x.ai", "api.x.ai", "www.x.ai", "grok.x.ai"
+  ],
+  "npm": [
+    "registry.npmjs.org", "npmjs.com", "www.npmjs.com"
+  ]
+}

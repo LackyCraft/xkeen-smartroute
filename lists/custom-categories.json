@@ -1,0 +1,5 @@
+[
+  {"key": "character-ai", "file": "custom/character-ai.lst", "label_ru": "Character.AI (нет в geosite)", "label_en": "Character.AI (not in geosite)"},
+  {"key": "grok",         "file": "custom/grok.lst",          "label_ru": "Grok / x.ai (нет в geosite)",  "label_en": "Grok / x.ai (not in geosite)"},
+  {"key": "npm",          "file": "custom/npm.lst",           "label_ru": "npm registry (нет в geosite)", "label_en": "npm registry (not in geosite)"}
+]

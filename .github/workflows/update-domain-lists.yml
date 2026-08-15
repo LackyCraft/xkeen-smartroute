@@ -1,0 +1,30 @@
+name: Update custom domain lists
+
+on:
+  schedule:
+    - cron: "17 4 * * 1"   # every Monday 04:17 UTC
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify + refresh lists/custom/*.lst from scripts/seeds.json
+        run: bash scripts/update-lists.sh
+
+      - name: Commit changes if any
+        run: |
+          git config user.name "xkeen-smartroute-bot"
+          git config user.email "actions@users.noreply.github.com"
+          if git diff --quiet -- lists/custom; then
+            echo "No changes to domain lists."
+          else
+            git add lists/custom
+            git commit -m "chore: auto-refresh custom domain lists"
+            git push
+          fi

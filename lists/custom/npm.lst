@@ -1,0 +1,6 @@
+# npm registry — NOT covered by v2fly geosite (verified 2026-08-15: no "npm"
+# category exists; only "nodejs"/"github" adjacent categories exist, which
+# don't include the registry host). Domain verified reachable directly.
+# Maintained by .github/workflows/update-domain-lists.yml — see scripts/seeds.json.
+registry.npmjs.org
+npmjs.com

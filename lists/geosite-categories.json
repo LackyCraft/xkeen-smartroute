@@ -1,0 +1,19 @@
+[
+  {"key": "youtube",   "label_ru": "YouTube",          "label_en": "YouTube"},
+  {"key": "discord",   "label_ru": "Discord",          "label_en": "Discord"},
+  {"key": "telegram",  "label_ru": "Telegram",         "label_en": "Telegram"},
+  {"key": "twitch",    "label_ru": "Twitch",           "label_en": "Twitch"},
+  {"key": "instagram", "label_ru": "Instagram",        "label_en": "Instagram"},
+  {"key": "facebook",  "label_ru": "Facebook",         "label_en": "Facebook"},
+  {"key": "tiktok",    "label_ru": "TikTok",           "label_en": "TikTok"},
+  {"key": "spotify",   "label_ru": "Spotify",          "label_en": "Spotify"},
+  {"key": "netflix",   "label_ru": "Netflix",          "label_en": "Netflix"},
+  {"key": "openai",    "label_ru": "OpenAI / ChatGPT", "label_en": "OpenAI / ChatGPT"},
+  {"key": "anthropic", "label_ru": "Anthropic / Claude","label_en": "Anthropic / Claude"},
+  {"key": "github",    "label_ru": "GitHub",           "label_en": "GitHub"},
+  {"key": "twitter",   "label_ru": "X (Twitter)",      "label_en": "X (Twitter)"},
+  {"key": "reddit",    "label_ru": "Reddit",           "label_en": "Reddit"},
+  {"key": "whatsapp",  "label_ru": "WhatsApp",         "label_en": "WhatsApp"},
+  {"key": "google",    "label_ru": "Google",           "label_en": "Google"},
+  {"key": "amazon",    "label_ru": "Amazon",           "label_en": "Amazon"}
+]
