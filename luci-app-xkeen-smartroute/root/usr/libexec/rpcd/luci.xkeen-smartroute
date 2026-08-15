@@ -1,0 +1,103 @@
+#!/bin/sh
+# ubus/rpcd backend for luci-app-xkeen-smartroute.
+# Filename registers the ubus object as "luci.xkeen-smartroute" (rpcd's
+# script-protocol convention: object name == filename under this directory).
+# Protocol: `list` prints the method schema, `call <method>` reads JSON args
+# from stdin and prints a JSON result.
+
+LIB_DIR="/opt/share/xkeen-smartroute/lib"
+SR_ETC_DIR="/etc/xkeen-smartroute"
+
+json_err() { printf '{"error":"%s"}\n' "$1"; }
+
+case "$1" in
+	list)
+		cat <<'EOF'
+{
+	"list_servers": {},
+	"import_subscription": {"url":"str1","label":"str1"},
+	"list_categories": {},
+	"list_custom_categories": {},
+	"list_profiles": {},
+	"save_profile": {"profile":"str1"},
+	"delete_profile": {"name":"str1"},
+	"add_custom_domain": {"list_name":"str1","domains":"str1"},
+	"get_status": {},
+	"killswitch_set": {"name":"str1","enabled":"bool1"}
+}
+EOF
+		;;
+	call)
+		method="$2"
+		args="$(cat)"
+		[ -x "$LIB_DIR/common.sh" ] || { json_err "not_installed"; exit 0; }
+		case "$method" in
+			list_servers)
+				sh "$LIB_DIR/subscription.sh" list 2>/dev/null || echo '[]'
+				;;
+			import_subscription)
+				url="$(echo "$args" | jq -r '.url // empty')"
+				label="$(echo "$args" | jq -r '.label // "sub"')"
+				if [ -z "$url" ]; then json_err "missing_url"; exit 0; fi
+				if sh "$LIB_DIR/subscription.sh" import "$url" "$label" >/tmp/sr_import.log 2>&1; then
+					sh "$LIB_DIR/subscription.sh" list
+				else
+					jq -n --arg log "$(cat /tmp/sr_import.log)" '{error:"import_failed", detail:$log}'
+				fi
+				;;
+			list_categories)
+				cat "$SR_ETC_DIR/lists/geosite-categories.json" 2>/dev/null || echo '[]'
+				;;
+			list_custom_categories)
+				cat "$SR_ETC_DIR/lists/custom-categories.json" 2>/dev/null || echo '[]'
+				;;
+			list_profiles)
+				sh "$LIB_DIR/genroute.sh" list 2>/dev/null || echo '[]'
+				;;
+			save_profile)
+				echo "$args" | jq -r '.profile' >/tmp/sr_profile.json
+				if sh "$LIB_DIR/genroute.sh" save /tmp/sr_profile.json >/tmp/sr_save.log 2>&1; then
+					jq -n '{ok:true}'
+				else
+					jq -n --arg log "$(cat /tmp/sr_save.log)" '{error:"save_failed", detail:$log}'
+				fi
+				;;
+			delete_profile)
+				name="$(echo "$args" | jq -r '.name // empty')"
+				[ -n "$name" ] || { json_err "missing_name"; exit 0; }
+				sh "$LIB_DIR/genroute.sh" delete "$name" >/tmp/sr_del.log 2>&1
+				jq -n '{ok:true}'
+				;;
+			add_custom_domain)
+				list_name="$(echo "$args" | jq -r '.list_name // empty' | tr -cs 'A-Za-z0-9_-' '_')"
+				domains="$(echo "$args" | jq -r '.domains // empty')"
+				[ -n "$list_name" ] && [ -n "$domains" ] || { json_err "missing_fields"; exit 0; }
+				mkdir -p "$SR_ETC_DIR/lists/custom"
+				echo "$domains" | tr ',' '\n' | sed 's/^ *//; s/ *$//' | grep -v '^$' >> "$SR_ETC_DIR/lists/custom/${list_name}.lst"
+				sort -u -o "$SR_ETC_DIR/lists/custom/${list_name}.lst" "$SR_ETC_DIR/lists/custom/${list_name}.lst"
+				jq -n --arg f "custom/${list_name}.lst" '{ok:true, file:$f}'
+				;;
+			get_status)
+				running=0
+				pgrep -f '/opt/.*/xray' >/dev/null 2>&1 && running=1
+				n_servers="$(sh "$LIB_DIR/subscription.sh" list 2>/dev/null | jq 'length' 2>/dev/null || echo 0)"
+				n_profiles="$(sh "$LIB_DIR/genroute.sh" list 2>/dev/null | jq 'length' 2>/dev/null || echo 0)"
+				jq -n --argjson running "$running" --argjson servers "$n_servers" --argjson profiles "$n_profiles" \
+					'{xray_running:($running==1), server_count:$servers, profile_count:$profiles}'
+				;;
+			killswitch_set)
+				name="$(echo "$args" | jq -r '.name // empty')"
+				enabled="$(echo "$args" | jq -r '.enabled // false')"
+				[ -n "$name" ] || { json_err "missing_name"; exit 0; }
+				if [ "$enabled" = "true" ]; then
+					sh "$LIB_DIR/killswitch.sh" enable "$name" >/tmp/sr_ks.log 2>&1
+				else
+					sh "$LIB_DIR/killswitch.sh" disable "$name" >/tmp/sr_ks.log 2>&1
+				fi
+				jq -n '{ok:true}'
+				;;
+			*) json_err "unknown_method" ;;
+		esac
+		;;
+	*) echo "usage: $0 {list|call <method>}" >&2; exit 1 ;;
+esac

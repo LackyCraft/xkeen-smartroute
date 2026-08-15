@@ -1,0 +1,21 @@
+{
+	"luci-app-xkeen-smartroute": {
+		"description": "Grant UCI access for luci-app-xkeen-smartroute",
+		"read": {
+			"ubus": {
+				"luci.xkeen-smartroute": [
+					"list_servers", "list_categories", "list_custom_categories",
+					"list_profiles", "get_status"
+				]
+			}
+		},
+		"write": {
+			"ubus": {
+				"luci.xkeen-smartroute": [
+					"import_subscription", "save_profile", "delete_profile",
+					"add_custom_domain", "killswitch_set"
+				]
+			}
+		}
+	}
+}

@@ -1,0 +1,56 @@
+{
+	"admin/services/xkeen-smartroute": {
+		"title": "XKeen SmartRoute",
+		"order": 61,
+		"action": {
+			"type": "firstchild"
+		},
+		"depends": {
+			"acl": ["luci-app-xkeen-smartroute"]
+		}
+	},
+	"admin/services/xkeen-smartroute/subscriptions": {
+		"title": "Подписки / Subscriptions",
+		"order": 10,
+		"action": {
+			"type": "view",
+			"path": "xkeen-smartroute/subscriptions"
+		},
+		"depends": {
+			"acl": ["luci-app-xkeen-smartroute"]
+		}
+	},
+	"admin/services/xkeen-smartroute/profiles": {
+		"title": "Профили / Profiles",
+		"order": 20,
+		"action": {
+			"type": "view",
+			"path": "xkeen-smartroute/profiles"
+		},
+		"depends": {
+			"acl": ["luci-app-xkeen-smartroute"]
+		}
+	},
+	"admin/services/xkeen-smartroute/status": {
+		"title": "Статус / Status",
+		"order": 30,
+		"action": {
+			"type": "view",
+			"path": "xkeen-smartroute/status"
+		},
+		"depends": {
+			"acl": ["luci-app-xkeen-smartroute"]
+		}
+	},
+	"admin/services/xkeen-smartroute/killswitch": {
+		"title": "Kill-Switch",
+		"order": 40,
+		"action": {
+			"type": "view",
+			"path": "xkeen-smartroute/killswitch"
+		},
+		"depends": {
+			"acl": ["luci-app-xkeen-smartroute"]
+		}
+	}
+}
