@@ -168,7 +168,11 @@ But as of 2026-08-15, that database is **missing** dedicated categories for: **C
 
 (While checking, we also ruled out some common worries — ChatGPT/OpenAI and Claude/Anthropic are **already** in geosite as `openai` and `anthropic`, no separate maintenance needed there.)
 
-These lists **auto-refresh**: the `.github/workflows/update-domain-lists.yml` workflow runs weekly (and on manual trigger), pulls candidates from `scripts/seeds.json`, checks that they're actually reachable (DNS + TLS handshake), and rewrites `lists/custom/*.lst` with only the live ones — if something goes dead, it drops off on the next run instead of silently rotting for years.
+These lists **auto-refresh**: the `.github/workflows/update-domain-lists.yml` workflow (`scripts/update_lists.py`) runs weekly (and on manual trigger, Actions → Update domain/IP lists → Run workflow), pulls candidates from `scripts/seeds.json`, checks that they're actually reachable (DNS + TLS handshake, with a few retries to avoid flagging things dead over a one-off network blip), and rewrites `lists/custom/*.lst` with only the live ones — if something goes dead, it drops off on the next run instead of silently rotting for years.
+
+The same run also saves **resolved IPv4 snapshots** to `lists/ip/*.lst` — not just for the three lists above, but for a couple of popular services too (YouTube, Discord, Claude/Anthropic), purely for visibility. These are **reference-only** files, not routing data: CDN IPs rotate constantly, a one-time DNS snapshot guarantees nothing — actual routing always stays domain-based (geosite or our own list), never keyed off these IPs.
+
+Whenever something in the lists actually changed, the pipeline commits it and publishes a **GitHub Release** describing what changed — how many domains/IPs were added/removed per service — see [Releases](https://github.com/LackyCraft/xkeen-smartroute/releases).
 
 Want to add a list for your own service? Two ways:
 - **Via PR**: add candidates to `scripts/seeds.json`, the pipeline verifies and builds the file for you.
@@ -238,17 +242,9 @@ If this project was useful, you can support the author:
 
 ---
 
-### 🦢 GUSSI NEWS
+### 🦢 Recommended subscription (optional)
 
-🚀 [@GussiTradeVPNbot](https://t.me/GussiTradeVPNbot) is back. And back completely different.
-
-While we were away, the duck engineers weren't sitting idle. We fully reworked Gussi VPN and turned it into a full-fledged service, ready for everyday use.
-
-🌍 **80 servers worldwide.** Now you get:
-- ✅ more stability
-- ✅ higher speed
-- ✅ fewer overloads
-- ✅ backup routes
+XKeen SmartRoute works with **any** standard-format VLESS/Trojan subscription — there's no hard lock-in to a specific provider. That said, it's been actually tested against the [Gussi VPN](https://t.me/GussiTradeVPNbot) subscription (80 servers worldwide) — if you don't have a subscription yet and would rather not gamble on compatibility, it's a safe pick.
 
 ---
 
