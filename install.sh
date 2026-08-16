@@ -219,6 +219,52 @@ else
 	log "xkeen-UI уже установлен, пропускаю."
 fi
 
+# xkeen-UI ships with its own web login *disabled* by default -- anyone on
+# the LAN can open port 1000 and manage Xray with no password at all. Ask
+# once for the same password already protecting this router (SSH/LuCI) and
+# apply it to xkeen-UI's own auth too, so there's one password protecting
+# everything, not just the parts we happened to remember to lock. Password
+# first, *then* auth.enabled -- the other order leaves a real (if short)
+# window where auth is required but no password exists yet, locking
+# xkeen-UI's own API out from under itself (hit this for real while testing).
+if command -v curl >/dev/null 2>&1 && curl -s -m 3 http://127.0.0.1:1000/api/version >/dev/null 2>&1; then
+	# Checked straight off disk, not via /api/settings: once auth is on,
+	# that endpoint requires a session itself, so an unauthenticated probe
+	# can no longer tell "already configured" apart from "server down".
+	# install.sh runs directly on the router, so the file is just... there.
+	xkeenui_cfg="/opt/etc/xkeen/xkeen-ui.json"
+	already_has_pw="$( [ -s "$xkeenui_cfg" ] && jq -r '.auth.password_hash // empty' "$xkeenui_cfg" 2>/dev/null )"
+	if [ -n "$already_has_pw" ]; then
+		log "У xkeen-UI уже задан пароль, пропускаю."
+	elif [ -r /dev/tty ]; then
+		log "Задайте пароль для веб-панели xkeen-UI (порт 1000) -- рекомендуется тот же, что и для входа на роутер."
+		printf "Пароль: "
+		stty -echo < /dev/tty 2>/dev/null
+		read -r xkeenui_pw < /dev/tty
+		stty echo < /dev/tty 2>/dev/null
+		printf "\n"
+		if [ -n "$xkeenui_pw" ]; then
+			setup_resp="$(curl -s -m 5 -X POST http://127.0.0.1:1000/api/auth/setup -H 'Content-Type: application/json' \
+				--data-binary "$(jq -n --arg pw "$xkeenui_pw" '{password:$pw}')" 2>/dev/null)"
+			case "$setup_resp" in
+				*'"success":true'*)
+					curl -s -m 5 -X PATCH http://127.0.0.1:1000/api/settings -H 'Content-Type: application/json' \
+						-d '{"auth":{"enabled":true}}' >/dev/null 2>&1
+					log "Пароль для xkeen-UI установлен."
+					;;
+				*)
+					log "ПРЕДУПРЕЖДЕНИЕ: не удалось установить пароль xkeen-UI ($setup_resp) -- панель осталась без пароля, задайте его вручную в Настройках."
+					;;
+			esac
+		else
+			log "Пароль не введён, xkeen-UI останется без авторизации -- задайте её вручную в Настройках при желании."
+		fi
+		unset xkeenui_pw
+	else
+		log "ПРЕДУПРЕЖДЕНИЕ: нет интерактивного терминала (запуск через curl|sh без tty?), пропускаю установку пароля xkeen-UI -- задайте его вручную в Настройках."
+	fi
+fi
+
 # ---------------------------------------------------------------------------
 log "Шаг 4/5: XKeen SmartRoute (наш LuCI-модуль + генераторы конфигов)"
 
