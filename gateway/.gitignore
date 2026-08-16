@@ -1,0 +1,4 @@
+gateway
+gateway_*
+*.exe
+*.log
