@@ -110,7 +110,13 @@ build_outbound() {
 	flow="$(qval "$query" flow)"
 	svcname="$(urldecode "$(qval "$query" serviceName)")"
 	extra_raw="$(urldecode "$(qval "$query" extra)")"
-	extra_json="$(printf '%s' "$extra_raw" | jq -c '.' 2>/dev/null || echo '{}')"
+	# most servers have no `extra` param at all (only xhttp/splithttp ones do).
+	# On empty input this jq build exits 0 with empty output instead of
+	# erroring, so `|| echo '{}'` never fires on exit status alone -- check
+	# the actual output too, or every non-xhttp server fails to import with
+	# "invalid JSON text passed to --argjson" (empty string isn't valid JSON).
+	extra_json="$(printf '%s' "$extra_raw" | jq -c '.' 2>/dev/null)"
+	[ -n "$extra_json" ] || extra_json='{}'
 
 	jq -n \
 		--arg tag "$tag" --arg proto "$proto" --arg address "$host" --argjson port "$port" \
