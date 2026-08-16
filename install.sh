@@ -8,17 +8,21 @@
 #   2. Installs Entware (if not already present) — xkeen and its tooling live under /opt.
 #   3. Installs xkeen (Xray-core manager) + xkeen-UI (existing web panel, port 1000).
 #   4. Copies our LuCI app (luci-app-xkeen-smartroute) + lib/ scripts + domain-list catalog.
-#   5. Sets up a cron job to refresh geosite/geoip data periodically.
+#   5. Installs smartroute-gateway (Mihomo-style live dashboard, port 1001).
+#   6. Sets up a cron job to refresh geosite/geoip data periodically.
 #
 # Safe to re-run (idempotent): existing installs are detected and skipped/updated.
 
 set -eu
 
 REPO_RAW="https://raw.githubusercontent.com/LackyCraft/xkeen-smartroute/main"
+GATEWAY_RELEASE_BASE="https://github.com/LackyCraft/xkeen-smartroute/releases/download/gateway-latest"
 XKEEN_INSTALL_URL="https://raw.githubusercontent.com/Skrill0/XKeen/main/install.sh"
 XKEEN_UI_REPO="zxc-rv/XKeen-UI"
 SR_ETC_DIR="/etc/xkeen-smartroute"
-SR_LIB_DIR="/opt/share/xkeen-smartroute/lib"
+SR_SHARE_DIR="/opt/share/xkeen-smartroute"
+SR_LIB_DIR="$SR_SHARE_DIR/lib"
+SR_GATEWAY_PORT=1001
 MIN_FREE_KB=25000
 
 log()  { echo "[xkeen-smartroute] $*"; }
@@ -40,7 +44,7 @@ log "Свободно на /overlay: ${FREE_KB:-unknown} KB"
 command -v opkg >/dev/null 2>&1 || die "opkg not found"
 
 # ---------------------------------------------------------------------------
-log "Шаг 1/5: Entware"
+log "Шаг 1/6: Entware"
 
 if [ ! -x /opt/bin/opkg ]; then
 	log "Entware не найден, устанавливаю..."
@@ -77,7 +81,7 @@ export PATH="/opt/bin:/opt/sbin:$PATH"
 # fine.
 
 # ---------------------------------------------------------------------------
-log "Шаг 2/5: xkeen"
+log "Шаг 2/6: xkeen"
 
 if ! command -v xkeen >/dev/null 2>&1; then
 	log "Ставлю xkeen (Skrill0/XKeen)..."
@@ -207,7 +211,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-log "Шаг 3/5: xkeen-UI (веб-панель, порт 1000)"
+log "Шаг 3/6: xkeen-UI (веб-панель, порт 1000)"
 
 if [ ! -x /opt/sbin/xkeen-ui ] && [ ! -x /opt/bin/xkeen-ui ]; then
 	log "Ставлю xkeen-UI ($XKEEN_UI_REPO)..."
@@ -266,7 +270,7 @@ if command -v curl >/dev/null 2>&1 && curl -s -m 3 http://127.0.0.1:1000/api/ver
 fi
 
 # ---------------------------------------------------------------------------
-log "Шаг 4/5: XKeen SmartRoute (наш LuCI-модуль + генераторы конфигов)"
+log "Шаг 4/6: XKeen SmartRoute (наш LuCI-модуль + генераторы конфигов)"
 
 mkdir -p "$SR_ETC_DIR/lists" "$SR_ETC_DIR/lists/custom" "$SR_ETC_DIR/profiles" "$SR_ETC_DIR/state" "$SR_LIB_DIR"
 
@@ -301,7 +305,73 @@ chmod +x /usr/libexec/rpcd/luci.xkeen-smartroute
 [ -x /etc/init.d/uhttpd ] && /etc/init.d/uhttpd restart >/dev/null 2>&1 || true
 
 # ---------------------------------------------------------------------------
-log "Шаг 5/5: cron (обновление geosite/geoip раз в 8 часов, подписок — по расписанию)"
+log "Шаг 5/6: smartroute-gateway (живая панель в духе Mihomo, порт $SR_GATEWAY_PORT)"
+
+case "$DISTRIB_ARCH" in
+	mipsel_24kc|mipsel_24kec) GATEWAY_ASSET="smartroute-gateway-mipsle-softfloat" ;;
+	mips_24kc)                GATEWAY_ASSET="smartroute-gateway-mips-softfloat" ;;
+	aarch64*)                 GATEWAY_ASSET="smartroute-gateway-arm64" ;;
+	arm_cortex-a*)             GATEWAY_ASSET="smartroute-gateway-arm7" ;;
+	x86_64)                   GATEWAY_ASSET="smartroute-gateway-amd64" ;;
+	*) GATEWAY_ASSET="" ;;
+esac
+
+if [ -z "$GATEWAY_ASSET" ]; then
+	log "ПРЕДУПРЕЖДЕНИЕ: архитектура $DISTRIB_ARCH не собирается в CI для smartroute-gateway, пропускаю панель (остальной стек всё равно работает)."
+else
+	mkdir -p "$SR_SHARE_DIR/panel"
+	wget -O /tmp/smartroute-gateway.gz "$GATEWAY_RELEASE_BASE/${GATEWAY_ASSET}.gz" \
+		&& gunzip -f /tmp/smartroute-gateway.gz \
+		&& mv /tmp/smartroute-gateway "$SR_SHARE_DIR/gateway" \
+		&& chmod +x "$SR_SHARE_DIR/gateway" \
+		|| log "ПРЕДУПРЕЖДЕНИЕ: не удалось скачать smartroute-gateway, пропускаю панель (остальной стек всё равно работает)."
+	rm -f /tmp/smartroute-gateway.gz
+
+	if [ -x "$SR_SHARE_DIR/gateway" ]; then
+		wget -O "$SR_SHARE_DIR/panel/index.html" "$REPO_RAW/gateway/static/index.html" \
+			|| die "не удалось скачать панель gateway/static/index.html"
+
+		cat > /opt/etc/init.d/S98smartroute-gateway <<GATEWAY_INIT_EOF
+#!/bin/sh
+# XKeen SmartRoute gateway -- live dashboard backed by Xray's own gRPC API
+# and SmartRoute's state (servers/profiles). Managed directly (not via
+# procd/systemd, neither of which Entware provides) the same way
+# lib/common.sh's sr_restart_xray manages xray itself: kill by pgrep+kill,
+# relaunch with SIGHUP ignored so it survives the launching shell exiting --
+# this busybox has neither nohup nor setsid.
+BIN="$SR_SHARE_DIR/gateway"
+LOG="$SR_ETC_DIR/state/gateway.log"
+export SR_GATEWAY_LISTEN="0.0.0.0:$SR_GATEWAY_PORT"
+export SR_GATEWAY_XRAY_API="127.0.0.1:10085"
+export SR_GATEWAY_STATIC_DIR="$SR_SHARE_DIR/panel"
+
+start() {
+	[ -x "\$BIN" ] || exit 0
+	mkdir -p "\$(dirname "\$LOG")"
+	(trap '' HUP; exec "\$BIN" >"\$LOG" 2>&1 </dev/null) &
+}
+
+stop() {
+	for pid in \$(pgrep -f "\$BIN" 2>/dev/null); do kill "\$pid" 2>/dev/null; done
+}
+
+case "\${1:-start}" in
+	start) start ;;
+	stop) stop ;;
+	restart) stop; sleep 1; start ;;
+	*) echo "usage: \$0 {start|stop|restart}" >&2; exit 1 ;;
+esac
+GATEWAY_INIT_EOF
+		chmod +x /opt/etc/init.d/S98smartroute-gateway
+		for pid in $(pgrep -f "$SR_SHARE_DIR/gateway" 2>/dev/null); do kill "$pid" 2>/dev/null || true; done
+		sleep 1
+		/opt/etc/init.d/S98smartroute-gateway start
+		log "Панель: http://$(uci get network.lan.ipaddr 2>/dev/null || echo 192.168.1.1):$SR_GATEWAY_PORT/"
+	fi
+fi
+
+# ---------------------------------------------------------------------------
+log "Шаг 6/6: cron (обновление geosite/geoip раз в 8 часов, подписок — по расписанию)"
 
 CRON_GEO="0 */8 * * * xkeen -ug >/dev/null 2>&1; xkeen -uk >/dev/null 2>&1 #xkeen-smartroute-cron"
 # Fires hourly, but subscription.sh refresh itself checks a timestamp against
@@ -318,5 +388,6 @@ log ""
 log "Готово! / Done!"
 log "  LuCI:      http://$LAN_IP/  ->  Services / Сервисы -> XKeen SmartRoute"
 log "  xkeen-UI:  http://$LAN_IP:1000/"
+log "  Панель:    http://$LAN_IP:$SR_GATEWAY_PORT/"
 log "  Списки:    $SR_ETC_DIR/lists/"
 log "Диагностика: sh $SR_LIB_DIR/../check.sh (или ./check.sh из репозитория)"

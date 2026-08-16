@@ -1,0 +1,64 @@
+name: Build smartroute-gateway
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "gateway/**"
+      - ".github/workflows/build-gateway.yml"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          # mipsle/softfloat is the primary target (MediaTek MT7621 and
+          # similar, the common cheap-OpenWrt-router family this project
+          # was built and tested against) -- the others cover the rest of
+          # the OpenWrt device landscape (older/bigger-endian MIPS boards,
+          # ARM SBCs, x86_64 boxes running OpenWrt).
+          - { goos: linux, goarch: mipsle, gomips: softfloat, name: mipsle-softfloat }
+          - { goos: linux, goarch: mips,   gomips: softfloat, name: mips-softfloat }
+          - { goos: linux, goarch: arm,    goarm: "7",        name: arm7 }
+          - { goos: linux, goarch: arm64,  name: arm64 }
+          - { goos: linux, goarch: amd64,  name: amd64 }
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+          cache-dependency-path: gateway/go.sum
+
+      - name: Build
+        working-directory: gateway
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          GOMIPS: ${{ matrix.gomips }}
+          GOARM: ${{ matrix.goarm }}
+          CGO_ENABLED: "0"
+        run: |
+          out="smartroute-gateway-${{ matrix.name }}"
+          go build -ldflags "-s -w" -o "$out" .
+          gzip -k "$out"
+          echo "ASSET=gateway/${out}.gz" >> "$GITHUB_ENV"
+
+      - name: Publish rolling release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: gateway-latest
+          name: "smartroute-gateway (latest build)"
+          body: |
+            Автоматическая сборка smartroute-gateway при каждом изменении в `gateway/`.
+            Ставится через install.sh -- не для ручной установки.
+
+            Auto-built from `gateway/` on every push to main. Installed by install.sh --
+            not meant for manual download.
+          prerelease: true
+          files: ${{ env.ASSET }}
