@@ -5,7 +5,8 @@
 			"ubus": {
 				"luci.xkeen-smartroute": [
 					"list_servers", "list_categories", "list_custom_categories",
-					"list_profiles", "get_status", "random_hwid"
+					"list_profiles", "get_status", "random_hwid", "get_refresh_hours",
+					"list_killswitch_enabled"
 				]
 			}
 		},
@@ -13,7 +14,8 @@
 			"ubus": {
 				"luci.xkeen-smartroute": [
 					"import_subscription", "save_profile", "delete_profile",
-					"add_custom_domain", "killswitch_set"
+					"add_custom_domain", "killswitch_set", "ping_servers",
+					"set_refresh_hours", "refresh_now"
 				]
 			}
 		}

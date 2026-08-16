@@ -34,7 +34,12 @@ case "$1" in
 	"delete_profile": {"name":"str1"},
 	"add_custom_domain": {"list_name":"str1","domains":"str1"},
 	"get_status": {},
-	"killswitch_set": {"name":"str1","enabled":"bool1"}
+	"killswitch_set": {"name":"str1","enabled":"bool1"},
+	"list_killswitch_enabled": {},
+	"ping_servers": {},
+	"get_refresh_hours": {},
+	"set_refresh_hours": {"hours":"str1"},
+	"refresh_now": {}
 }
 EOF
 		;;
@@ -128,6 +133,30 @@ EOF
 					sh "$LIB_DIR/killswitch.sh" disable "$name" >/tmp/sr_ks.log 2>&1
 				fi
 				jq -n '{ok:true}'
+				;;
+			list_killswitch_enabled)
+				wrap_array names "$(sh "$LIB_DIR/killswitch.sh" list-enabled 2>/dev/null)"
+				;;
+			ping_servers)
+				out="$(sh "$LIB_DIR/subscription.sh" ping 2>/tmp/sr_ping.log)"
+				[ -n "$out" ] || out='{}'
+				printf '%s' "$out" | jq '{pings: (. // {})}' 2>/dev/null || echo '{"pings":{}}'
+				;;
+			get_refresh_hours)
+				h="$(sh "$LIB_DIR/subscription.sh" get-refresh-hours 2>/dev/null)"
+				jq -n --arg h "${h:-12}" '{hours: ($h|tonumber)}'
+				;;
+			set_refresh_hours)
+				hours="$(echo "$args" | jq -r '.hours // empty')"
+				if sh "$LIB_DIR/subscription.sh" set-refresh-hours "$hours" >/tmp/sr_refresh.log 2>&1; then
+					jq -n '{ok:true}'
+				else
+					jq -n --arg log "$(cat /tmp/sr_refresh.log)" '{error:"invalid_hours", detail:$log}'
+				fi
+				;;
+			refresh_now)
+				sh "$LIB_DIR/subscription.sh" refresh-now >/tmp/sr_refresh_now.log 2>&1 &
+				jq -n '{ok:true, note:"started in background"}'
 				;;
 			*) json_err "unknown_method" ;;
 		esac
