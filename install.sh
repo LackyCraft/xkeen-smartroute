@@ -128,6 +128,51 @@ if ! command -v xkeen >/dev/null 2>&1; then
 	# harmless "direct" outbound; real servers come from SmartRoute.
 	echo '{"outbounds":[{"protocol":"freedom","tag":"direct"}]}' > /opt/etc/xray/configs/04_outbounds.json
 
+	# Xray's own gRPC API (stats/handler/routing), loopback-only -- SmartRoute's
+	# panel reads live traffic/connection data through it. Off by default;
+	# this is what turns it on.
+	cat > /opt/etc/xray/configs/00_api.smartroute.json <<'XRAY_API_EOF'
+{
+  "api": {
+    "tag": "api",
+    "services": ["HandlerService", "LoggerService", "StatsService", "RoutingService"]
+  },
+  "policy": {
+    "levels": {
+      "0": {
+        "connIdle": 30,
+        "statsUserUplink": true,
+        "statsUserDownlink": true
+      }
+    },
+    "system": {
+      "statsInboundUplink": true,
+      "statsInboundDownlink": true,
+      "statsOutboundUplink": true,
+      "statsOutboundDownlink": true
+    }
+  },
+  "inbounds": [
+    {
+      "tag": "api",
+      "listen": "127.0.0.1",
+      "port": 10085,
+      "protocol": "dokodemo-door",
+      "settings": { "address": "127.0.0.1" }
+    }
+  ],
+  "routing": {
+    "rules": [
+      {
+        "type": "field",
+        "inboundTag": ["api"],
+        "outboundTag": "api"
+      }
+    ]
+  }
+}
+XRAY_API_EOF
+
 	# S24xray runs xray as an unprivileged "xkeen" user via `su`, which needs:
 	# shadow-su (installed above) for `su` itself, a "xkeen" account, and a
 	# real shell in its passwd entry (shadow's su falls back to /bin/bash,
@@ -145,7 +190,18 @@ if ! command -v xkeen >/dev/null 2>&1; then
 		fi
 	fi
 
-	xkeen -restart >/dev/null 2>&1 || true
+	# xkeen's own restart path writes a KeeneticOS NDM netfilter hook file
+	# and expects to clean up NDM-managed iptables state -- neither applies
+	# on real OpenWrt (xkeen primarily targets KeeneticOS), and the missing
+	# directory alone makes it fail outright; on hardware tested against,
+	# the iptables cleanup step *hung indefinitely* even after creating the
+	# directory, wedging this install with no way back short of an SSH
+	# session and a manual kill. `timeout` bounds the damage to a warning
+	# instead of a stuck installer; SmartRoute's own restart helper
+	# (lib/common.sh, wired up later below) manages the process directly
+	# for everything from here on and never goes through xkeen -restart.
+	mkdir -p /opt/etc/ndm/netfilter.d
+	timeout 30 xkeen -restart >/dev/null 2>&1 || log "ПРЕДУПРЕЖДЕНИЕ: xkeen -restart не завершился штатно (известная проблема на чистом OpenWRT) — это ожидаемо, SmartRoute управляет Xray самостоятельно. / xkeen -restart didn't finish cleanly (known issue on plain OpenWRT) — expected, SmartRoute manages Xray itself from here on."
 else
 	log "xkeen уже установлен: $(xkeen -status 2>/dev/null | head -n1 || echo ok)"
 fi
