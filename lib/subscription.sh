@@ -132,21 +132,21 @@ build_outbound() {
 	mode="$(qval "$query" mode)"; mode="${mode:-auto}"
 	flow="$(qval "$query" flow)"
 	svcname="$(urldecode "$(qval "$query" serviceName)")"
-	extra_raw="$(urldecode "$(qval "$query" extra)")"
-	# most servers have no `extra` param at all (only xhttp/splithttp ones do).
-	# On empty input this jq build exits 0 with empty output instead of
-	# erroring, so `|| echo '{}'` never fires on exit status alone -- check
-	# the actual output too, or every non-xhttp server fails to import with
-	# "invalid JSON text passed to --argjson" (empty string isn't valid JSON).
-	extra_json="$(printf '%s' "$extra_raw" | jq -c '.' 2>/dev/null)"
-	[ -n "$extra_json" ] || extra_json='{}'
+	# The subscription's own "extra" query param (raw XHTTP tuning fields
+	# some providers attach: session/seq placement, padding obfuscation,
+	# etc.) is deliberately not merged in below. One provider's node was
+	# observed sending a field combination this Xray build's config
+	# validator hard-rejects at startup ("SeqPlacement must be path when
+	# SessionPlacement is path"), which blocks every future restart until
+	# someone notices -- and no imported server has ever needed any of
+	# these fields just to connect, so it's not worth the risk.
 
 	jq -n \
 		--arg tag "$tag" --arg proto "$proto" --arg address "$host" --argjson port "$port" \
 		--arg id "$secret" --arg net "$net" --arg security "$security" --arg sni "$sni" \
 		--arg fp "$fp" --arg pbk "$pbk" --arg sid "$sid" --arg spx "$spx" --arg alpn "$alpn" \
 		--arg path "$path" --arg hosthdr "$hosthdr" --arg mode "$mode" --arg flow "$flow" \
-		--arg svcname "$svcname" --argjson extra "$extra_json" '
+		--arg svcname "$svcname" '
 		def alpnArr: if $alpn=="" then null else ($alpn|split(",")) end;
 		{
 			tag: $tag,
@@ -167,7 +167,7 @@ build_outbound() {
 				else {security:"none"} end)
 				+ (if $net=="ws" then {wsSettings: ({path:$path} + (if $hosthdr!="" then {headers:{Host:$hosthdr}} else {} end))}
 				elif $net=="grpc" then {grpcSettings: {serviceName:$svcname}}
-				elif $net=="xhttp" or $net=="splithttp" then {xhttpSettings: ({path:$path, host:$hosthdr, mode:$mode} + $extra)}
+				elif $net=="xhttp" or $net=="splithttp" then {xhttpSettings: {path:$path, host:$hosthdr, mode:$mode}}
 				else {} end)
 			)
 		}'
@@ -236,6 +236,7 @@ sr_import() {
 		tag="sr_${label_slug}_$(slugify "$host")_${port}_$(printf '%s' "$secret" | cut -c1-8)_$(slugify "$name" | cut -c1-12)"
 
 		ob="$(build_outbound "$proto" "$secret" "$host" "$port" "$query" "" "$tag")" || { skipped=$((skipped + 1)); continue; }
+		ob="$(printf '%s' "$ob" | jq --arg sub "$label" '. + {subscription:$sub}')"
 		jq --argjson ob "$ob" '. + [$ob]' "$tmp_outbounds" >"$tmp_outbounds.new" && mv "$tmp_outbounds.new" "$tmp_outbounds"
 		jq -n --arg tag "$tag" --arg name "$name" --arg address "$host" --argjson port "$port" --arg proto "$proto" --arg sub "$label" \
 			'{tag:$tag, name:$name, address:$address, port:$port, protocol:$proto, subscription:$sub}' \
@@ -277,12 +278,21 @@ sr_import() {
 	jq -s '.[0] + .[1] | unique_by(.tag)' "$SR_SERVERS_FILE.new" "$tmp_servers" >"$SR_SERVERS_FILE"
 	rm -f "$SR_SERVERS_FILE.new"
 
-	keep_tags="$(jq -c '[.[].tag]' "$tmp_servers")"
-	jq --argjson keep "$keep_tags" '[.[] | select((.tag as $t | $keep | index($t)) | not)]' "$SR_OUTBOUNDS_STATE_FILE" >"$SR_OUTBOUNDS_STATE_FILE.new"
+	# Same full replace-by-label semantics as servers.json above, not a
+	# keep-if-tag-still-present filter: a node that roams to a new IP
+	# between fetches gets a new tag (the old one embeds the address), so
+	# "still present" filtering never matches the old tag and never removes
+	# it -- it just sits there forever as a dead outbound, silently
+	# carrying whatever config it had at import time (including config
+	# shapes later import fixes were meant to stop producing). Every
+	# outbound here is tagged with its subscription label for exactly this
+	# filter; the label itself is stripped back out below before this ever
+	# reaches Xray's real config.
+	jq --arg lbl "$label" '[.[] | select(.subscription != $lbl)]' "$SR_OUTBOUNDS_STATE_FILE" >"$SR_OUTBOUNDS_STATE_FILE.new"
 	jq -s '.[0] + .[1] | unique_by(.tag)' "$SR_OUTBOUNDS_STATE_FILE.new" "$tmp_outbounds" >"$SR_OUTBOUNDS_STATE_FILE"
 	rm -f "$SR_OUTBOUNDS_STATE_FILE.new"
 
-	jq -n --argjson list "$(cat "$SR_OUTBOUNDS_STATE_FILE")" '{outbounds:$list}' >"$SR_OUTBOUNDS_FILE"
+	jq -n --argjson list "$(jq '[.[] | del(.subscription)]' "$SR_OUTBOUNDS_STATE_FILE")" '{outbounds:$list}' >"$SR_OUTBOUNDS_FILE"
 
 	count="$(jq 'length' "$SR_SERVERS_FILE")"
 	sr_log "imported subscription '$label': now $count server(s) known in total"
