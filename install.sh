@@ -64,12 +64,17 @@ fi
 
 export PATH="/opt/bin:/opt/sbin:$PATH"
 /opt/bin/opkg update >/dev/null 2>&1 || true
-/opt/bin/opkg install jq curl bash coreutils-base64 coreutils-tr coreutils-timeout unzip grep sed >/dev/null 2>&1 \
+/opt/bin/opkg install jq curl bash coreutils-base64 coreutils-tr coreutils-timeout unzip shadow-su grep sed >/dev/null 2>&1 \
 	|| die "не удалось поставить базовые пакеты Entware (jq/curl/...) / failed to install base Entware packages"
 # stock busybox `tr` on some builds doesn't support [:upper:]/[:lower:] classes
 # and silently corrupts strings instead of erroring (e.g. "mips" -> "miws"),
 # which breaks xkeen's own architecture detection during `xkeen -i`. Entware's
 # coreutils-tr (now first on PATH) is required, not just nice-to-have.
+# unzip is needed to unpack the downloaded Xray release. shadow-su provides
+# `su`, which xkeen's own /opt/etc/init.d/S24xray uses to drop the xray
+# process to an unprivileged "xkeen" user — without it xray fails to start
+# with "exec: line ...: su: not found", even though everything else installed
+# fine.
 
 # ---------------------------------------------------------------------------
 log "Шаг 2/5: xkeen"
@@ -98,6 +103,49 @@ if ! command -v xkeen >/dev/null 2>&1; then
 	timeout 300 sh -c "printf '%s\n' 4 3 1 1 8 4 0 | sh -c \"\$(wget -O - '$XKEEN_INSTALL_URL')\"" \
 		|| die "установка xkeen завершилась с ошибкой (или не уложилась в 5 минут) — запустите 'xkeen -i' вручную и ответьте на вопросы мастера. / xkeen install failed or exceeded its 5-minute budget — run 'xkeen -i' by hand and answer its wizard prompts."
 	[ -x /opt/sbin/xray ] || die "xray не появился после установки xkeen — мастер install мог измениться, запустите 'xkeen -i' вручную и ответьте на вопросы. / xray missing after xkeen install — its interactive wizard may have changed, run 'xkeen -i' by hand and answer its prompts."
+
+	# xkeen's own Xray-core download (from its GitHub release) crashed with
+	# "Illegal instruction" on real mipsel hardware in testing — it's a
+	# hardfloat build, and this Entware target (mipselsf-k3.4, "sf" = softfloat)
+	# has no FPU. Entware's own xray-core package is built correctly for this
+	# exact target and installs to the same /opt/sbin/xray path, so this just
+	# transparently replaces the broken binary with a working one.
+	log "Заменяю Xray на сборку из Entware (совместимую с этим CPU)..."
+	/opt/bin/opkg install xray-core >/dev/null 2>&1 || die "не удалось поставить entware xray-core / failed to install entware's xray-core"
+
+	# The newer Xray-core Entware ships has dropped the old top-level
+	# "transport" config style xkeen's 02_transport.json template uses
+	# ("Global transport config has been removed"). We don't need it — every
+	# outbound we generate carries its own streamSettings — so just neutralize
+	# the template instead of fighting version skew between two upstreams.
+	[ -f /opt/etc/xray/configs/02_transport.json ] && echo '{}' > /opt/etc/xray/configs/02_transport.json
+
+	# xkeen's default 04_outbounds.json ships a placeholder "vless-reality"
+	# outbound with empty address/id/publicKey fields, meant to be hand-edited.
+	# Left as-is, Xray refuses to start at all (even once a real subscription
+	# is imported into our own 04_outbounds.smartroute.json) because this
+	# invalid stub is loaded from the same confdir. Replace it with just the
+	# harmless "direct" outbound; real servers come from SmartRoute.
+	echo '{"outbounds":[{"protocol":"freedom","tag":"direct"}]}' > /opt/etc/xray/configs/04_outbounds.json
+
+	# S24xray runs xray as an unprivileged "xkeen" user via `su`, which needs:
+	# shadow-su (installed above) for `su` itself, a "xkeen" account, and a
+	# real shell in its passwd entry (shadow's su falls back to /bin/bash,
+	# which doesn't exist here — only busybox ash). Some OpenWrt builds also
+	# lack the busybox `adduser` applet entirely, so don't depend on it.
+	if ! id xkeen >/dev/null 2>&1; then
+		command -v adduser >/dev/null 2>&1 && adduser -D -H -u 11111 -g 11111 xkeen 2>/dev/null
+		if ! id xkeen >/dev/null 2>&1; then
+			for f in /etc/passwd /etc/group /opt/etc/passwd /opt/etc/group; do
+				case "$f" in
+					*group) grep -q '^xkeen:' "$f" 2>/dev/null || echo 'xkeen:x:11111:' >> "$f" ;;
+					*passwd) grep -q '^xkeen:' "$f" 2>/dev/null || echo 'xkeen:x:0:11111:::/bin/sh' >> "$f" ;;
+				esac
+			done
+		fi
+	fi
+
+	xkeen -restart >/dev/null 2>&1 || true
 else
 	log "xkeen уже установлен: $(xkeen -status 2>/dev/null | head -n1 || echo ok)"
 fi
