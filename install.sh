@@ -64,15 +64,33 @@ fi
 
 export PATH="/opt/bin:/opt/sbin:$PATH"
 /opt/bin/opkg update >/dev/null 2>&1 || true
-/opt/bin/opkg install jq curl bash coreutils-base64 grep sed >/dev/null 2>&1 \
+/opt/bin/opkg install jq curl bash coreutils-base64 coreutils-tr unzip grep sed >/dev/null 2>&1 \
 	|| die "не удалось поставить базовые пакеты Entware (jq/curl/...) / failed to install base Entware packages"
+# stock busybox `tr` on some builds doesn't support [:upper:]/[:lower:] classes
+# and silently corrupts strings instead of erroring (e.g. "mips" -> "miws"),
+# which breaks xkeen's own architecture detection during `xkeen -i`. Entware's
+# coreutils-tr (now first on PATH) is required, not just nice-to-have.
 
 # ---------------------------------------------------------------------------
 log "Шаг 2/5: xkeen"
 
 if ! command -v xkeen >/dev/null 2>&1; then
 	log "Ставлю xkeen (Skrill0/XKeen)..."
-	sh -c "$(wget -O - "$XKEEN_INSTALL_URL")" || die "установка xkeen завершилась с ошибкой / xkeen install failed"
+	# `xkeen -i` (called at the end of the upstream bootstrap script) is an
+	# interactive wizard, not a flag-driven installer. Piped stdin answers
+	# feed its `read` prompts in order (verified against xkeen 1.1.3):
+	#   4  -> GeoIP menu:  install/update "v2fly"
+	#   3  -> GeoSite menu: install/update "v2fly"
+	#   1  -> cron menu: enable the missing auto-update tasks
+	#   1  -> "same time for all tasks?" -> Yes
+	#   8  -> day selector -> "Ежедневно" (daily)
+	#   4  -> hour (0-23) -> 04:00 update time
+	#   0  -> minute (0-59)
+	# If a future xkeen release changes this wizard's flow, the answers will
+	# land on the wrong prompts — that's exactly what the check right after
+	# this block is for: it fails loudly instead of pretending success.
+	printf '%s\n' 4 3 1 1 8 4 0 | sh -c "$(wget -O - "$XKEEN_INSTALL_URL")" || die "установка xkeen завершилась с ошибкой / xkeen install failed"
+	[ -x /opt/sbin/xray ] || die "xray не появился после установки xkeen — мастер install мог измениться, запустите 'xkeen -i' вручную и ответьте на вопросы. / xray missing after xkeen install — its interactive wizard may have changed, run 'xkeen -i' by hand and answer its prompts."
 else
 	log "xkeen уже установлен: $(xkeen -status 2>/dev/null | head -n1 || echo ok)"
 fi
