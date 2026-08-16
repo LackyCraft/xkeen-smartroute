@@ -71,6 +71,31 @@ var callKillswitchSet = rpc.declare({
 	object: 'luci.xkeen-smartroute', method: 'killswitch_set',
 	params: ['name', 'enabled']
 });
+var _callPingServers = rpc.declare({
+	object: 'luci.xkeen-smartroute', method: 'ping_servers'
+});
+function callPingServers() {
+	return _callPingServers().then(function (r) { return (r && r.pings) || {}; });
+}
+var _callGetRefreshHours = rpc.declare({
+	object: 'luci.xkeen-smartroute', method: 'get_refresh_hours'
+});
+function callGetRefreshHours() {
+	return _callGetRefreshHours().then(function (r) { return (r && r.hours) || 12; });
+}
+var callSetRefreshHours = rpc.declare({
+	object: 'luci.xkeen-smartroute', method: 'set_refresh_hours',
+	params: ['hours']
+});
+var callRefreshNow = rpc.declare({
+	object: 'luci.xkeen-smartroute', method: 'refresh_now'
+});
+var _callListKillswitchEnabled = rpc.declare({
+	object: 'luci.xkeen-smartroute', method: 'list_killswitch_enabled'
+});
+function callListKillswitchEnabled() {
+	return _callListKillswitchEnabled().then(function (r) { return (r && r.names) || []; });
+}
 
 var DICT = {
 	app_name:            { ru: 'XKeen SmartRoute DanyByLC', en: 'XKeen SmartRoute DanyByLC' },
@@ -102,7 +127,17 @@ var DICT = {
 	col_address: { ru: 'Адрес', en: 'Address' },
 	col_protocol: { ru: 'Протокол', en: 'Protocol' },
 	col_subscription: { ru: 'Подписка', en: 'Subscription' },
+	col_ping: { ru: 'Пинг', en: 'Ping' },
 	no_servers: { ru: 'Пока нет ни одного сервера — импортируйте подписку выше.', en: 'No servers yet — import a subscription above.' },
+	ping_btn: { ru: 'Проверить пинг', en: 'Check ping' },
+	pinging: { ru: 'Проверяю…', en: 'Checking…' },
+	ping_timeout: { ru: 'нет ответа', en: 'no response' },
+	refresh_settings_title: { ru: 'Автообновление подписок', en: 'Subscription auto-refresh' },
+	refresh_interval_label: { ru: 'Обновлять каждые (часов)', en: 'Refresh every (hours)' },
+	refresh_save_btn: { ru: 'Сохранить', en: 'Save' },
+	refresh_now_btn: { ru: 'Обновить все подписки сейчас', en: 'Refresh all subscriptions now' },
+	refresh_now_started: { ru: 'Обновление запущено в фоне — обновите список серверов через несколько секунд', en: 'Refresh started in the background — reload the server list in a few seconds' },
+	refresh_saved_ok: { ru: 'Интервал сохранён', en: 'Interval saved' },
 
 	profiles_intro: { ru: 'Профиль — это правило: «эти домены → на эти сервера». Можно направить список на один конкретный сервер (fixed) или на группу — тогда Xray сам будет постоянно выбирать самый быстрый живой сервер из группы (balancer / leastPing).',
 	                   en: 'A profile is a rule: "these domains → these servers". Point a list at one specific server (fixed), or at a group — Xray will then continuously pick the fastest healthy server from the group itself (balancer / leastPing).' },
@@ -142,11 +177,11 @@ var DICT = {
 	profiles_configured: { ru: 'Профилей настроено', en: 'Profiles configured' },
 	refresh_btn: { ru: 'Обновить', en: 'Refresh' },
 
-	ks_intro: { ru: 'Для профилей на «наших» списках (custom) можно включить жёсткий kill-switch: если процесс xray упадёт, домены этого профиля будут заблокированы файрволом полностью — вместо риска уйти в интернет напрямую в обход VPN. Для geosite-профилей защита работает и так: без xray редирект в прокси просто обрывает соединение.',
-	           en: "For profiles built on our custom lists you can turn on a hard kill-switch: if the xray process dies, that profile's domains get fully blocked by the firewall instead of risking a direct route around the VPN. geosite-based profiles are already protected the soft way: with xray down, the proxy redirect just fails the connection." },
+	ks_intro: { ru: 'Жёсткий kill-switch: если процесс xray упадёт (или его правила перехвата трафика пропадут), домены профиля будут заблокированы файрволом полностью — вместо риска уйти в интернет напрямую в обход VPN. Правило включается сразу и постоянно, без опроса раз в минуту — зазора по времени нет. Работает для geosite- и custom-профилей; для geosite-категорий покрытие неполное — учитываются только записи domain:/full: из исходного списка geosite, а keyword:/regexp: (их нет как буквальных доменов) не переносятся.',
+	           en: "Hard kill-switch: if the xray process dies (or its traffic-capture rules disappear), the profile's domains get fully blocked by the firewall instead of risking a direct route around the VPN. The rule is armed immediately and stays on — no once-a-minute polling, so there's no time gap. Works for both geosite and custom profiles; geosite coverage is partial — only the domain:/full: entries from the category's source list translate to a literal block, keyword:/regexp: entries have no literal-domain equivalent and aren't covered." },
 	ks_enabled: { ru: 'Включено', en: 'Enabled' },
 	ks_disabled: { ru: 'Выключено', en: 'Disabled' },
-	ks_custom_only: { ru: '(доступно только для custom-профилей)', en: '(available for custom profiles only)' },
+	ks_geosite_note: { ru: '(частичное покрытие для geosite — см. пояснение выше)', en: '(partial coverage for geosite — see note above)' },
 
 	lang_switch: { ru: 'EN', en: 'RU' }
 };
@@ -221,7 +256,12 @@ return L.Class.extend({
 		addCustomDomain: callAddCustomDomain,
 		getStatus: callGetStatus,
 		killswitchSet: callKillswitchSet,
-		randomHwid: callRandomHwid
+		randomHwid: callRandomHwid,
+		pingServers: callPingServers,
+		getRefreshHours: callGetRefreshHours,
+		setRefreshHours: callSetRefreshHours,
+		refreshNow: callRefreshNow,
+		listKillswitchEnabled: callListKillswitchEnabled
 	},
 	T: T,
 	lang: srLang,
