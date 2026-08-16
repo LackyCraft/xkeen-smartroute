@@ -89,7 +89,11 @@ ks_disable() {
 ks_check() {
 	uci -q get "firewall.$FW_RULE_NAME" >/dev/null 2>&1 || exit 0
 	alive=0
-	pgrep -f '/opt/.*/xray' >/dev/null 2>&1 && alive=1
+	# match by process name, not full cmdline: xray runs as bare "xray run"
+	# (no resolved path in argv), while unrelated commands merely mentioning
+	# /opt/etc/xray/configs/... (e.g. our own genroute.sh) matched instead --
+	# the wrong signal for a check that arms/disarms a firewall block.
+	pgrep -x xray >/dev/null 2>&1 && alive=1
 	cur="$(uci -q get firewall.$FW_RULE_NAME.enabled || echo 0)"
 	if [ "$alive" = "1" ] && [ "$cur" != "0" ]; then
 		uci set firewall.$FW_RULE_NAME.enabled="0"

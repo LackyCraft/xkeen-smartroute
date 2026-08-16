@@ -10,6 +10,16 @@ SR_ETC_DIR="/etc/xkeen-smartroute"
 
 json_err() { printf '{"error":"%s"}\n' "$1"; }
 
+# ubus/rpcd rejects a bare top-level JSON array as a script result ("Invalid
+# argument") -- every array-shaped result must be wrapped in an object.
+# wrap_array <field> <json-array-or-empty> -> {"<field>": [...]}
+wrap_array() {
+	field="$1"; content="$2"
+	[ -n "$content" ] || content='[]'
+	printf '%s' "$content" | jq --arg f "$field" '{($f): (. // [])}' 2>/dev/null \
+		|| printf '{"%s":[]}' "$field"
+}
+
 case "$1" in
 	list)
 		cat <<'EOF'
@@ -34,7 +44,7 @@ EOF
 		[ -x "$LIB_DIR/common.sh" ] || { json_err "not_installed"; exit 0; }
 		case "$method" in
 			list_servers)
-				sh "$LIB_DIR/subscription.sh" list 2>/dev/null || echo '[]'
+				wrap_array servers "$(sh "$LIB_DIR/subscription.sh" list 2>/dev/null)"
 				;;
 			import_subscription)
 				url="$(echo "$args" | jq -r '.url // empty')"
@@ -47,7 +57,7 @@ EOF
 				hwid_ov="$(echo "$args" | jq -r '.hwid // empty')"
 				if [ -z "$url" ]; then json_err "missing_url"; exit 0; fi
 				if sh "$LIB_DIR/subscription.sh" import "$url" "$label" "$client" "$os_ov" "$locale_ov" "$model_ov" "$ver_ov" "$hwid_ov" >/tmp/sr_import.log 2>&1; then
-					sh "$LIB_DIR/subscription.sh" list
+					wrap_array servers "$(sh "$LIB_DIR/subscription.sh" list 2>/dev/null)"
 				else
 					jq -n --arg log "$(cat /tmp/sr_import.log)" '{error:"import_failed", detail:$log}'
 				fi
@@ -63,13 +73,13 @@ EOF
 				jq -n --arg hwid "$hwid" '{hwid:$hwid}'
 				;;
 			list_categories)
-				cat "$SR_ETC_DIR/lists/geosite-categories.json" 2>/dev/null || echo '[]'
+				wrap_array categories "$(cat "$SR_ETC_DIR/lists/geosite-categories.json" 2>/dev/null)"
 				;;
 			list_custom_categories)
-				cat "$SR_ETC_DIR/lists/custom-categories.json" 2>/dev/null || echo '[]'
+				wrap_array categories "$(cat "$SR_ETC_DIR/lists/custom-categories.json" 2>/dev/null)"
 				;;
 			list_profiles)
-				sh "$LIB_DIR/genroute.sh" list 2>/dev/null || echo '[]'
+				wrap_array profiles "$(sh "$LIB_DIR/genroute.sh" list 2>/dev/null)"
 				;;
 			save_profile)
 				echo "$args" | jq -r '.profile' >/tmp/sr_profile.json
@@ -96,7 +106,13 @@ EOF
 				;;
 			get_status)
 				running=0
-				pgrep -f '/opt/.*/xray' >/dev/null 2>&1 && running=1
+				# pgrep -f '/opt/.*/xray' used to match by full command line,
+				# but the process actually runs as bare "xray run" (no
+				# resolved path in argv), while *any* unrelated command that
+				# merely mentions /opt/etc/xray/configs/... in its arguments
+				# (e.g. our own genroute.sh) matched instead -- wrong process,
+				# false positive/negative depending on timing. Match by name.
+				pgrep -x xray >/dev/null 2>&1 && running=1
 				n_servers="$(sh "$LIB_DIR/subscription.sh" list 2>/dev/null | jq 'length' 2>/dev/null || echo 0)"
 				n_profiles="$(sh "$LIB_DIR/genroute.sh" list 2>/dev/null | jq 'length' 2>/dev/null || echo 0)"
 				jq -n --argjson running "$running" --argjson servers "$n_servers" --argjson profiles "$n_profiles" \

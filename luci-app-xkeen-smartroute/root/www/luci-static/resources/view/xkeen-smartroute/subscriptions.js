@@ -105,6 +105,12 @@ return view.extend({
 		var osSelectDatalist = E('datalist', { 'id': 'sr-sub-os-list' },
 			sr.DEVICE_OS_OPTIONS.map(function (o) { return E('option', { 'value': o }); })
 		);
+		var modelDatalist = E('datalist', { 'id': 'sr-sub-model-list' },
+			sr.DEVICE_MODEL_OPTIONS.map(function (o) { return E('option', { 'value': o }); })
+		);
+		var verDatalist = E('datalist', { 'id': 'sr-sub-ver-list' },
+			sr.DEVICE_VER_OPTIONS.map(function (o) { return E('option', { 'value': o }); })
+		);
 
 		var advancedBox = E('div', { 'id': 'sr-sub-advanced', 'style': 'display:none;margin:.5em 0;padding:.75em;border:1px solid var(--border-color-medium,#ccc);border-radius:4px' }, [
 			E('label', {}, sr.T('sub_device_os_label')),
@@ -116,9 +122,17 @@ return view.extend({
 			E('label', {}, sr.T('sub_locale_label')),
 			E('input', { 'type': 'text', 'id': 'sr-sub-locale', 'class': 'cbi-input-text', 'style': 'display:block;max-width:320px;margin:.25em 0 .75em', 'placeholder': 'ru' }),
 			E('label', {}, sr.T('sub_model_label')),
-			E('input', { 'type': 'text', 'id': 'sr-sub-model', 'class': 'cbi-input-text', 'style': 'display:block;max-width:320px;margin:.25em 0 .75em' }),
+			E('input', {
+				'type': 'text', 'id': 'sr-sub-model', 'class': 'cbi-input-text', 'list': 'sr-sub-model-list',
+				'style': 'display:block;max-width:320px;margin:.25em 0 .75em', 'placeholder': 'iPhone 15 Pro'
+			}),
+			modelDatalist,
 			E('label', {}, sr.T('sub_ver_label')),
-			E('input', { 'type': 'text', 'id': 'sr-sub-ver', 'class': 'cbi-input-text', 'style': 'display:block;max-width:320px;margin:.25em 0 .75em' }),
+			E('input', {
+				'type': 'text', 'id': 'sr-sub-ver', 'class': 'cbi-input-text', 'list': 'sr-sub-ver-list',
+				'style': 'display:block;max-width:320px;margin:.25em 0 .75em', 'placeholder': '17.5'
+			}),
+			verDatalist,
 			E('label', {}, sr.T('sub_hwid_label')),
 			E('div', { 'style': 'display:flex;gap:.5em;max-width:480px' }, [
 				E('input', { 'type': 'text', 'id': 'sr-sub-hwid', 'class': 'cbi-input-text', 'style': 'flex:1' }),

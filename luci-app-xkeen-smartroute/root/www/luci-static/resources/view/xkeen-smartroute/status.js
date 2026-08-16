@@ -19,8 +19,8 @@ return view.extend({
 		container.innerHTML = '';
 		container.appendChild(E('ul', {}, [
 			E('li', {}, (st.xray_running ? '✅ ' + sr.T('xray_running') : '❌ ' + sr.T('xray_stopped'))),
-			E('li', {}, st.server_count + ' ' + sr.T('servers_known')),
-			E('li', {}, st.profile_count + ' ' + sr.T('profiles_configured'))
+			E('li', {}, sr.T('servers_known') + ': ' + st.server_count),
+			E('li', {}, sr.T('profiles_configured') + ': ' + st.profile_count)
 		]));
 	},
 

@@ -9,25 +9,49 @@
 // keeps its own dictionary and a language switch stored in localStorage.
 // Every user-facing string in the four views is looked up through T(key).
 
-var callListServers = rpc.declare({
+// ubus/rpcd requires a JSON *object* at the top level of a script's output --
+// a bare top-level JSON array makes the whole call fail with "Invalid
+// argument" (confirmed against real hardware: rpcd script backends can't
+// return arrays directly). The backend wraps every list-shaped result in a
+// named field ({"servers":[...]}, {"categories":[...]}, ...); unwrap it here
+// once so every view can keep working with plain arrays/promises.
+var _callListServers = rpc.declare({
 	object: 'luci.xkeen-smartroute', method: 'list_servers'
 });
-var callImportSubscription = rpc.declare({
+function callListServers() {
+	return _callListServers().then(function (r) { return (r && r.servers) || []; });
+}
+var _callImportSubscription = rpc.declare({
 	object: 'luci.xkeen-smartroute', method: 'import_subscription',
 	params: ['url', 'label', 'client', 'os', 'locale', 'model', 'ver', 'hwid']
 });
+function callImportSubscription(url, label, client, os, locale, model, ver, hwid) {
+	return _callImportSubscription(url, label, client, os, locale, model, ver, hwid).then(function (r) {
+		if (r && r.error) return r;
+		return (r && r.servers) || [];
+	});
+}
 var callRandomHwid = rpc.declare({
 	object: 'luci.xkeen-smartroute', method: 'random_hwid'
 });
-var callListCategories = rpc.declare({
+var _callListCategories = rpc.declare({
 	object: 'luci.xkeen-smartroute', method: 'list_categories'
 });
-var callListCustomCategories = rpc.declare({
+function callListCategories() {
+	return _callListCategories().then(function (r) { return (r && r.categories) || []; });
+}
+var _callListCustomCategories = rpc.declare({
 	object: 'luci.xkeen-smartroute', method: 'list_custom_categories'
 });
-var callListProfiles = rpc.declare({
+function callListCustomCategories() {
+	return _callListCustomCategories().then(function (r) { return (r && r.categories) || []; });
+}
+var _callListProfiles = rpc.declare({
 	object: 'luci.xkeen-smartroute', method: 'list_profiles'
 });
+function callListProfiles() {
+	return _callListProfiles().then(function (r) { return (r && r.profiles) || []; });
+}
 var callSaveProfile = rpc.declare({
 	object: 'luci.xkeen-smartroute', method: 'save_profile',
 	params: ['profile']
@@ -114,8 +138,8 @@ var DICT = {
 	status_title: { ru: 'Состояние стека', en: 'Stack status' },
 	xray_running: { ru: 'Xray работает', en: 'Xray is running' },
 	xray_stopped: { ru: 'Xray остановлен', en: 'Xray is stopped' },
-	servers_known: { ru: 'серверов известно', en: 'servers known' },
-	profiles_configured: { ru: 'профилей настроено', en: 'profiles configured' },
+	servers_known: { ru: 'Серверов известно', en: 'Servers known' },
+	profiles_configured: { ru: 'Профилей настроено', en: 'Profiles configured' },
 	refresh_btn: { ru: 'Обновить', en: 'Refresh' },
 
 	ks_intro: { ru: 'Для профилей на «наших» списках (custom) можно включить жёсткий kill-switch: если процесс xray упадёт, домены этого профиля будут заблокированы файрволом полностью — вместо риска уйти в интернет напрямую в обход VPN. Для geosite-профилей защита работает и так: без xray редирект в прокси просто обрывает соединение.',
@@ -178,6 +202,13 @@ var CLIENT_PRESETS = [
 
 var DEVICE_OS_OPTIONS = ['XKeen SmartRoute', 'iOS', 'Android', 'Windows', 'macOS', 'Linux'];
 
+var DEVICE_MODEL_OPTIONS = [
+	'iPhone 15 Pro', 'iPhone16,1', 'iPhone 14', 'Pixel 8', 'Pixel 9 Pro',
+	'Samsung Galaxy S24', 'ELP-NX1', 'PC', 'MacBook Pro 16'
+];
+
+var DEVICE_VER_OPTIONS = ['17.5', '17.0', '16.6', '15', '14', '10', '11', '13.0'];
+
 return L.Class.extend({
 	rpc: {
 		listServers: callListServers,
@@ -197,5 +228,7 @@ return L.Class.extend({
 	setLang: srSetLang,
 	langSwitchButton: srLangSwitchButton,
 	CLIENT_PRESETS: CLIENT_PRESETS,
-	DEVICE_OS_OPTIONS: DEVICE_OS_OPTIONS
+	DEVICE_OS_OPTIONS: DEVICE_OS_OPTIONS,
+	DEVICE_MODEL_OPTIONS: DEVICE_MODEL_OPTIONS,
+	DEVICE_VER_OPTIONS: DEVICE_VER_OPTIONS
 });
