@@ -24,13 +24,25 @@ set -eu
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 . "$SCRIPT_DIR/common.sh"
 
+gen_random_id() {
+	# Not every busybox build here ships `od`/`hexdump` (observed missing on
+	# real hardware) -- the kernel's own UUID generator needs no extra tools
+	# and is the most portable source of randomness available.
+	if [ -r /proc/sys/kernel/random/uuid ]; then
+		cat /proc/sys/kernel/random/uuid | tr -d '\n'
+	elif command -v od >/dev/null 2>&1; then
+		head -c 16 /dev/urandom 2>/dev/null | od -An -tx1 | tr -d ' \n'
+	else
+		printf 'sr%s%s' "$(date +%s)" "$$"
+	fi
+}
+
 client_hwid() {
 	# stable-per-router pseudo-device-id, used whenever no explicit hwid override is given
 	hwid_file="$SR_STATE_DIR/hwid"
 	if [ ! -s "$hwid_file" ]; then
 		mkdir -p "$SR_STATE_DIR"
-		{ head -c 16 /dev/urandom 2>/dev/null | od -An -tx1 | tr -d ' \n'; } > "$hwid_file" 2>/dev/null
-		[ -s "$hwid_file" ] || echo "sr$(date +%s)$$" > "$hwid_file"
+		gen_random_id > "$hwid_file" 2>/dev/null
 	fi
 	cat "$hwid_file"
 }
