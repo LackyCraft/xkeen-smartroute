@@ -62,6 +62,19 @@ sr_regen() {
 	jq -n --argjson rules "$rules" '{routing:{domainStrategy:"IPIfNonMatch", rules:$rules}}' >"$SR_ROUTING_FILE"
 	jq -n --argjson bal "$balancers" '{routing:{balancers:$bal}}' >"$SR_BALANCER_FILE"
 
+	# The "leastPing" strategy used by every balancer above depends on Xray's
+	# observatory feature to actually measure ping and pick a winner --
+	# without an observatory block whose subjectSelector matches at least
+	# the balanced outbounds, Xray fails to start at all ("not all
+	# dependencies are resolved", with no further detail pointing at why).
+	# Only write it while it's actually needed so a fixed-server-only setup
+	# doesn't carry a dangling probe config.
+	if [ "$(echo "$balancers" | jq 'length')" -gt 0 ]; then
+		jq -n '{observatory:{subjectSelector:["sr_"], probeUrl:"https://www.gstatic.com/generate_204", probeInterval:"30s"}}' >"$SR_OBSERVATORY_FILE"
+	else
+		rm -f "$SR_OBSERVATORY_FILE"
+	fi
+
 	sr_restart_xray
 	sr_log "regenerated routing ($(echo "$rules" | jq 'length') rule(s)) and balancer ($(echo "$balancers" | jq 'length') group(s))"
 }
