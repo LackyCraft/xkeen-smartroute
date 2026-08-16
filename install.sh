@@ -199,11 +199,15 @@ chmod +x /usr/libexec/rpcd/luci.xkeen-smartroute
 [ -x /etc/init.d/uhttpd ] && /etc/init.d/uhttpd restart >/dev/null 2>&1 || true
 
 # ---------------------------------------------------------------------------
-log "Шаг 5/5: cron (обновление geosite/geoip + списков раз в 8 часов)"
+log "Шаг 5/5: cron (обновление geosite/geoip раз в 8 часов, подписок — по расписанию)"
 
 CRON_GEO="0 */8 * * * xkeen -ug >/dev/null 2>&1; xkeen -uk >/dev/null 2>&1 #xkeen-smartroute-cron"
-CRON_KS="* * * * * sh $SR_LIB_DIR/killswitch.sh check >/dev/null 2>&1 #xkeen-smartroute-cron"
-( crontab -l 2>/dev/null | grep -v 'xkeen-smartroute-cron' ; echo "$CRON_GEO" ; echo "$CRON_KS" ) | crontab -
+# Fires hourly, but subscription.sh refresh itself checks a timestamp against
+# the configured interval (default 12h, changeable in the UI without editing
+# crontab) and exits immediately if it isn't due yet -- simpler and more
+# flexible than rewriting a cron schedule string for an arbitrary N-hour gap.
+CRON_SUB="7 * * * * sh $SR_LIB_DIR/subscription.sh refresh >/dev/null 2>&1 #xkeen-smartroute-cron"
+( crontab -l 2>/dev/null | grep -v 'xkeen-smartroute-cron' ; echo "$CRON_GEO" ; echo "$CRON_SUB" ) | crontab -
 /etc/init.d/cron restart >/dev/null 2>&1 || true
 
 # ---------------------------------------------------------------------------

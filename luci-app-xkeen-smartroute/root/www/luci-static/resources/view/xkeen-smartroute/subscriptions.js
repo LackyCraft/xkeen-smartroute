@@ -5,7 +5,7 @@
 
 return view.extend({
 	load: function () {
-		return sr.rpc.listServers();
+		return Promise.all([sr.rpc.listServers(), sr.rpc.getRefreshHours()]);
 	},
 
 	handleGenerateHwid: function (ev) {
@@ -57,15 +57,54 @@ return view.extend({
 			}
 			ui.addNotification(null, E('p', {}, sr.T('sub_imported_ok')), 'info');
 			urlInput.value = '';
-			this.renderTable(res || []);
+			this.servers = res || [];
+			this.renderTable();
 		}, this));
 	},
 
-	renderTable: function (servers) {
+	handlePing: function (ev) {
+		var btn = ev.target;
+		btn.disabled = true;
+		btn.textContent = sr.T('pinging');
+		return sr.rpc.pingServers().then(L.bind(function (pings) {
+			btn.disabled = false;
+			btn.textContent = sr.T('ping_btn');
+			this.pings = pings || {};
+			this.renderTable();
+		}, this));
+	},
+
+	handleSaveRefreshHours: function (ev) {
+		var input = document.getElementById('sr-refresh-hours');
+		var hours = input.value.trim();
+		var btn = ev.target;
+		btn.disabled = true;
+		return sr.rpc.setRefreshHours(hours).then(function (res) {
+			btn.disabled = false;
+			if (res && res.error) {
+				ui.addNotification(null, E('p', {}, res.detail || res.error), 'error');
+				return;
+			}
+			ui.addNotification(null, E('p', {}, sr.T('refresh_saved_ok')), 'info');
+		});
+	},
+
+	handleRefreshNow: function (ev) {
+		var btn = ev.target;
+		btn.disabled = true;
+		return sr.rpc.refreshNow().then(function () {
+			btn.disabled = false;
+			ui.addNotification(null, E('p', {}, sr.T('refresh_now_started')), 'info');
+		});
+	},
+
+	renderTable: function () {
 		var container = document.getElementById('sr-servers-table');
 		if (!container) return;
+		var servers = this.servers || [];
+		var pings = this.pings || {};
 
-		if (!servers || !servers.length) {
+		if (!servers.length) {
 			container.innerHTML = '';
 			container.appendChild(E('p', { 'class': 'cbi-value-description' }, sr.T('no_servers')));
 			return;
@@ -74,18 +113,22 @@ return view.extend({
 		var table = E('table', { 'class': 'table cbi-section-table' }, [
 			E('tr', { 'class': 'tr table-titles' }, [
 				E('th', { 'class': 'th' }, sr.T('col_server')),
-				E('th', { 'class': 'th' }, sr.T('col_address')),
 				E('th', { 'class': 'th' }, sr.T('col_protocol')),
-				E('th', { 'class': 'th' }, sr.T('col_subscription'))
+				E('th', { 'class': 'th' }, sr.T('col_subscription')),
+				E('th', { 'class': 'th' }, sr.T('col_ping'))
 			])
 		]);
 
 		servers.forEach(function (s) {
+			var ms = pings[s.tag];
+			var pingText = '—';
+			if (ms === null) pingText = sr.T('ping_timeout');
+			else if (typeof ms === 'number') pingText = ms + ' ms';
 			table.appendChild(E('tr', { 'class': 'tr' }, [
 				E('td', { 'class': 'td' }, s.name),
-				E('td', { 'class': 'td' }, s.address),
 				E('td', { 'class': 'td' }, s.protocol),
-				E('td', { 'class': 'td' }, s.subscription)
+				E('td', { 'class': 'td' }, s.subscription),
+				E('td', { 'class': 'td' }, pingText)
 			]));
 		});
 
@@ -93,8 +136,12 @@ return view.extend({
 		container.appendChild(table);
 	},
 
-	render: function (servers) {
+	render: function (data) {
 		var view = this;
+		var servers = data[0] || [];
+		var refreshHours = data[1] || 12;
+		this.servers = servers;
+		this.pings = {};
 
 		var clientSelect = E('select', { 'id': 'sr-sub-client', 'class': 'cbi-input-select', 'style': 'display:block;max-width:320px;margin:.25em 0' },
 			sr.CLIENT_PRESETS.map(function (c) {
@@ -140,6 +187,16 @@ return view.extend({
 			])
 		]);
 
+		var refreshBox = E('div', { 'class': 'cbi-section' }, [
+			E('h3', {}, sr.T('refresh_settings_title')),
+			E('label', {}, sr.T('refresh_interval_label')),
+			E('div', { 'style': 'display:flex;gap:.5em;max-width:320px;margin:.25em 0 .75em' }, [
+				E('input', { 'type': 'number', 'id': 'sr-refresh-hours', 'class': 'cbi-input-text', 'min': '1', 'style': 'flex:1', 'value': String(refreshHours) }),
+				E('button', { 'class': 'cbi-button', 'click': ui.createHandlerFn(view, 'handleSaveRefreshHours') }, sr.T('refresh_save_btn'))
+			]),
+			E('button', { 'class': 'cbi-button', 'click': ui.createHandlerFn(view, 'handleRefreshNow') }, sr.T('refresh_now_btn'))
+		]);
+
 		var root = E('div', {}, [
 			sr.langSwitchButton(),
 			E('h2', {}, sr.T('app_name') + ' — ' + sr.T('nav_subscriptions')),
@@ -168,11 +225,15 @@ return view.extend({
 					'click': ui.createHandlerFn(view, 'handleImport')
 				}, sr.T('sub_import_btn'))
 			]),
-			E('h3', {}, sr.T('sub_table_title')),
+			refreshBox,
+			E('div', { 'style': 'display:flex;align-items:center;gap:1em' }, [
+				E('h3', { 'style': 'margin:0' }, sr.T('sub_table_title')),
+				E('button', { 'class': 'cbi-button', 'click': ui.createHandlerFn(view, 'handlePing') }, sr.T('ping_btn'))
+			]),
 			E('div', { 'id': 'sr-servers-table' })
 		]);
 
-		requestAnimationFrame(function () { view.renderTable(servers); });
+		requestAnimationFrame(function () { view.renderTable(); });
 
 		return root;
 	}
