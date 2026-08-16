@@ -14,7 +14,10 @@ var callListServers = rpc.declare({
 });
 var callImportSubscription = rpc.declare({
 	object: 'luci.xkeen-smartroute', method: 'import_subscription',
-	params: ['url', 'label', 'client']
+	params: ['url', 'label', 'client', 'os', 'locale', 'model', 'ver', 'hwid']
+});
+var callRandomHwid = rpc.declare({
+	object: 'luci.xkeen-smartroute', method: 'random_hwid'
 });
 var callListCategories = rpc.declare({
 	object: 'luci.xkeen-smartroute', method: 'list_categories'
@@ -59,6 +62,13 @@ var DICT = {
 	sub_client_label: { ru: 'Представиться как', en: 'Identify as' },
 	sub_client_hint: { ru: 'Некоторые провайдеры подписок отдают инструкцию для браузера вместо самой подписки — переключите на конкретное приложение, если импорт вернул 0 серверов.',
 	                    en: "Some subscription providers serve a browser landing page instead of the actual subscription — switch to a specific app if import returns 0 servers." },
+	sub_advanced_toggle: { ru: 'Настроить заголовки устройства…', en: 'Customize device headers…' },
+	sub_device_os_label: { ru: 'Device-OS', en: 'Device-OS' },
+	sub_locale_label: { ru: 'Device-Locale', en: 'Device-Locale' },
+	sub_model_label: { ru: 'Device-Model', en: 'Device-Model' },
+	sub_ver_label: { ru: 'X-Ver-Os', en: 'X-Ver-Os' },
+	sub_hwid_label: { ru: 'X-Hwid', en: 'X-Hwid' },
+	sub_hwid_generate: { ru: 'Сгенерировать', en: 'Generate' },
 	sub_import_btn: { ru: 'Импортировать', en: 'Import' },
 	sub_importing: { ru: 'Импортирую…', en: 'Importing…' },
 	sub_imported_ok: { ru: 'Готово, сервера обновлены', en: 'Done, server list updated' },
@@ -143,6 +153,31 @@ function srLangSwitchButton() {
 	}, T('lang_switch'));
 }
 
+// Keep in sync with client_preset() in lib/subscription.sh. Only the key is
+// sent to the backend, which owns the actual UA/OS/locale/model/ver default
+// values for each — the five text fields in the UI are pure overrides.
+var CLIENT_PRESETS = [
+	{ key: 'smartroute', label: 'XKeen SmartRoute' },
+	{ key: 'happ', label: 'Happ' },
+	{ key: 'happ-android', label: 'Happ (Android)' },
+	{ key: 'v2rayng', label: 'v2rayNG' },
+	{ key: 'v2ray', label: 'v2ray (core)' },
+	{ key: 'v2box', label: 'V2Box' },
+	{ key: 'clash', label: 'Clash' },
+	{ key: 'clash-meta', label: 'Clash Meta' },
+	{ key: 'mihomo', label: 'Mihomo' },
+	{ key: 'sing-box', label: 'sing-box' },
+	{ key: 'nekobox', label: 'NekoBox' },
+	{ key: 'shadowrocket', label: 'Shadowrocket' },
+	{ key: 'stash', label: 'Stash' },
+	{ key: 'surge', label: 'Surge' },
+	{ key: 'loon', label: 'Loon' },
+	{ key: 'flclash', label: 'FlClash' },
+	{ key: 'incy', label: 'Incy' }
+];
+
+var DEVICE_OS_OPTIONS = ['XKeen SmartRoute', 'iOS', 'Android', 'Windows', 'macOS', 'Linux'];
+
 return L.Class.extend({
 	rpc: {
 		listServers: callListServers,
@@ -154,10 +189,13 @@ return L.Class.extend({
 		deleteProfile: callDeleteProfile,
 		addCustomDomain: callAddCustomDomain,
 		getStatus: callGetStatus,
-		killswitchSet: callKillswitchSet
+		killswitchSet: callKillswitchSet,
+		randomHwid: callRandomHwid
 	},
 	T: T,
 	lang: srLang,
 	setLang: srSetLang,
-	langSwitchButton: srLangSwitchButton
+	langSwitchButton: srLangSwitchButton,
+	CLIENT_PRESETS: CLIENT_PRESETS,
+	DEVICE_OS_OPTIONS: DEVICE_OS_OPTIONS
 });

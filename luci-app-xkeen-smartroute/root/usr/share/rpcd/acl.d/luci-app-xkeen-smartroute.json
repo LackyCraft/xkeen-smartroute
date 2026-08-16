@@ -5,7 +5,7 @@
 			"ubus": {
 				"luci.xkeen-smartroute": [
 					"list_servers", "list_categories", "list_custom_categories",
-					"list_profiles", "get_status"
+					"list_profiles", "get_status", "random_hwid"
 				]
 			}
 		},

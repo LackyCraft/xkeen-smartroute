@@ -4,16 +4,19 @@
 # it into an Xray outbounds fragment that xkeen picks up.
 #
 # Usage:
-#   subscription.sh import <url> [label] [client]   # fetch + write outbounds + servers.json
+#   subscription.sh import <url> [label] [client] [os] [locale] [model] [ver] [hwid]
 #   subscription.sh list                             # print servers.json (for the UI)
 #
-# [client] picks the User-Agent / device headers sent with the request. Some
-# subscription panels (3x-ui-style "collection" pages, seen in the wild)
+# Some subscription panels (3x-ui-style "collection" pages, seen in the wild)
 # serve a human-facing HTML page by default and only return the actual
-# machine-readable subscription body to requests that look like a known VPN
-# app. Supported values: smartroute (default — identifies honestly as this
-# project), happ-ios, v2rayng, clash-meta, shadowrocket. Anything else is
-# sent verbatim as the User-Agent string, for one-off compatibility.
+# machine-readable subscription body to requests whose headers look like a
+# known VPN app. [client] picks a User-Agent preset (see CLIENT_PRESET below
+# for the full list); the default "smartroute" identifies honestly as this
+# project and works with panels that don't gate on client identity. The five
+# trailing args (device OS / locale / model / OS version / hardware id) let
+# you override any individual header regardless of preset -- pass "" to keep
+# the preset's own default for that field. An unrecognized [client] value is
+# sent verbatim as the literal User-Agent string.
 #
 # Requires: curl, jq, sed, base64 (all present once Entware is installed).
 
@@ -22,7 +25,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 . "$SCRIPT_DIR/common.sh"
 
 client_hwid() {
-	# stable-per-router pseudo-device-id for client profiles that expect one
+	# stable-per-router pseudo-device-id, used whenever no explicit hwid override is given
 	hwid_file="$SR_STATE_DIR/hwid"
 	if [ ! -s "$hwid_file" ]; then
 		mkdir -p "$SR_STATE_DIR"
@@ -32,49 +35,57 @@ client_hwid() {
 	cat "$hwid_file"
 }
 
-sr_fetch_sub() {
-	client="$1"; url="$2"
-	case "$client" in
-		happ-ios)
-			curl -fsSL --max-time 20 \
-				-H "User-Agent: Happ" \
-				-H "X-Device-Os: iOS" \
-				-H "X-Device-Locale: ru" \
-				-H "X-Device-Model: iPhone 15 Pro" \
-				-H "X-Ver-Os: 17.5" \
-				-H "X-Hwid: $(client_hwid)" \
-				"$url"
-			;;
-		v2rayng)
-			curl -fsSL --max-time 20 \
-				-H "User-Agent: v2rayNG/1.9.22" \
-				-H "X-Device-Os: Android" \
-				-H "X-Device-Locale: ru" \
-				"$url"
-			;;
-		clash-meta)
-			curl -fsSL --max-time 20 \
-				-H "User-Agent: ClashMetaForAndroid/2.11.10" \
-				-H "X-Device-Os: Android" \
-				"$url"
-			;;
-		shadowrocket)
-			curl -fsSL --max-time 20 \
-				-H "User-Agent: Shadowrocket/2214 CFNetwork/1408.0.4 Darwin/22.5.0" \
-				-H "X-Device-Os: iOS" \
-				"$url"
-			;;
-		smartroute|"")
-			curl -fsSL --max-time 20 \
-				-H "User-Agent: XKeen-SmartRoute/1.0 (+https://github.com/LackyCraft/xkeen-smartroute)" \
-				-H "X-Device-Os: XKeen SmartRoute" \
-				"$url"
-			;;
-		*)
-			# treat an unrecognized value as a literal User-Agent override
-			curl -fsSL --max-time 20 -H "User-Agent: $client" "$url"
-			;;
+# CLIENT_PRESET <key> -> "User-Agent|OS|Locale|Model|VerOs" (defaults; each
+# field can be overridden individually at call time). Keep this in sync with
+# the <select> in subscriptions.js.
+client_preset() {
+	case "$1" in
+		smartroute|"") echo "XKeen-SmartRoute/1.0 (+https://github.com/LackyCraft/xkeen-smartroute)|XKeen SmartRoute|ru||" ;;
+		happ)          echo "Happ|iOS|ru|iPhone 15 Pro|17.5" ;;
+		happ-ios)      echo "Happ|iOS|ru|iPhone 15 Pro|17.5" ;;
+		happ-android)  echo "Happ|Android|ru|Pixel 8|15" ;;
+		v2rayng)       echo "v2rayNG/1.9.22|Android|ru||" ;;
+		v2ray)         echo "v2ray/5.16.1|Linux|ru||" ;;
+		v2box)         echo "V2Box/1.4.1|iOS|ru|iPhone 15 Pro|17.5" ;;
+		clash)         echo "Clash/v1.18.0|Windows|ru||" ;;
+		clash-meta)    echo "ClashMetaForAndroid/2.11.10|Android|ru||" ;;
+		mihomo)        echo "clash.meta|Android|ru|ELP-NX1|15" ;;
+		sing-box)      echo "sing-box/1.9.0|Linux|ru||" ;;
+		singbox)       echo "sing-box/1.9.0|Linux|ru||" ;;
+		nekobox)       echo "NekoBox/1.3.7|Android|ru||" ;;
+		shadowrocket)  echo "Shadowrocket|iOS|ru|iPhone16,1|17.0" ;;
+		stash)         echo "Stash/2.6.1|iOS|ru|iPhone 15 Pro|17.5" ;;
+		surge)         echo "Surge/1391|iOS|ru|iPhone 15 Pro|17.5" ;;
+		loon)          echo "Loon/636|iOS|ru|iPhone 15 Pro|17.5" ;;
+		flclash)       echo "FlClash/1.0.0|Windows|ru||" ;;
+		incy)          echo "Incy/1.0|Android|ru||" ;;
+		*)             echo "$1|XKeen SmartRoute|ru||" ;;
 	esac
+}
+
+sr_fetch_sub() {
+	# $1=client $2=url $3=os_override $4=locale_override $5=model_override $6=ver_override $7=hwid_override
+	client="$1"; url="$2"; os_ov="${3:-}"; locale_ov="${4:-}"; model_ov="${5:-}"; ver_ov="${6:-}"; hwid_ov="${7:-}"
+
+	preset="$(client_preset "$client")"
+	ua="${preset%%|*}"; rest="${preset#*|}"
+	dos="${rest%%|*}"; rest="${rest#*|}"
+	dlocale="${rest%%|*}"; rest="${rest#*|}"
+	dmodel="${rest%%|*}"; dver="${rest#*|}"
+
+	[ -z "$os_ov" ] || dos="$os_ov"
+	[ -z "$locale_ov" ] || dlocale="$locale_ov"
+	[ -z "$model_ov" ] || dmodel="$model_ov"
+	[ -z "$ver_ov" ] || dver="$ver_ov"
+	hwid="${hwid_ov:-$(client_hwid)}"
+
+	set -- -fsSL --max-time 20 -H "User-Agent: $ua"
+	[ -z "$dos" ]     || set -- "$@" -H "X-Device-Os: $dos"
+	[ -z "$dlocale" ] || set -- "$@" -H "X-Device-Locale: $dlocale"
+	[ -z "$dmodel" ]  || set -- "$@" -H "X-Device-Model: $dmodel"
+	[ -z "$dver" ]    || set -- "$@" -H "X-Ver-Os: $dver"
+	[ -z "$hwid" ]    || set -- "$@" -H "X-Hwid: $hwid"
+	curl "$@" "$url"
 }
 
 urldecode() {
@@ -152,10 +163,11 @@ build_outbound() {
 
 sr_import() {
 	url="$1"; label="${2:-sub}"; client="${3:-smartroute}"
+	os_ov="${4:-}"; locale_ov="${5:-}"; model_ov="${6:-}"; ver_ov="${7:-}"; hwid_ov="${8:-}"
 	sr_require curl; sr_require jq
 	sr_ensure_dirs
 
-	raw="$(sr_fetch_sub "$client" "$url")" || sr_die "failed to fetch subscription: $url"
+	raw="$(sr_fetch_sub "$client" "$url" "$os_ov" "$locale_ov" "$model_ov" "$ver_ov" "$hwid_ov")" || sr_die "failed to fetch subscription: $url"
 	decoded="$(printf '%s' "$raw" | base64 -d 2>/dev/null || true)"
 	case "$decoded" in
 		*"://"*) body="$decoded" ;;
@@ -221,7 +233,7 @@ sr_import() {
 }
 
 case "${1:-}" in
-	import) sr_import "$2" "${3:-sub}" "${4:-smartroute}" ;;
+	import) sr_import "$2" "${3:-sub}" "${4:-smartroute}" "${5:-}" "${6:-}" "${7:-}" "${8:-}" "${9:-}" ;;
 	list) sr_ensure_dirs; [ -f "$SR_SERVERS_FILE" ] && cat "$SR_SERVERS_FILE" || echo '[]' ;;
-	*) echo "usage: $0 {import <url> [label] [client]|list}" >&2; exit 1 ;;
+	*) echo "usage: $0 {import <url> [label] [client] [os] [locale] [model] [ver] [hwid]|list}" >&2; exit 1 ;;
 esac
