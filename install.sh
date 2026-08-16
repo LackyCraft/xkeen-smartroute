@@ -64,7 +64,7 @@ fi
 
 export PATH="/opt/bin:/opt/sbin:$PATH"
 /opt/bin/opkg update >/dev/null 2>&1 || true
-/opt/bin/opkg install jq curl bash coreutils-base64 coreutils-tr unzip grep sed >/dev/null 2>&1 \
+/opt/bin/opkg install jq curl bash coreutils-base64 coreutils-tr coreutils-timeout unzip grep sed >/dev/null 2>&1 \
 	|| die "не удалось поставить базовые пакеты Entware (jq/curl/...) / failed to install base Entware packages"
 # stock busybox `tr` on some builds doesn't support [:upper:]/[:lower:] classes
 # and silently corrupts strings instead of erroring (e.g. "mips" -> "miws"),
@@ -89,7 +89,14 @@ if ! command -v xkeen >/dev/null 2>&1; then
 	# If a future xkeen release changes this wizard's flow, the answers will
 	# land on the wrong prompts — that's exactly what the check right after
 	# this block is for: it fails loudly instead of pretending success.
-	printf '%s\n' 4 3 1 1 8 4 0 | sh -c "$(wget -O - "$XKEEN_INSTALL_URL")" || die "установка xkeen завершилась с ошибкой / xkeen install failed"
+	# Wrapped in `timeout`: this answer sequence was verified against xkeen
+	# 1.1.3, but it's still feeding a moving target with plain stdin (no real
+	# pty) — if a future version inserts one more prompt we didn't expect,
+	# stdin hits EOF and some xkeen releases retry a bad read in a tight loop
+	# instead of erroring. Better to hard-kill after 5 minutes and fail the
+	# install cleanly than let a busy-loop peg the router's CPU indefinitely.
+	timeout 300 sh -c "printf '%s\n' 4 3 1 1 8 4 0 | sh -c \"\$(wget -O - '$XKEEN_INSTALL_URL')\"" \
+		|| die "установка xkeen завершилась с ошибкой (или не уложилась в 5 минут) — запустите 'xkeen -i' вручную и ответьте на вопросы мастера. / xkeen install failed or exceeded its 5-minute budget — run 'xkeen -i' by hand and answer its wizard prompts."
 	[ -x /opt/sbin/xray ] || die "xray не появился после установки xkeen — мастер install мог измениться, запустите 'xkeen -i' вручную и ответьте на вопросы. / xray missing after xkeen install — its interactive wizard may have changed, run 'xkeen -i' by hand and answer its prompts."
 else
 	log "xkeen уже установлен: $(xkeen -status 2>/dev/null | head -n1 || echo ok)"
