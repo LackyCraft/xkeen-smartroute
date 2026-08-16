@@ -1,0 +1,344 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>XKeen SmartRoute</title>
+<style>
+  :root {
+    --bg: #0f1115; --bg2: #161922; --card: #1b1f2a; --border: #2a2f3d;
+    --text: #e6e8ec; --muted: #8b93a7; --accent: #4f8cff; --good: #35c56a;
+    --bad: #e5484d; --warn: #e8a13a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.5 -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 14px 20px; background: var(--bg2); border-bottom: 1px solid var(--border);
+    position: sticky; top: 0; z-index: 10;
+  }
+  header h1 { font-size: 17px; margin: 0; font-weight: 600; }
+  header h1 small { color: var(--muted); font-weight: 400; font-size: 12px; margin-left: 6px; }
+  .pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 4px 10px; border-radius: 999px; background: var(--card);
+    border: 1px solid var(--border); font-size: 12px; color: var(--muted);
+  }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+  .dot.ok { background: var(--good); }
+  .dot.bad { background: var(--bad); }
+  .toolbar { display: flex; gap: 10px; align-items: center; }
+  button.lang {
+    background: var(--card); color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 6px 10px; cursor: pointer; font-size: 12px;
+  }
+  main { max-width: 1000px; margin: 0 auto; padding: 20px; display: grid; gap: 18px; }
+  section {
+    background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+    padding: 16px 18px;
+  }
+  section h2 {
+    font-size: 13px; text-transform: uppercase; letter-spacing: .04em;
+    color: var(--muted); margin: 0 0 12px;
+  }
+  .stat-row { display: flex; gap: 24px; flex-wrap: wrap; }
+  .stat { display: flex; flex-direction: column; gap: 2px; }
+  .stat .v { font-size: 22px; font-weight: 600; }
+  .stat .l { font-size: 12px; color: var(--muted); }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--border); font-size: 13px; }
+  th { color: var(--muted); font-weight: 500; font-size: 12px; }
+  tr:last-child td { border-bottom: none; }
+  select, .btn {
+    background: var(--bg2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 5px 8px; font-size: 13px;
+  }
+  .btn { cursor: pointer; }
+  .btn:hover { border-color: var(--accent); }
+  .ping-ok { color: var(--good); }
+  .ping-bad { color: var(--bad); }
+  .ping-none { color: var(--muted); }
+  #logs {
+    background: #0a0c10; border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px 12px; height: 260px; overflow-y: auto; font-family: ui-monospace, monospace;
+    font-size: 12px; white-space: pre-wrap; word-break: break-all;
+  }
+  #logs .err { color: var(--bad); }
+  .empty { color: var(--muted); font-size: 13px; padding: 6px 0; }
+  .refresh-btn { margin-left: auto; }
+</style>
+</head>
+<body>
+<header>
+  <h1>XKeen SmartRoute <small>byLC</small></h1>
+  <div class="toolbar">
+    <span class="pill"><span class="dot" id="connDot"></span><span id="connLabel">…</span></span>
+    <button class="lang" id="langBtn">EN</button>
+  </div>
+</header>
+
+<main>
+  <section>
+    <h2 data-i18n="traffic">Трафик</h2>
+    <div class="stat-row">
+      <div class="stat"><div class="v" id="trafUp">0 Б/с</div><div class="l" data-i18n="up">Отдача</div></div>
+      <div class="stat"><div class="v" id="trafDown">0 Б/с</div><div class="l" data-i18n="down">Приём</div></div>
+    </div>
+  </section>
+
+  <section>
+    <h2 data-i18n="profiles">Профили</h2>
+    <table id="profilesTable">
+      <thead><tr>
+        <th data-i18n="profile">Профиль</th>
+        <th data-i18n="domains">Домены</th>
+        <th data-i18n="server">Сервер</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+    <div class="empty" id="profilesEmpty" style="display:none" data-i18n="noProfiles">Профилей пока нет.</div>
+  </section>
+
+  <section>
+    <h2 data-i18n="servers"><span data-i18n="servers">Серверы</span></h2>
+    <button class="btn refresh-btn" id="pingAllBtn" data-i18n="pingAll">Проверить пинг всех</button>
+    <table id="serversTable" style="margin-top:10px">
+      <thead><tr>
+        <th data-i18n="name">Название</th>
+        <th data-i18n="protocol">Протокол</th>
+        <th data-i18n="ping">Пинг</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2 data-i18n="logs">Логи Xray</h2>
+    <div id="logs"></div>
+  </section>
+</main>
+
+<script>
+const DICT = {
+  ru: {
+    traffic: "Трафик", up: "Отдача", down: "Приём",
+    profiles: "Профили", profile: "Профиль", domains: "Домены", server: "Сервер",
+    noProfiles: "Профилей пока нет.",
+    servers: "Серверы", pingAll: "Проверить пинг всех",
+    name: "Название", protocol: "Протокол", ping: "Пинг",
+    logs: "Логи Xray", auto: "Авто (leastPing)",
+    connected: "Подключено", disconnected: "Нет связи",
+  },
+  en: {
+    traffic: "Traffic", up: "Upload", down: "Download",
+    profiles: "Profiles", profile: "Profile", domains: "Domains", server: "Server",
+    noProfiles: "No profiles yet.",
+    servers: "Servers", pingAll: "Ping all",
+    name: "Name", protocol: "Protocol", ping: "Ping",
+    logs: "Xray logs", auto: "Auto (leastPing)",
+    connected: "Connected", disconnected: "Disconnected",
+  }
+};
+let lang = localStorage.getItem("sr_lang") || "ru";
+
+function t(key) { return (DICT[lang] && DICT[lang][key]) || key; }
+
+function applyI18n() {
+  document.querySelectorAll("[data-i18n]").forEach(el => {
+    el.textContent = t(el.getAttribute("data-i18n"));
+  });
+  document.getElementById("langBtn").textContent = lang === "ru" ? "EN" : "RU";
+  document.documentElement.lang = lang;
+}
+
+document.getElementById("langBtn").addEventListener("click", () => {
+  lang = lang === "ru" ? "en" : "ru";
+  localStorage.setItem("sr_lang", lang);
+  applyI18n();
+  renderAll();
+});
+
+function fmtBytes(n) {
+  if (n < 1024) return n + " Б/с";
+  const units = ["КБ/с", "МБ/с", "ГБ/с"];
+  let u = -1;
+  do { n /= 1024; u++; } while (n >= 1024 && u < units.length - 1);
+  return n.toFixed(1) + " " + units[u];
+}
+
+let proxiesData = { proxies: {} };
+
+async function fetchJSON(path, opts) {
+  const r = await fetch(path, opts);
+  if (!r.ok) throw new Error(path + ": " + r.status);
+  return r.json();
+}
+
+function setConn(ok) {
+  document.getElementById("connDot").className = "dot " + (ok ? "ok" : "bad");
+  document.getElementById("connLabel").textContent = t(ok ? "connected" : "disconnected");
+}
+
+async function loadProxies() {
+  proxiesData = await fetchJSON("/proxies");
+  renderAll();
+}
+
+function renderAll() {
+  applyI18n();
+  renderProfiles();
+  renderServers();
+}
+
+function isProfile(p) {
+  return p.type === "Selector" && p.name !== "GLOBAL";
+}
+
+function renderProfiles() {
+  const tbody = document.querySelector("#profilesTable tbody");
+  tbody.innerHTML = "";
+  const profiles = Object.values(proxiesData.proxies || {}).filter(isProfile);
+  document.getElementById("profilesEmpty").style.display = profiles.length ? "none" : "block";
+  document.getElementById("profilesTable").style.display = profiles.length ? "table" : "none";
+
+  for (const p of profiles) {
+    const tr = document.createElement("tr");
+
+    const nameTd = document.createElement("td");
+    nameTd.textContent = p.name;
+    tr.appendChild(nameTd);
+
+    const domTd = document.createElement("td");
+    domTd.textContent = ""; // filled from /rules below
+    domTd.dataset.profile = p.name;
+    tr.appendChild(domTd);
+
+    const selTd = document.createElement("td");
+    const select = document.createElement("select");
+    for (const opt of (p.all || [])) {
+      const o = document.createElement("option");
+      o.value = opt;
+      o.textContent = opt === "auto (leastPing)" ? t("auto") : opt;
+      if (opt === p.now) o.selected = true;
+      select.appendChild(o);
+    }
+    select.addEventListener("change", async () => {
+      select.disabled = true;
+      try {
+        await fetch("/proxies/" + encodeURIComponent(p.name), {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: select.value }),
+        });
+      } finally {
+        select.disabled = false;
+      }
+    });
+    selTd.appendChild(select);
+    tr.appendChild(selTd);
+
+    tbody.appendChild(tr);
+  }
+
+  fetchJSON("/rules").then(r => {
+    for (const rule of (r.rules || [])) {
+      const td = document.querySelector('#profilesTable td[data-profile="' + CSS.escape(rule.proxy) + '"]');
+      if (td) td.textContent = rule.payload;
+    }
+  }).catch(() => {});
+}
+
+function renderServers() {
+  const tbody = document.querySelector("#serversTable tbody");
+  tbody.innerHTML = "";
+  const servers = Object.values(proxiesData.proxies || {}).filter(p => !isProfile(p) && p.name !== "GLOBAL");
+  for (const s of servers) {
+    const tr = document.createElement("tr");
+    const nameTd = document.createElement("td");
+    nameTd.textContent = s.name;
+    tr.appendChild(nameTd);
+
+    const protoTd = document.createElement("td");
+    protoTd.textContent = s.type;
+    tr.appendChild(protoTd);
+
+    const pingTd = document.createElement("td");
+    pingTd.dataset.server = s.name;
+    const last = (s.history || [])[s.history.length - 1];
+    if (last) {
+      pingTd.textContent = last.delay + " ms";
+      pingTd.className = last.delay < 300 ? "ping-ok" : "ping-bad";
+    } else {
+      pingTd.textContent = "—";
+      pingTd.className = "ping-none";
+    }
+    tr.appendChild(pingTd);
+
+    tbody.appendChild(tr);
+  }
+}
+
+document.getElementById("pingAllBtn").addEventListener("click", async (ev) => {
+  ev.target.disabled = true;
+  const servers = Object.values(proxiesData.proxies || {}).filter(p => !isProfile(p) && p.name !== "GLOBAL");
+  await Promise.all(servers.map(async s => {
+    const td = document.querySelector('#serversTable td[data-server="' + CSS.escape(s.name) + '"]');
+    try {
+      const r = await fetchJSON("/proxies/" + encodeURIComponent(s.name) + "/delay?timeout=3000");
+      if (td) { td.textContent = r.delay + " ms"; td.className = r.delay < 300 ? "ping-ok" : "ping-bad"; }
+    } catch (e) {
+      if (td) { td.textContent = "—"; td.className = "ping-bad"; }
+    }
+  }));
+  ev.target.disabled = false;
+});
+
+function wsURL(path) {
+  const proto = location.protocol === "https:" ? "wss:" : "ws:";
+  return proto + "//" + location.host + path;
+}
+
+function connectTraffic() {
+  let ws;
+  try { ws = new WebSocket(wsURL("/traffic")); } catch (e) { setTimeout(connectTraffic, 3000); return; }
+  ws.onopen = () => setConn(true);
+  ws.onclose = () => { setConn(false); setTimeout(connectTraffic, 3000); };
+  ws.onerror = () => ws.close();
+  ws.onmessage = (ev) => {
+    try {
+      const d = JSON.parse(ev.data);
+      document.getElementById("trafUp").textContent = fmtBytes(d.up || 0);
+      document.getElementById("trafDown").textContent = fmtBytes(d.down || 0);
+    } catch (e) {}
+  };
+}
+
+function connectLogs() {
+  let ws;
+  try { ws = new WebSocket(wsURL("/logs")); } catch (e) { setTimeout(connectLogs, 3000); return; }
+  ws.onclose = () => setTimeout(connectLogs, 3000);
+  ws.onmessage = (ev) => {
+    try {
+      const d = JSON.parse(ev.data);
+      const box = document.getElementById("logs");
+      const line = document.createElement("div");
+      if (d.type === "error") line.className = "err";
+      line.textContent = d.payload;
+      box.appendChild(line);
+      while (box.childNodes.length > 300) box.removeChild(box.firstChild);
+      box.scrollTop = box.scrollHeight;
+    } catch (e) {}
+  };
+}
+
+applyI18n();
+loadProxies().catch(() => setConn(false));
+setInterval(() => loadProxies().catch(() => {}), 15000);
+connectTraffic();
+connectLogs();
+</script>
+</body>
+</html>

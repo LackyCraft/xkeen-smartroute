@@ -52,6 +52,7 @@ func main() {
 	mux.HandleFunc("GET /configs", handleConfigs)
 	mux.HandleFunc("PATCH /configs", handleConfigs)
 	mux.HandleFunc("GET /traffic", trafficWSHandler(xc))
+	mux.HandleFunc("GET /logs", logsWSHandler())
 	mux.HandleFunc("OPTIONS /", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, PUT, PATCH, OPTIONS")
