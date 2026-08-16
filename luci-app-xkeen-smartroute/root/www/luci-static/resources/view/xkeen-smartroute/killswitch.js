@@ -5,7 +5,7 @@
 
 return view.extend({
 	load: function () {
-		return sr.rpc.listProfiles();
+		return Promise.all([sr.rpc.listProfiles(), sr.rpc.listKillswitchEnabled()]);
 	},
 
 	handleToggle: function (name, ev) {
@@ -16,9 +16,10 @@ return view.extend({
 		});
 	},
 
-	render: function (profiles) {
+	render: function (data) {
 		var view = this;
-		profiles = profiles || [];
+		var profiles = data[0] || [];
+		var enabledNames = data[1] || [];
 
 		var table = E('table', { 'class': 'table cbi-section-table' }, [
 			E('tr', { 'class': 'tr table-titles' }, [
@@ -29,18 +30,15 @@ return view.extend({
 		]);
 
 		profiles.forEach(function (p) {
-			var isCustom = p.domain_source.type === 'custom';
-			var domainsLabel = isCustom ? p.domain_source.file : 'geosite:' + p.domain_source.value;
+			var isGeosite = p.domain_source.type === 'geosite';
+			var domainsLabel = isGeosite ? 'geosite:' + p.domain_source.value : p.domain_source.file;
 			var toggle = E('input', { 'type': 'checkbox' });
-			if (!isCustom) {
-				toggle.disabled = true;
-			} else {
-				toggle.addEventListener('change', function (ev) { view.handleToggle(p.name, ev); });
-			}
+			toggle.checked = enabledNames.indexOf(p.name) !== -1;
+			toggle.addEventListener('change', function (ev) { view.handleToggle(p.name, ev); });
 			table.appendChild(E('tr', { 'class': 'tr' }, [
 				E('td', { 'class': 'td' }, p.name),
 				E('td', { 'class': 'td' }, domainsLabel),
-				E('td', { 'class': 'td' }, [toggle, !isCustom ? E('span', { 'class': 'cbi-value-description' }, ' ' + sr.T('ks_custom_only')) : ''])
+				E('td', { 'class': 'td' }, [toggle, isGeosite ? E('span', { 'class': 'cbi-value-description' }, ' ' + sr.T('ks_geosite_note')) : ''])
 			]));
 		});
 
