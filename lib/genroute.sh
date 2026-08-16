@@ -83,7 +83,11 @@ case "${1:-}" in
 	regen) sr_regen ;;
 	list)
 		sr_ensure_dirs
-		jq -s '.' "$SR_PROFILES_DIR"/*.json 2>/dev/null || echo '[]'
+		if ls "$SR_PROFILES_DIR"/*.json >/dev/null 2>&1; then
+			jq -s '.' "$SR_PROFILES_DIR"/*.json
+		else
+			echo '[]'
+		fi
 		;;
 	*) echo "usage: $0 {save <profile.json>|delete <name>|regen|list}" >&2; exit 1 ;;
 esac
