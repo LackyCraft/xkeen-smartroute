@@ -219,33 +219,218 @@ sr_import() {
 		name="$(urldecode "$frag_raw")"; [ -n "$name" ] || name="$host:$port"
 
 		i=$((i + 1))
-		tag="sr_${label_slug}_$(printf '%03d' "$i")_$(slugify "$name" | cut -c1-16)"
+		# Tag is derived from the node's identity, not a sequential index -- a
+		# subscription "refresh" re-fetches the same URL and gets the same
+		# nodes back, usually in a different order or interleaved with
+		# additions/removals elsewhere in the list. An index-based tag would
+		# drift out from under any profile that already references it,
+		# silently breaking the user's saved routing on the next refresh.
+		# host+port+secret alone isn't quite enough, though: some providers
+		# reuse the same endpoint+credential for several *different* nodes
+		# that only differ in transport path/SNI (e.g. multiple CDN edges
+		# fronting one VLESS server) -- seen for real, it collapsed 70
+		# imported servers down to 56 via tag collisions. Folding the node's
+		# own display name in fixes that (still stable across refreshes for
+		# the same node, as long as the provider doesn't rename it) without
+		# going back to a fragile sequential index.
+		tag="sr_${label_slug}_$(slugify "$host")_${port}_$(printf '%s' "$secret" | cut -c1-8)_$(slugify "$name" | cut -c1-12)"
 
 		ob="$(build_outbound "$proto" "$secret" "$host" "$port" "$query" "" "$tag")" || { skipped=$((skipped + 1)); continue; }
 		jq --argjson ob "$ob" '. + [$ob]' "$tmp_outbounds" >"$tmp_outbounds.new" && mv "$tmp_outbounds.new" "$tmp_outbounds"
-		jq -n --arg tag "$tag" --arg name "$name" --arg address "$host" --arg proto "$proto" --arg sub "$label" \
-			'{tag:$tag, name:$name, address:$address, protocol:$proto, subscription:$sub}' \
+		jq -n --arg tag "$tag" --arg name "$name" --arg address "$host" --argjson port "$port" --arg proto "$proto" --arg sub "$label" \
+			'{tag:$tag, name:$name, address:$address, port:$port, protocol:$proto, subscription:$sub}' \
 			>"$tmp_servers.one"
 		jq --argjson s "$(cat "$tmp_servers.one")" '. + [$s]' "$tmp_servers" >"$tmp_servers.new" && mv "$tmp_servers.new" "$tmp_servers"
 	done
 
-	jq -n --argjson list "$(cat "$tmp_outbounds")" '{outbounds:$list}' >"$SR_OUTBOUNDS_FILE"
-
-	# merge with any servers already imported from other subscriptions
-	if [ -f "$SR_SERVERS_FILE" ]; then
-		jq -s '.[0] + .[1] | unique_by(.tag)' "$SR_SERVERS_FILE" "$tmp_servers" >"$SR_SERVERS_FILE.new"
-		mv "$SR_SERVERS_FILE.new" "$SR_SERVERS_FILE"
-	else
-		cp "$tmp_servers" "$SR_SERVERS_FILE"
+	# A fetch that "succeeds" (curl exit 0) but returns an empty body, an
+	# error page, or a body with zero parseable vless://trojan:// lines
+	# would otherwise fall straight into the replace-by-label merge below
+	# and silently wipe out every server this label previously had --
+	# turning one transient hiccup on a refresh cycle into total data loss.
+	# Refuse to commit an empty result; leave existing state untouched.
+	parsed_count="$(jq 'length' "$tmp_servers")"
+	if [ "$parsed_count" -eq 0 ]; then
+		sr_log "import '$label' fetched 0 usable server(s) (empty/invalid response?) -- keeping existing data untouched"
+		rm -f "$tmp_outbounds" "$tmp_servers" "$tmp_servers.one" "$tmp_outbounds.new" "$tmp_servers.new" 2>/dev/null || true
+		return 1
 	fi
+
+	# Replace (not accumulate) this label's own servers/outbounds, then merge
+	# with whatever other subscriptions already contributed. Two bugs this
+	# fixes together: (1) re-importing/refreshing the same label used to pile
+	# up duplicate-ish entries under drifting tags instead of replacing the
+	# old set; (2) 04_outbounds.smartroute.json used to be overwritten with
+	# *only* the current import's outbounds, silently deleting every other
+	# subscription's servers from the actual Xray config (servers.json stayed
+	# multi-subscription-aware, the real proxy config quietly wasn't).
+	sr_ensure_dirs
+	# -s (non-empty), not -f (exists): jq silently produces zero output on a
+	# 0-byte input file instead of erroring, so a merely-existing-but-empty
+	# state file (e.g. left over from an interrupted previous write) would
+	# pass an -f guard and then feed jq nothing, collapsing this and every
+	# future merge down to an empty result forever.
+	[ -s "$SR_SERVERS_FILE" ] || echo '[]' >"$SR_SERVERS_FILE"
+	[ -s "$SR_OUTBOUNDS_STATE_FILE" ] || echo '[]' >"$SR_OUTBOUNDS_STATE_FILE"
+
+	jq --arg lbl "$label" '[.[] | select(.subscription != $lbl)]' "$SR_SERVERS_FILE" >"$SR_SERVERS_FILE.new"
+	jq -s '.[0] + .[1] | unique_by(.tag)' "$SR_SERVERS_FILE.new" "$tmp_servers" >"$SR_SERVERS_FILE"
+	rm -f "$SR_SERVERS_FILE.new"
+
+	keep_tags="$(jq -c '[.[].tag]' "$tmp_servers")"
+	jq --argjson keep "$keep_tags" '[.[] | select((.tag as $t | $keep | index($t)) | not)]' "$SR_OUTBOUNDS_STATE_FILE" >"$SR_OUTBOUNDS_STATE_FILE.new"
+	jq -s '.[0] + .[1] | unique_by(.tag)' "$SR_OUTBOUNDS_STATE_FILE.new" "$tmp_outbounds" >"$SR_OUTBOUNDS_STATE_FILE"
+	rm -f "$SR_OUTBOUNDS_STATE_FILE.new"
+
+	jq -n --argjson list "$(cat "$SR_OUTBOUNDS_STATE_FILE")" '{outbounds:$list}' >"$SR_OUTBOUNDS_FILE"
 
 	count="$(jq 'length' "$SR_SERVERS_FILE")"
 	sr_log "imported subscription '$label': now $count server(s) known in total"
 	rm -f "$tmp_outbounds" "$tmp_servers" "$tmp_servers.one" "$tmp_outbounds.new" "$tmp_servers.new" 2>/dev/null || true
+
+	# remember how to refresh this subscription later without user input
+	sr_save_subscription_meta "$url" "$label" "$client" "$os_ov" "$locale_ov" "$model_ov" "$ver_ov" "$hwid_ov"
+}
+
+# --- auto-refresh: remember subscription params, replay them on a schedule ---
+
+SR_SUBS_META_FILE="$SR_STATE_DIR/subscriptions.json"
+SR_REFRESH_STATE_FILE="$SR_STATE_DIR/refresh.json"
+DEFAULT_REFRESH_HOURS=12
+
+sr_save_subscription_meta() {
+	url="$1"; label="$2"; client="$3"; os_ov="$4"; locale_ov="$5"; model_ov="$6"; ver_ov="$7"; hwid_ov="$8"
+	sr_ensure_dirs
+	[ -s "$SR_SUBS_META_FILE" ] || echo '[]' >"$SR_SUBS_META_FILE"
+	entry="$(jq -n --arg url "$url" --arg label "$label" --arg client "$client" \
+		--arg os "$os_ov" --arg locale "$locale_ov" --arg model "$model_ov" --arg ver "$ver_ov" --arg hwid "$hwid_ov" \
+		'{url:$url, label:$label, client:$client, os:$os, locale:$locale, model:$model, ver:$ver, hwid:$hwid}')"
+	jq --arg lbl "$label" --argjson e "$entry" '[.[] | select(.label != $lbl)] + [$e]' "$SR_SUBS_META_FILE" >"$SR_SUBS_META_FILE.new"
+	mv "$SR_SUBS_META_FILE.new" "$SR_SUBS_META_FILE"
+}
+
+sr_get_refresh_hours() {
+	[ -s "$SR_STATE_DIR/refresh_interval_hours" ] && cat "$SR_STATE_DIR/refresh_interval_hours" || echo "$DEFAULT_REFRESH_HOURS"
+}
+
+sr_set_refresh_hours() {
+	sr_ensure_dirs
+	case "$1" in *[!0-9]*|'') sr_die "refresh interval must be a whole number of hours" ;; esac
+	echo "$1" > "$SR_STATE_DIR/refresh_interval_hours"
+}
+
+# Called hourly from cron; only actually refetches once the configured
+# interval has elapsed, and only for subscriptions we've successfully
+# imported at least once before (nothing to do on a fresh install).
+sr_refresh_due() {
+	sr_ensure_dirs
+	[ -s "$SR_SUBS_META_FILE" ] || { sr_log "refresh: no saved subscriptions yet"; return 0; }
+	hours="$(sr_get_refresh_hours)"
+	last=0
+	[ -s "$SR_REFRESH_STATE_FILE" ] && last="$(jq -r '.last // 0' "$SR_REFRESH_STATE_FILE" 2>/dev/null || echo 0)"
+	now="$(date +%s)"
+	due_at=$((last + hours * 3600))
+	if [ "$now" -lt "$due_at" ]; then
+		return 0
+	fi
+	sr_do_refresh
+}
+
+# Same as sr_refresh_due but ignores the schedule -- for a UI "refresh now" button.
+sr_force_refresh() {
+	sr_ensure_dirs
+	[ -s "$SR_SUBS_META_FILE" ] || { sr_log "refresh: no saved subscriptions yet"; return 0; }
+	sr_do_refresh
+}
+
+sr_do_refresh() {
+	now="$(date +%s)"
+	count="$(jq 'length' "$SR_SUBS_META_FILE")"
+	sr_log "refresh: re-importing $count saved subscription(s)"
+	jq -c '.[]' "$SR_SUBS_META_FILE" | while IFS= read -r entry; do
+		u="$(printf '%s' "$entry" | jq -r '.url')"
+		l="$(printf '%s' "$entry" | jq -r '.label')"
+		c="$(printf '%s' "$entry" | jq -r '.client')"
+		o="$(printf '%s' "$entry" | jq -r '.os')"
+		lo="$(printf '%s' "$entry" | jq -r '.locale')"
+		m="$(printf '%s' "$entry" | jq -r '.model')"
+		v="$(printf '%s' "$entry" | jq -r '.ver')"
+		h="$(printf '%s' "$entry" | jq -r '.hwid')"
+		# subshell: sr_import calls sr_die (exit) on a fetch failure, which
+		# would otherwise abort this whole while loop on the first bad
+		# subscription instead of moving on to the next one
+		( sr_import "$u" "$l" "$c" "$o" "$lo" "$m" "$v" "$h" ) || sr_log "refresh: failed to re-import '$l'"
+	done
+	sr_restart_xray
+	jq -n --arg now "$now" '{last: ($now|tonumber)}' >"$SR_REFRESH_STATE_FILE"
+}
+
+# --- ping: TCP-connect latency per server, run in parallel ---
+# Real usability signal without needing a raw-socket ICMP ping (which would
+# need to run as root anyway and gets blocked by some networks/servers);
+# curl's time_connect is just the TCP handshake, independent of whether TLS
+# or the VPN handshake itself succeeds. Run in the background per server and
+# wait, rather than one after another -- 70 servers at up to a few seconds
+# each, sequentially, would make the button take minutes instead of ~3-4s.
+SR_PING_FILE="$SR_STATE_DIR/ping.json"
+SR_PING_TIMEOUT=3
+
+sr_ping_one() {
+	tag="$1"; host="$2"; port="$3"; out="$4"
+	# curl legitimately exits non-zero here almost every time -- it's doing a
+	# plain HTTPS request against a VLESS/Trojan endpoint that will never
+	# complete a real TLS handshake for a bare GET; %{time_connect} (the TCP
+	# handshake alone) is all we actually want. Under this script's `set -e`,
+	# an unguarded `$(curl ...)` assignment propagates that non-zero status
+	# and kills this backgrounded invocation on the spot, before it ever
+	# reaches the write below -- silently, since it's a detached child with
+	# no visible error. `|| true` neutralizes that; stdout is still captured.
+	ms="$(curl -o /dev/null -s -m "$SR_PING_TIMEOUT" -w '%{time_connect}' "https://$host:$port/" 2>/dev/null)" || true
+	case "$ms" in
+		''|0.000000) ms="" ;;
+	esac
+	if [ -n "$ms" ]; then
+		ms_int=$(awk -v t="$ms" 'BEGIN{printf "%d", t*1000}' 2>/dev/null || echo "")
+	else
+		ms_int=""
+	fi
+	jq -n --arg tag "$tag" --arg ms "$ms_int" '{tag:$tag, ping_ms: ($ms | if .=="" then null else tonumber end)}' > "$out"
+}
+
+sr_ping_all() {
+	sr_require curl; sr_require jq
+	sr_ensure_dirs
+	[ -s "$SR_SERVERS_FILE" ] || { echo '{}'; return 0; }
+	tmp_dir="$(mktemp -d)"
+	tmp_list="$(mktemp)"
+	jq -c '.[]' "$SR_SERVERS_FILE" > "$tmp_list"
+	i=0
+	# Read from a real file, not a `cmd | while read` pipe: piping into the
+	# loop would run it (and every `&` job started inside it) in a subshell,
+	# so the `wait` below -- in the parent shell -- would have no children to
+	# wait for and return immediately, before any ping finished.
+	while IFS= read -r s; do
+		i=$((i + 1))
+		tag="$(printf '%s' "$s" | jq -r '.tag')"
+		host="$(printf '%s' "$s" | jq -r '.address')"
+		port="$(printf '%s' "$s" | jq -r '.port // 443')"
+		sr_ping_one "$tag" "$host" "$port" "$tmp_dir/$i.json" &
+	done < "$tmp_list"
+	wait
+	rm -f "$tmp_list"
+
+	jq -s '[.[]] | INDEX(.tag) | map_values(.ping_ms)' "$tmp_dir"/*.json 2>/dev/null > "$SR_PING_FILE" || echo '{}' > "$SR_PING_FILE"
+	rm -rf "$tmp_dir"
+	cat "$SR_PING_FILE"
 }
 
 case "${1:-}" in
 	import) sr_import "$2" "${3:-sub}" "${4:-smartroute}" "${5:-}" "${6:-}" "${7:-}" "${8:-}" "${9:-}" ;;
-	list) sr_ensure_dirs; [ -f "$SR_SERVERS_FILE" ] && cat "$SR_SERVERS_FILE" || echo '[]' ;;
-	*) echo "usage: $0 {import <url> [label] [client] [os] [locale] [model] [ver] [hwid]|list}" >&2; exit 1 ;;
+	list) sr_ensure_dirs; [ -s "$SR_SERVERS_FILE" ] && cat "$SR_SERVERS_FILE" || echo '[]' ;;
+	refresh) sr_refresh_due ;;
+	refresh-now) sr_force_refresh ;;
+	get-refresh-hours) sr_get_refresh_hours ;;
+	set-refresh-hours) sr_set_refresh_hours "${2:-}" ;;
+	ping) sr_ping_all ;;
+	*) echo "usage: $0 {import <url> [label] [client] [os] [locale] [model] [ver] [hwid]|list|refresh|refresh-now|get-refresh-hours|set-refresh-hours <n>|ping}" >&2; exit 1 ;;
 esac

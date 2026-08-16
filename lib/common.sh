@@ -11,6 +11,7 @@ SR_OUTBOUNDS_FILE="$XKEEN_CONFIGS_DIR/04_outbounds.smartroute.json"
 SR_ROUTING_FILE="$XKEEN_CONFIGS_DIR/05_routing.smartroute.json"
 SR_BALANCER_FILE="$XKEEN_CONFIGS_DIR/09_balancer.smartroute.json"
 SR_SERVERS_FILE="$SR_STATE_DIR/servers.json"
+SR_OUTBOUNDS_STATE_FILE="$SR_STATE_DIR/outbounds.json"
 
 sr_log() {
 	logger -t xkeen-smartroute "$*" 2>/dev/null
