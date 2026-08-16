@@ -15,7 +15,7 @@ case "$1" in
 		cat <<'EOF'
 {
 	"list_servers": {},
-	"import_subscription": {"url":"str1","label":"str1"},
+	"import_subscription": {"url":"str1","label":"str1","client":"str1"},
 	"list_categories": {},
 	"list_custom_categories": {},
 	"list_profiles": {},
@@ -38,8 +38,9 @@ EOF
 			import_subscription)
 				url="$(echo "$args" | jq -r '.url // empty')"
 				label="$(echo "$args" | jq -r '.label // "sub"')"
+				client="$(echo "$args" | jq -r '.client // "smartroute"')"
 				if [ -z "$url" ]; then json_err "missing_url"; exit 0; fi
-				if sh "$LIB_DIR/subscription.sh" import "$url" "$label" >/tmp/sr_import.log 2>&1; then
+				if sh "$LIB_DIR/subscription.sh" import "$url" "$label" "$client" >/tmp/sr_import.log 2>&1; then
 					sh "$LIB_DIR/subscription.sh" list
 				else
 					jq -n --arg log "$(cat /tmp/sr_import.log)" '{error:"import_failed", detail:$log}'

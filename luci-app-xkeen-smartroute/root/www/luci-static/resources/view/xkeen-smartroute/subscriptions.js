@@ -11,16 +11,18 @@ return view.extend({
 	handleImport: function (ev) {
 		var urlInput = document.getElementById('sr-sub-url');
 		var labelInput = document.getElementById('sr-sub-label');
+		var clientSelect = document.getElementById('sr-sub-client');
 		var btn = ev.target;
 		var url = urlInput.value.trim();
 		var label = labelInput.value.trim() || 'sub';
+		var client = clientSelect ? clientSelect.value : 'smartroute';
 
 		if (!url) return;
 
 		btn.disabled = true;
 		btn.textContent = sr.T('sub_importing');
 
-		return sr.rpc.importSubscription(url, label).then(L.bind(function (res) {
+		return sr.rpc.importSubscription(url, label, client).then(L.bind(function (res) {
 			btn.disabled = false;
 			btn.textContent = sr.T('sub_import_btn');
 			if (res && res.error) {
@@ -83,6 +85,15 @@ return view.extend({
 					'style': 'width:100%;max-width:320px;display:block;margin-bottom:.5em',
 					'placeholder': sr.T('sub_label_placeholder')
 				}),
+				E('label', {}, sr.T('sub_client_label')),
+				E('select', { 'id': 'sr-sub-client', 'class': 'cbi-input-select', 'style': 'display:block;max-width:320px;margin:.25em 0' }, [
+					E('option', { 'value': 'smartroute' }, 'XKeen SmartRoute (' + (sr.lang() === 'en' ? 'default' : 'по умолчанию') + ')'),
+					E('option', { 'value': 'happ-ios' }, 'Happ (iOS)'),
+					E('option', { 'value': 'v2rayng' }, 'v2rayNG (Android)'),
+					E('option', { 'value': 'clash-meta' }, 'Clash Meta (Android)'),
+					E('option', { 'value': 'shadowrocket' }, 'Shadowrocket (iOS)')
+				]),
+				E('p', { 'class': 'cbi-value-description' }, sr.T('sub_client_hint')),
 				E('button', {
 					'class': 'cbi-button cbi-button-positive',
 					'click': ui.createHandlerFn(view, 'handleImport')

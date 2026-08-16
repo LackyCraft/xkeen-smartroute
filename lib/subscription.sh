@@ -4,14 +4,78 @@
 # it into an Xray outbounds fragment that xkeen picks up.
 #
 # Usage:
-#   subscription.sh import <url> [label]   # fetch + write outbounds + servers.json
-#   subscription.sh list                    # print servers.json (for the UI)
+#   subscription.sh import <url> [label] [client]   # fetch + write outbounds + servers.json
+#   subscription.sh list                             # print servers.json (for the UI)
+#
+# [client] picks the User-Agent / device headers sent with the request. Some
+# subscription panels (3x-ui-style "collection" pages, seen in the wild)
+# serve a human-facing HTML page by default and only return the actual
+# machine-readable subscription body to requests that look like a known VPN
+# app. Supported values: smartroute (default — identifies honestly as this
+# project), happ-ios, v2rayng, clash-meta, shadowrocket. Anything else is
+# sent verbatim as the User-Agent string, for one-off compatibility.
 #
 # Requires: curl, jq, sed, base64 (all present once Entware is installed).
 
 set -eu
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 . "$SCRIPT_DIR/common.sh"
+
+client_hwid() {
+	# stable-per-router pseudo-device-id for client profiles that expect one
+	hwid_file="$SR_STATE_DIR/hwid"
+	if [ ! -s "$hwid_file" ]; then
+		mkdir -p "$SR_STATE_DIR"
+		{ head -c 16 /dev/urandom 2>/dev/null | od -An -tx1 | tr -d ' \n'; } > "$hwid_file" 2>/dev/null
+		[ -s "$hwid_file" ] || echo "sr$(date +%s)$$" > "$hwid_file"
+	fi
+	cat "$hwid_file"
+}
+
+sr_fetch_sub() {
+	client="$1"; url="$2"
+	case "$client" in
+		happ-ios)
+			curl -fsSL --max-time 20 \
+				-H "User-Agent: Happ" \
+				-H "X-Device-Os: iOS" \
+				-H "X-Device-Locale: ru" \
+				-H "X-Device-Model: iPhone 15 Pro" \
+				-H "X-Ver-Os: 17.5" \
+				-H "X-Hwid: $(client_hwid)" \
+				"$url"
+			;;
+		v2rayng)
+			curl -fsSL --max-time 20 \
+				-H "User-Agent: v2rayNG/1.9.22" \
+				-H "X-Device-Os: Android" \
+				-H "X-Device-Locale: ru" \
+				"$url"
+			;;
+		clash-meta)
+			curl -fsSL --max-time 20 \
+				-H "User-Agent: ClashMetaForAndroid/2.11.10" \
+				-H "X-Device-Os: Android" \
+				"$url"
+			;;
+		shadowrocket)
+			curl -fsSL --max-time 20 \
+				-H "User-Agent: Shadowrocket/2214 CFNetwork/1408.0.4 Darwin/22.5.0" \
+				-H "X-Device-Os: iOS" \
+				"$url"
+			;;
+		smartroute|"")
+			curl -fsSL --max-time 20 \
+				-H "User-Agent: XKeen-SmartRoute/1.0 (+https://github.com/LackyCraft/xkeen-smartroute)" \
+				-H "X-Device-Os: XKeen SmartRoute" \
+				"$url"
+			;;
+		*)
+			# treat an unrecognized value as a literal User-Agent override
+			curl -fsSL --max-time 20 -H "User-Agent: $client" "$url"
+			;;
+	esac
+}
 
 urldecode() {
 	# percent-decode + turn '+' into space, POSIX-portable (no bash-isms)
@@ -81,11 +145,11 @@ build_outbound() {
 }
 
 sr_import() {
-	url="$1"; label="${2:-sub}"
+	url="$1"; label="${2:-sub}"; client="${3:-smartroute}"
 	sr_require curl; sr_require jq
 	sr_ensure_dirs
 
-	raw="$(curl -fsSL --max-time 20 "$url")" || sr_die "failed to fetch subscription: $url"
+	raw="$(sr_fetch_sub "$client" "$url")" || sr_die "failed to fetch subscription: $url"
 	decoded="$(printf '%s' "$raw" | base64 -d 2>/dev/null || true)"
 	case "$decoded" in
 		*"://"*) body="$decoded" ;;
@@ -151,7 +215,7 @@ sr_import() {
 }
 
 case "${1:-}" in
-	import) sr_import "$2" "${3:-sub}" ;;
+	import) sr_import "$2" "${3:-sub}" "${4:-smartroute}" ;;
 	list) sr_ensure_dirs; [ -f "$SR_SERVERS_FILE" ] && cat "$SR_SERVERS_FILE" || echo '[]' ;;
-	*) echo "usage: $0 {import <url> [label]|list}" >&2; exit 1 ;;
+	*) echo "usage: $0 {import <url> [label] [client]|list}" >&2; exit 1 ;;
 esac

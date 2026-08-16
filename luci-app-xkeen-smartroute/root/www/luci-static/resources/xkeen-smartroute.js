@@ -14,7 +14,7 @@ var callListServers = rpc.declare({
 });
 var callImportSubscription = rpc.declare({
 	object: 'luci.xkeen-smartroute', method: 'import_subscription',
-	params: ['url', 'label']
+	params: ['url', 'label', 'client']
 });
 var callListCategories = rpc.declare({
 	object: 'luci.xkeen-smartroute', method: 'list_categories'
@@ -46,7 +46,7 @@ var callKillswitchSet = rpc.declare({
 });
 
 var DICT = {
-	app_name:            { ru: 'XKeen SmartRoute', en: 'XKeen SmartRoute' },
+	app_name:            { ru: 'XKeen SmartRoute DanyByLC', en: 'XKeen SmartRoute DanyByLC' },
 	nav_subscriptions:   { ru: 'Подписки', en: 'Subscriptions' },
 	nav_profiles:        { ru: 'Профили маршрутизации', en: 'Routing profiles' },
 	nav_status:          { ru: 'Статус', en: 'Status' },
@@ -56,6 +56,9 @@ var DICT = {
 	             en: 'Paste a VLESS/Trojan subscription link (the same one you use in V2rayNG/V2Box) — its servers will show up below and become selectable in profiles.' },
 	sub_url_placeholder: { ru: 'https://example.com/sub/xxxxxxxx', en: 'https://example.com/sub/xxxxxxxx' },
 	sub_label_placeholder: { ru: 'Название подписки (например: main)', en: 'Subscription label (e.g. main)' },
+	sub_client_label: { ru: 'Представиться как', en: 'Identify as' },
+	sub_client_hint: { ru: 'Некоторые провайдеры подписок отдают инструкцию для браузера вместо самой подписки — переключите на конкретное приложение, если импорт вернул 0 серверов.',
+	                    en: "Some subscription providers serve a browser landing page instead of the actual subscription — switch to a specific app if import returns 0 servers." },
 	sub_import_btn: { ru: 'Импортировать', en: 'Import' },
 	sub_importing: { ru: 'Импортирую…', en: 'Importing…' },
 	sub_imported_ok: { ru: 'Готово, сервера обновлены', en: 'Done, server list updated' },
