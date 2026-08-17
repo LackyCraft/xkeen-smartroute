@@ -15,6 +15,7 @@ One-command deployment of per-domain routing over a VLESS/Trojan subscription on
 - [What xkeen does](#what-xkeen-does)
 - [What xkeen-UI does](#what-xkeen-ui-does)
 - [What SmartRoute adds](#what-smartroute-adds)
+- [Cross-platform: how SmartRoute fixes xkeen on OpenWrt](#cross-platform-how-smartroute-fixes-xkeen-on-openwrt)
 - [The SmartRoute panel, and why not Mihomo](#the-smartroute-panel-and-why-not-mihomo)
 - [System requirements](#system-requirements)
 - [Installation](#installation)
@@ -104,14 +105,25 @@ The `luci-app-xkeen-smartroute` module (LuCI) + `smartroute-gateway` (a standalo
 - **Subscription import** (VLESS/Trojan, V2rayNG/V2Box format: a base64 blob of links) — pulls a server list out of your subscription. Some subscription panels serve a plain HTML instructions page to a browser and only return the real list to a recognized VPN client (by `User-Agent` and device headers). The Subscriptions tab ships 17 client presets (Happ, v2rayNG, Clash/Clash Meta/Mihomo, sing-box, NekoBox, Shadowrocket, Stash, Surge, Loon, FlClash, V2Box, incy, etc.) plus manual Device-OS/Device-Locale/Device-Model/X-Ver-Os/X-Hwid fields (with a random-HWID generator button) under "Customize device headers…".
 - **Automatic subscription refresh**: every configurable interval (12 hours by default, changeable right in the UI) every saved subscription is re-fetched with no user action needed. Refresh is multi-subscription-safe: several subscriptions won't wipe each other's servers, and an invalid/empty response from the provider (a transient hiccup) doesn't wipe out already-saved servers — it's just skipped until the next attempt.
 - **Server ping**: TCP latency to every subscription server right in the UI (without ever showing IP addresses), tested against all servers in parallel.
-- **Routing profiles**: a domain list (an Xray geosite category *or* your own list) → one specific server (`fixed`) *or* a group of servers with automatic fastest-pick (`balancer` / `leastPing`).
+- **Routing profiles**: a domain list (an Xray geosite category *or* your own list), **and/or** specific devices on your network (Policy-Based Routing — see below) → one specific server (`fixed`) *or* a group of servers with automatic fastest-pick (`balancer` / `leastPing`).
+- **Policy-Based Routing by device**: a profile can be restricted not just by domain but by specific devices (IP/CIDR) — "only the TV goes through VPN", regardless of which sites it visits, or "only the TV, only for YouTube" — both restrictions at once. The Profiles tab shows devices detected via the router's DHCP leases and ARP table (with hostname and MAC where known), plus a manual IP/CIDR field for a statically-addressed device or a whole subnet.
 - **Ad-hoc custom domain lists**: type domains separated by commas in the UI, and a list you can attach to a server appears immediately.
 - **Bundled lists for what's missing from Xray's default database (geosite)** — see [below](#domain-lists-missing-from-geosite): currently Character.AI, Grok/x.ai, and the npm registry, auto-refreshed via GitHub Actions.
+- **DNS and IPv6 leak protection**: a dedicated "Leak protection" tab — forces LAN DNS through the router itself even if a device is hardcoded to a third-party resolver (closing off a way to bypass profiles/kill-switch around the VPN), and can optionally block LAN→WAN IPv6 outright, since our traffic capture is IPv4-only and a site reachable over IPv6 could otherwise load directly through your ISP, bypassing every rule.
 - **Gapless kill-switch**: once enabled for a profile, the firewall+ipset block stays armed permanently, not re-checked once a minute. DNAT-redirected traffic physically flows through the firewall's `INPUT` chain, not `FORWARD`, so the blocking rule never interferes with normal redirected traffic and can just stay on all the time — no window between Xray dying and the check catching up (the window that could have leaked a real IP before). Works for both custom domain lists and geosite categories. See the [UI](#ui) section → Kill-Switch.
-- **Resilient Xray restarts**: the merged config is validated (`xray run -test`) before every restart — if something's wrong (a broken node from a subscription, tags drifting out of sync after a server-list change), Xray is left alone and keeps running on its last-known-good config instead of crashing. On plain OpenWrt (as opposed to KeeneticOS, xkeen's native home) the restart itself bypasses `xkeen -restart`, which hangs indefinitely on that platform.
+- **Real failover within a server group**: Xray-core's own `leastPing`+`observatory` combo can detect a broken outbound (its probe genuinely goes through the server, REALITY handshake included), but current core versions don't always stop selecting that same outbound for new connections — a known, still-unresolved upstream bug ([XTLS/Xray-core#5295](https://github.com/XTLS/Xray-core/issues/5295)). `smartroute-gateway` (see below) closes that gap itself: it reads the same observatory data, and when a balancer's current pick is confirmed dead, forces it onto the fastest outbound observatory currently believes is alive — the same API call `xray api bo` uses.
+- **Resilient Xray restarts**: the merged config is validated (`xray run -test`) before every restart — if something's wrong (a broken node from a subscription, tags drifting out of sync after a server-list change), Xray is left alone and keeps running on its last-known-good config instead of crashing. On plain OpenWrt (as opposed to KeeneticOS, xkeen's native home) the restart itself bypasses `xkeen -restart`, which hangs indefinitely on that platform. Xray is additionally restarted once a day on a schedule (overnight by default): on modest hardware with no swap its memory footprint grows over time, and a scheduled restart is cheaper than waiting for the kernel's OOM-killer to do it for us.
 - **Status panel**: whether Xray is alive, how many servers and profiles are configured.
 - **The SmartRoute panel** (`smartroute-gateway`, a standalone service on port `1001`) — a live, Mihomo-style dashboard: server list with ping, real-time server switching within a profile, a traffic graph, Xray's logs — no need to switch the core to Mihomo. Details and reasoning — [below](#the-smartroute-panel-and-why-not-mihomo).
 - Fully **bilingual (RU/EN)** — a language switch built right into the module (LuCI can't properly compile `.po` translations without its build SDK, so the language dictionary lives inside the module itself; same for the SmartRoute panel).
+
+## Cross-platform: how SmartRoute fixes xkeen on OpenWrt
+
+`xkeen` was originally written for **KeeneticOS** — Keenetic routers' native platform. Entware (the environment `xkeen`/Xray-core/our whole stack lives in) officially supports OpenWrt too, so the stack itself works — but one of `xkeen`'s own built-in features, its LAN-traffic port-based redirect (`xkeen -ap`), does nothing at all on plain OpenWrt 21.02+, and here's why.
+
+On that OpenWrt, the kernel talks **nftables** by default (via the `fw4` frontend), not classic iptables. But Entware installs its own, completely independent **legacy iptables** (`/opt/sbin/iptables` → `xtables-multi`) — and `xkeen -ap` writes its rules into that. The kernel only ever consults the real nftables stack (`/usr/sbin/iptables`, actually a compatible `xtables-nft-multi` wrapper, or `nft` itself). The result: `xkeen -ap 443,80` reports success — while real LAN devices' traffic keeps flowing right past Xray, as if the command had never run at all. We confirmed this directly on hardware: `conntrack` showed zero marking (`mark=0`) and zero connections reaching Xray's redirect port, even after `xkeen` considered the ports already enabled. This gap doesn't exist on genuine KeeneticOS — that's the stack `xkeen` was actually written against.
+
+So SmartRoute adds its own traffic capture (`lib/redirect.sh`), independent of `xkeen -ap` — through `fw4`'s officially supported extension point, the `/etc/nftables.d/` directory. Our module drops its own nft chain there (capturing TCP 80/443 into Xray's redirect inbound, plus optional DNS/IPv6 leak-protection rules), and it survives `fw4 reload`, `/etc/init.d/firewall restart`, and a full reboot — and it's what makes the whole "route by domain/device" idea possible on this platform in the first place. Without it, profiles, kill-switch, and Policy-Based Routing would just be valid JSON that no real LAN packet ever reaches.
 
 ## The SmartRoute panel, and why not Mihomo
 
@@ -161,7 +173,7 @@ The script is idempotent — safe to re-run any number of times; already-install
 4. Installs `xkeen-UI` (port 1000) and asks once for a password to log into it.
 5. Installs our SmartRoute LuCI module + libraries + domain lists.
 6. Installs `smartroute-gateway` — the panel on port 1001.
-7. Sets up cron: geosite/geoip refresh every 8 hours, subscription refresh on its configured interval.
+7. Sets up cron: geosite/geoip refresh every 8 hours, subscription refresh on its configured interval, plus a nightly Xray restart (guards against memory growth on modest hardware).
 
 ## What gets installed where
 
@@ -169,10 +181,11 @@ The script is idempotent — safe to re-run any number of times; already-install
 |---|---|
 | `/opt/` | Entware (opkg, also where `xkeen` lives) |
 | `/opt/etc/xray/configs/` | Xray config JSON fragments, including our `04_outbounds.smartroute.json`, `05_routing.smartroute.json`, `09_balancer.smartroute.json` |
-| `/opt/share/xkeen-smartroute/lib/` | Our shell scripts: `common.sh`, `subscription.sh`, `genroute.sh`, `killswitch.sh` |
+| `/opt/share/xkeen-smartroute/lib/` | Our shell scripts: `common.sh`, `subscription.sh`, `genroute.sh`, `killswitch.sh`, `redirect.sh` |
+| `/etc/nftables.d/20-xkeen-smartroute-redirect.nft` | Our nftables traffic-capture chain (see [Cross-platform](#cross-platform-how-smartroute-fixes-xkeen-on-openwrt)) — managed by `redirect.sh`, don't edit by hand |
 | `/etc/xkeen-smartroute/lists/` | Catalog of available domain lists (geosite categories + our own `.lst` files) |
-| `/etc/xkeen-smartroute/profiles/` | Your saved routing profiles (JSON) |
-| `/etc/xkeen-smartroute/state/` | `servers.json` — servers pulled from your subscriptions |
+| `/etc/xkeen-smartroute/profiles/` | Your saved routing profiles (JSON) — domains and/or devices |
+| `/etc/xkeen-smartroute/state/` | `servers.json` — servers pulled from your subscriptions; `health.json` — real per-server health (see failover above) |
 | `/usr/libexec/rpcd/luci.xkeen-smartroute` | ubus backend for LuCI |
 | `/www/luci-static/resources/view/xkeen-smartroute/` | Module's JS pages |
 | `/opt/share/xkeen-smartroute/gateway` | The SmartRoute panel binary (port **1001**) |
@@ -257,6 +270,9 @@ The images below are placeholders: drop a matching PNG into `docs/screenshots/` 
 
 ![Kill-Switch](docs/screenshots/killswitch.png)
 **Kill-Switch** — a list of profiles with a toggle; gapless for any profile, both geosite categories and your own domain lists.
+
+![Leak protection](docs/screenshots/protection.png)
+**Leak protection** — DNS and IPv6 protection toggles, plus the list of TCP ports SmartRoute captures (80/443 by default).
 
 Language switch (RU/EN) — a button in the top-right corner of every page in the module.
 
