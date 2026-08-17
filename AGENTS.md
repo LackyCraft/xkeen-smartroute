@@ -76,6 +76,16 @@ Every line is `[OK]`/`[FAIL]`/`[--]`. Don't declare the deploy done until this
 comes back clean (or the only `[FAIL]`s are expected pre-subscription states
 like "no profiles configured yet").
 
+`check.sh` doesn't currently check `smartroute-gateway` (the standalone panel,
+port 1001, `gateway/` in this repo) -- verify it by hand:
+`pgrep -f smartroute-gateway`, `curl -s http://127.0.0.1:1001/version`, and if
+either comes back empty, `/opt/etc/init.d/S98smartroute-gateway restart` then
+check `/etc/xkeen-smartroute/state/gateway.log`. It depends on Xray's gRPC API
+being enabled (`00_api.smartroute.json`, `127.0.0.1:10085`) -- if the gateway
+log shows a connection error there, that fragment is missing or Xray hasn't
+picked it up yet (needs a restart via `lib/common.sh`'s `sr_restart_xray`, not
+`xkeen -restart`).
+
 ## Import a subscription + create a profile (no browser needed)
 
 The LuCI UI is for humans; an agent can drive the same backend directly via

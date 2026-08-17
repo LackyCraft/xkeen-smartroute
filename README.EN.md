@@ -15,6 +15,7 @@ One-command deployment of per-domain routing over a VLESS/Trojan subscription on
 - [What xkeen does](#what-xkeen-does)
 - [What xkeen-UI does](#what-xkeen-ui-does)
 - [What SmartRoute adds](#what-smartroute-adds)
+- [The SmartRoute panel, and why not Mihomo](#the-smartroute-panel-and-why-not-mihomo)
 - [System requirements](#system-requirements)
 - [Installation](#installation)
 - [What gets installed where](#what-gets-installed-where)
@@ -92,19 +93,44 @@ Automatically picking the fastest server in a group is a built-in Xray-core mech
 - **Outbound Generator** — a separate page: paste a link from a panel like 3X-UI → get a ready-made `outbounds.json`.
 - Under the Mihomo core — Clash API: per-group node ping, pin/unpin a node right from the UI.
 
-SmartRoute (our LuCI module) and xkeen-UI are two independent front-ends on the same stack: xkeen-UI is great for service tasks (logs, manual edits, updates), SmartRoute is specifically for "domain → server(s)".
+SmartRoute (our LuCI module + a standalone panel, see [below](#the-smartroute-panel-and-why-not-mihomo)) and xkeen-UI are independent front-ends on the same stack: xkeen-UI is great for service tasks (logs, manual config edits, core updates, backups), SmartRoute is for day-to-day "domain/device → server(s)" and live monitoring.
+
+`install.sh` also asks once for a password to log into xkeen-UI (it ships wide open to anyone on the LAN by default) and turns it on — we recommend reusing the same password you use to log into the router itself.
 
 ## What SmartRoute adds
 
-The `luci-app-xkeen-smartroute` module this repo installs provides:
+The `luci-app-xkeen-smartroute` module (LuCI) + `smartroute-gateway` (a standalone panel, see [below](#the-smartroute-panel-and-why-not-mihomo)) — here's what gets added on top of plain `xkeen`/`xkeen-UI`:
 
-- **Subscription import** (VLESS/Trojan, V2rayNG/V2Box format: a base64 blob of links) — pulls a server list out of your subscription. Some subscription panels serve a plain HTML instructions page to a browser and only return the real list to a recognized VPN client (by `User-Agent` and device headers). The Subscriptions tab ships 14 client presets (Happ, v2rayNG, Clash/Clash Meta/Mihomo, sing-box, NekoBox, Shadowrocket, Stash, Surge, Loon, FlClash, V2Box, etc.) plus manual Device-OS/Device-Locale/Device-Model/X-Ver-Os/X-Hwid fields (with a random-HWID generator button) under "Customize device headers…".
+- **Subscription import** (VLESS/Trojan, V2rayNG/V2Box format: a base64 blob of links) — pulls a server list out of your subscription. Some subscription panels serve a plain HTML instructions page to a browser and only return the real list to a recognized VPN client (by `User-Agent` and device headers). The Subscriptions tab ships 17 client presets (Happ, v2rayNG, Clash/Clash Meta/Mihomo, sing-box, NekoBox, Shadowrocket, Stash, Surge, Loon, FlClash, V2Box, incy, etc.) plus manual Device-OS/Device-Locale/Device-Model/X-Ver-Os/X-Hwid fields (with a random-HWID generator button) under "Customize device headers…".
+- **Automatic subscription refresh**: every configurable interval (12 hours by default, changeable right in the UI) every saved subscription is re-fetched with no user action needed. Refresh is multi-subscription-safe: several subscriptions won't wipe each other's servers, and an invalid/empty response from the provider (a transient hiccup) doesn't wipe out already-saved servers — it's just skipped until the next attempt.
+- **Server ping**: TCP latency to every subscription server right in the UI (without ever showing IP addresses), tested against all servers in parallel.
 - **Routing profiles**: a domain list (an Xray geosite category *or* your own list) → one specific server (`fixed`) *or* a group of servers with automatic fastest-pick (`balancer` / `leastPing`).
 - **Ad-hoc custom domain lists**: type domains separated by commas in the UI, and a list you can attach to a server appears immediately.
 - **Bundled lists for what's missing from Xray's default database (geosite)** — see [below](#domain-lists-missing-from-geosite): currently Character.AI, Grok/x.ai, and the npm registry, auto-refreshed via GitHub Actions.
-- **Kill-switch**: a hard firewall+ipset block for profiles built on your own lists if the Xray process suddenly dies (geosite-based profiles are already protected the soft way — without Xray, the redirect just fails the connection instead of falling through to the internet directly). See the [UI](#ui) section → Kill-Switch.
+- **Gapless kill-switch**: once enabled for a profile, the firewall+ipset block stays armed permanently, not re-checked once a minute. DNAT-redirected traffic physically flows through the firewall's `INPUT` chain, not `FORWARD`, so the blocking rule never interferes with normal redirected traffic and can just stay on all the time — no window between Xray dying and the check catching up (the window that could have leaked a real IP before). Works for both custom domain lists and geosite categories. See the [UI](#ui) section → Kill-Switch.
+- **Resilient Xray restarts**: the merged config is validated (`xray run -test`) before every restart — if something's wrong (a broken node from a subscription, tags drifting out of sync after a server-list change), Xray is left alone and keeps running on its last-known-good config instead of crashing. On plain OpenWrt (as opposed to KeeneticOS, xkeen's native home) the restart itself bypasses `xkeen -restart`, which hangs indefinitely on that platform.
 - **Status panel**: whether Xray is alive, how many servers and profiles are configured.
-- Fully **bilingual (RU/EN)** — a language switch built right into the module (LuCI can't properly compile `.po` translations without its build SDK, so the language dictionary lives inside the module itself).
+- **The SmartRoute panel** (`smartroute-gateway`, a standalone service on port `1001`) — a live, Mihomo-style dashboard: server list with ping, real-time server switching within a profile, a traffic graph, Xray's logs — no need to switch the core to Mihomo. Details and reasoning — [below](#the-smartroute-panel-and-why-not-mihomo).
+- Fully **bilingual (RU/EN)** — a language switch built right into the module (LuCI can't properly compile `.po` translations without its build SDK, so the language dictionary lives inside the module itself; same for the SmartRoute panel).
+
+## The SmartRoute panel, and why not Mihomo
+
+`xkeen` can switch its engine from Xray-core to **Mihomo** (a Clash fork) out of the box, and Mihomo genuinely has a nice ecosystem of ready-made web dashboards (yacd, metacubexd, and so on) — that's exactly the level of interface we were aiming for. We didn't switch the engine itself, though, for a couple of reasons:
+
+- **The Xray configs are already written and working.** The whole module (profiles, balancers, kill-switch) generates JSON specifically for Xray-core (`routing.rules`, `routing.balancers` with `leastPing`). Moving to Mihomo would mean rewriting the config generator for Clash's YAML format from scratch — just to get an interface that's reachable another way.
+- **Xray-core is already debugged for this exact hardware** (see the bug history in [AGENTS.md](AGENTS.md) — everything from hardfloat/softfloat mismatches to version-skewed configs). Switching engines would mean walking part of that path again.
+- Some of Mihomo's features (TUN mode, its own DNS server, a full Clash API out of the box) are overkill for this project's actual scope — the goal was targeted per-domain routing over an existing subscription, not a full replacement of the whole network stack.
+
+So we built our own: **`smartroute-gateway`**, a small Go service that talks to the real Xray-core over its own gRPC API (traffic stats) and to SmartRoute's state (server list, profiles) directly — and serves a live dashboard on top of that, on port **`1001`**, with no engine switch involved.
+
+The first version of the panel was built on **metacubexd** (a ready-made open-source Clash dashboard speaking the same protocol) — but in practice it turned out to assume the full Mihomo feature set (live connection tracking, DNS tools, a rule editor, a dozen protocols we don't have) and required a separate "connect" screen, leaving several tabs empty even with a fully working backend behind them. Rather than bend a third-party UI to fit what we actually have, we wrote our own — small, no build step, exactly matching what SmartRoute does:
+
+- the subscription's server list with live ping;
+- switching which server a profile uses (or auto) right from the panel — writes into the same SmartRoute profiles LuCI does, there's no second state store;
+- a real-time traffic graph;
+- Xray's log.
+
+`smartroute-gateway` is installed and updated automatically by `install.sh` (built in GitHub Actions for 5 architectures: mipsle/mips-softfloat, arm7, arm64, amd64) and runs as a permanent service — nothing to start by hand.
 
 ## System requirements
 
@@ -132,9 +158,10 @@ The script is idempotent — safe to re-run any number of times; already-install
 1. Checks this is OpenWrt and that there's enough space.
 2. Installs Entware (if not already present).
 3. Installs `xkeen`.
-4. Installs `xkeen-UI` (port 1000).
+4. Installs `xkeen-UI` (port 1000) and asks once for a password to log into it.
 5. Installs our SmartRoute LuCI module + libraries + domain lists.
-6. Sets up cron: geosite/geoip refresh every 8 hours, kill-switch check every minute.
+6. Installs `smartroute-gateway` — the panel on port 1001.
+7. Sets up cron: geosite/geoip refresh every 8 hours, subscription refresh on its configured interval.
 
 ## What gets installed where
 
@@ -148,7 +175,10 @@ The script is idempotent — safe to re-run any number of times; already-install
 | `/etc/xkeen-smartroute/state/` | `servers.json` — servers pulled from your subscriptions |
 | `/usr/libexec/rpcd/luci.xkeen-smartroute` | ubus backend for LuCI |
 | `/www/luci-static/resources/view/xkeen-smartroute/` | Module's JS pages |
-| xkeen-UI | its own install, usually `/opt/share/www/XKeen-UI`, port **1000** |
+| `/opt/share/xkeen-smartroute/gateway` | The SmartRoute panel binary (port **1001**) |
+| `/opt/share/xkeen-smartroute/panel/` | The panel's static files |
+| `/opt/etc/init.d/S98smartroute-gateway` | Autostart for the panel |
+| xkeen-UI | its own install (`/opt/sbin/xkeen-ui` or `/opt/bin/xkeen-ui`), settings in `/opt/etc/xkeen/xkeen-ui.json`, port **1000** |
 
 ## Quick start after install
 
@@ -157,8 +187,9 @@ The script is idempotent — safe to re-run any number of times; already-install
 3. Go to the **Profiles** tab: give it a name (e.g. `youtube`), pick a domain list (`geosite:youtube` category or your own), pick a mode — one specific server or a fastest-pick group, check the server(s), save.
 4. Traffic for the chosen domains follows the new rule immediately — Xray restarts automatically on save.
 5. If a site isn't in geosite or in the bundled lists — the same Profiles page has an "Add your own domain(s)" form: type them comma-separated, the list shows up in the picker right away.
-6. On the **Kill-Switch** tab, turn on hard protection for profiles built on your own lists (optional).
-7. Service tasks (logs, manual config, core updates) — `http://<router-ip>:1000/` (xkeen-UI).
+6. On the **Kill-Switch** tab, turn on hard protection for a profile (works for both geosite and custom lists).
+7. The live panel with server ping, a traffic graph, and logs — `http://<router-ip>:1001/` (SmartRoute panel).
+8. Service tasks (logs, manual config, core updates) — `http://<router-ip>:1000/` (xkeen-UI).
 
 ## Domain lists missing from geosite
 
@@ -194,7 +225,8 @@ The script checks: OpenWrt/Entware/xkeen/the xray process/xkeen-UI/generated-con
 | "Import" finds nothing | The subscription must return a base64 blob of `vless://`/`trojan://` lines — open the URL in a browser and check by hand |
 | Profile saved but traffic didn't switch | Run `sh check.sh` — is `05_routing.smartroute.json` valid? Check logs via xkeen-UI (`:1000`) |
 | Out of space while installing Entware | Plug in a USB stick, re-run `install.sh` |
-| Kill-switch not blocking anything | Only works for profiles on your *own* lists (`custom`), not geosite categories — see the note on the Kill-Switch tab |
+| Panel on port 1001 doesn't load | Check `pgrep -f smartroute-gateway`; if empty — `/opt/etc/init.d/S98smartroute-gateway restart`, log at `/etc/xkeen-smartroute/state/gateway.log` |
+| Panel log shows an Xray API connection error | Xray's gRPC API only listens on `127.0.0.1:10085`, enabled by the `00_api.smartroute.json` fragment — `sh check.sh` will show whether it's in place |
 
 ## Update and uninstall
 
@@ -224,13 +256,17 @@ The images below are placeholders: drop a matching PNG into `docs/screenshots/` 
 **Status** — whether Xray is alive, how many servers and profiles the router currently knows about.
 
 ![Kill-Switch](docs/screenshots/killswitch.png)
-**Kill-Switch** — a list of profiles with a toggle; only available for profiles on your own domain lists (a limitation of the Xray/firewall combo for geosite categories, not ours).
+**Kill-Switch** — a list of profiles with a toggle; gapless for any profile, both geosite categories and your own domain lists.
 
 Language switch (RU/EN) — a button in the top-right corner of every page in the module.
+
+![SmartRoute panel](docs/screenshots/panel.png)
+**The SmartRoute panel** (`http://<router-ip>:1001/`) — a standalone live dashboard: servers with ping, real-time server switching within a profile, a traffic graph, Xray's log. Details — [above](#the-smartroute-panel-and-why-not-mihomo).
 
 ## Credits
 
 - Project author: [DanyByLC](https://github.com/LackyCraft)
+- Project chat: [t.me/SmartRouteByLC](https://t.me/SmartRouteByLC)
 - [`xkeen`](https://github.com/Skrill0/XKeen) — Xray-core manager for Keenetic/Entware
 - [`xkeen-UI`](https://github.com/zxc-rv/XKeen-UI) — web panel for xkeen
 - One-command install-script idea — [itdoginfo/domain-routing-openwrt](https://github.com/itdoginfo/domain-routing-openwrt)
@@ -245,6 +281,8 @@ If this project was useful, you can support the author:
 ### 🦢 Recommended subscription (optional)
 
 XKeen SmartRoute works with **any** standard-format VLESS/Trojan subscription — there's no hard lock-in to a specific provider. That said, it's been actually tested against the [Gussi VPN](https://t.me/GussiTradeVPNbot) subscription (80 servers worldwide) — if you don't have a subscription yet and would rather not gamble on compatibility, it's a safe pick.
+
+The SmartRoute author also runs their own projects: the [@GussiTrade](https://t.me/GussiTrade) channel and the [@GussiTradeVPNbot](https://t.me/GussiTradeVPNbot) VPN bot.
 
 ---
 
