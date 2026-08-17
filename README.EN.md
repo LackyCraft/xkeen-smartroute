@@ -24,6 +24,7 @@ One-command deployment of per-domain routing over a VLESS/Trojan subscription on
 - [Domain lists missing from geosite](#domain-lists-missing-from-geosite)
 - [Diagnostics and common issues](#diagnostics-and-common-issues)
 - [Update and uninstall](#update-and-uninstall)
+- [What the Actions and Releases tabs on the repo are for](#what-the-actions-and-releases-tabs-on-the-repo-are-for)
 - [UI](#ui)
 - [Credits](#credits)
 - [License and disclaimer](#license-and-disclaimer)
@@ -255,6 +256,24 @@ sh <(wget -O - https://raw.githubusercontent.com/LackyCraft/xkeen-smartroute/mai
 
 `xkeen`, `xkeen-UI` and Entware are left untouched — they're separate projects, remove them with their own tooling if needed.
 
+## What the Actions and Releases tabs on the repo are for
+
+The GitHub project page has **Actions** and **Releases** tabs — both are used only by the repo's own automation; you never need to touch them by hand. Here's what's there and why:
+
+**Actions** — two automated workflows:
+
+- **`Build smartroute-gateway`** — on every change to the `gateway/` folder (our panel's Go code), builds a binary for 5 architectures (mipsle/mips-softfloat, arm7, arm64, amd64) and uploads them to a Release tagged `gateway-latest`. `install.sh` detects your router's architecture itself and downloads the matching file — you never need to pick or download a binary by hand.
+- **`Update domain/IP lists`** — once a week (Mondays), re-verifies our bundled domain/IP lists (`lists/custom`, `lists/ip`), updates them if anything changed, and publishes a Release with a changelog of what changed.
+
+Both workflows are fully automatic — you don't run them yourself. The Actions tab is only worth checking for diagnostics — e.g. if `install.sh` seems to be pulling a stale/broken panel build, you can check whether the latest `Build smartroute-gateway` run actually succeeded (green checkmark).
+
+**Releases** — what those workflows publish:
+
+- **`gateway-latest`** — a single tag, overwritten on every new panel build. It holds 5 `.gz` files, one per architecture (e.g. `smartroute-gateway-mipsle-softfloat.gz`). This isn't a project release in the usual sense ("v1.2 is out") — it's just storage for `install.sh` to pull ready-made binaries from. No need to download anything here by hand.
+- **`lists-YYYY-MM-DD-N`** — a new tag each week, only when the domain/IP lists actually changed, with a changelog of what was added/removed. Also not for manual install — `install.sh`/`subscription.sh` pull the lists directly from the repo, not from Releases. These tags are just a readable history, in case you're curious what changed.
+
+If the project ever ships a "real" versioned release (v1.0 and so on), it'll be a separate, clearly-labeled tag.
+
 ## UI
 
 The images below are placeholders: drop a matching PNG into `docs/screenshots/` (see [docs/screenshots/README.md](docs/screenshots/README.md)) and they'll show up automatically.
@@ -287,10 +306,6 @@ Language switch (RU/EN) — a button in the top-right corner of every page in th
 - [`xkeen-UI`](https://github.com/zxc-rv/XKeen-UI) — web panel for xkeen
 - One-command install-script idea — [itdoginfo/domain-routing-openwrt](https://github.com/itdoginfo/domain-routing-openwrt)
 - Xray domain data from [v2fly/domain-list-community](https://github.com/v2fly/domain-list-community)
-
-If this project was useful, you can support the author:
-
-**SOL:** `<!-- TODO: add SOL wallet address -->`
 
 ---
 
