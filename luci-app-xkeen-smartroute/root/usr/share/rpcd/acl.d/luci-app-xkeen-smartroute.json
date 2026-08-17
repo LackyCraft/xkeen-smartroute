@@ -6,7 +6,7 @@
 				"luci.xkeen-smartroute": [
 					"list_servers", "list_categories", "list_custom_categories",
 					"list_profiles", "get_status", "random_hwid", "get_refresh_hours",
-					"list_killswitch_enabled"
+					"list_killswitch_enabled", "redirect_status"
 				]
 			}
 		},
@@ -15,7 +15,8 @@
 				"luci.xkeen-smartroute": [
 					"import_subscription", "save_profile", "delete_profile",
 					"add_custom_domain", "killswitch_set", "ping_servers",
-					"set_refresh_hours", "refresh_now"
+					"set_refresh_hours", "refresh_now", "redirect_set_enabled",
+					"redirect_set_ports", "redirect_set_dns_protect", "redirect_set_ipv6_protect"
 				]
 			}
 		}

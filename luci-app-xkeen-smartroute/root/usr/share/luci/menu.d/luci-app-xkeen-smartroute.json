@@ -52,5 +52,16 @@
 		"depends": {
 			"acl": ["luci-app-xkeen-smartroute"]
 		}
+	},
+	"admin/services/xkeen-smartroute/protection": {
+		"title": "Защита от утечек / Leak protection",
+		"order": 50,
+		"action": {
+			"type": "view",
+			"path": "xkeen-smartroute/protection"
+		},
+		"depends": {
+			"acl": ["luci-app-xkeen-smartroute"]
+		}
 	}
 }

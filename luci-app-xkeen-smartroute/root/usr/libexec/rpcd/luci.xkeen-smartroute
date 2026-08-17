@@ -39,7 +39,12 @@ case "$1" in
 	"ping_servers": {},
 	"get_refresh_hours": {},
 	"set_refresh_hours": {"hours":"str1"},
-	"refresh_now": {}
+	"refresh_now": {},
+	"redirect_status": {},
+	"redirect_set_enabled": {"enabled":"bool1"},
+	"redirect_set_ports": {"ports":"str1"},
+	"redirect_set_dns_protect": {"enabled":"bool1"},
+	"redirect_set_ipv6_protect": {"enabled":"bool1"}
 }
 EOF
 		;;
@@ -157,6 +162,39 @@ EOF
 			refresh_now)
 				sh "$LIB_DIR/subscription.sh" refresh-now >/tmp/sr_refresh_now.log 2>&1 &
 				jq -n '{ok:true, note:"started in background"}'
+				;;
+			redirect_status)
+				out="$(sh "$LIB_DIR/redirect.sh" status 2>/dev/null)"
+				[ -n "$out" ] || out='{"enabled":false,"dns_protect":false,"ipv6_protect":false,"ports":"80,443"}'
+				printf '%s' "$out"
+				;;
+			redirect_set_enabled)
+				enabled="$(echo "$args" | jq -r '.enabled // false')"
+				if [ "$enabled" = "true" ]; then
+					sh "$LIB_DIR/redirect.sh" enable >/tmp/sr_redirect.log 2>&1
+				else
+					sh "$LIB_DIR/redirect.sh" disable >/tmp/sr_redirect.log 2>&1
+				fi
+				sh "$LIB_DIR/redirect.sh" status 2>/dev/null
+				;;
+			redirect_set_ports)
+				ports="$(echo "$args" | jq -r '.ports // empty')"
+				[ -n "$ports" ] || { json_err "missing_ports"; exit 0; }
+				if sh "$LIB_DIR/redirect.sh" set-ports "$ports" >/tmp/sr_redirect.log 2>&1; then
+					sh "$LIB_DIR/redirect.sh" status 2>/dev/null
+				else
+					jq -n --arg log "$(cat /tmp/sr_redirect.log)" '{error:"invalid_ports", detail:$log}'
+				fi
+				;;
+			redirect_set_dns_protect)
+				enabled="$(echo "$args" | jq -r '.enabled // false')"
+				sh "$LIB_DIR/redirect.sh" dns-protect "$([ "$enabled" = "true" ] && echo on || echo off)" >/tmp/sr_redirect.log 2>&1
+				sh "$LIB_DIR/redirect.sh" status 2>/dev/null
+				;;
+			redirect_set_ipv6_protect)
+				enabled="$(echo "$args" | jq -r '.enabled // false')"
+				sh "$LIB_DIR/redirect.sh" ipv6-protect "$([ "$enabled" = "true" ] && echo on || echo off)" >/tmp/sr_redirect.log 2>&1
+				sh "$LIB_DIR/redirect.sh" status 2>/dev/null
 				;;
 			*) json_err "unknown_method" ;;
 		esac

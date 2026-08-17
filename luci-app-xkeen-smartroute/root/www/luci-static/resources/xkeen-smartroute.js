@@ -96,6 +96,25 @@ var _callListKillswitchEnabled = rpc.declare({
 function callListKillswitchEnabled() {
 	return _callListKillswitchEnabled().then(function (r) { return (r && r.names) || []; });
 }
+var callRedirectStatus = rpc.declare({
+	object: 'luci.xkeen-smartroute', method: 'redirect_status'
+});
+var callRedirectSetEnabled = rpc.declare({
+	object: 'luci.xkeen-smartroute', method: 'redirect_set_enabled',
+	params: ['enabled']
+});
+var callRedirectSetPorts = rpc.declare({
+	object: 'luci.xkeen-smartroute', method: 'redirect_set_ports',
+	params: ['ports']
+});
+var callRedirectSetDnsProtect = rpc.declare({
+	object: 'luci.xkeen-smartroute', method: 'redirect_set_dns_protect',
+	params: ['enabled']
+});
+var callRedirectSetIpv6Protect = rpc.declare({
+	object: 'luci.xkeen-smartroute', method: 'redirect_set_ipv6_protect',
+	params: ['enabled']
+});
 
 var DICT = {
 	app_name:            { ru: 'XKeen SmartRoute DanyByLC', en: 'XKeen SmartRoute DanyByLC' },
@@ -103,6 +122,7 @@ var DICT = {
 	nav_profiles:        { ru: 'Профили маршрутизации', en: 'Routing profiles' },
 	nav_status:          { ru: 'Статус', en: 'Status' },
 	nav_killswitch:      { ru: 'Kill-Switch', en: 'Kill-Switch' },
+	nav_protection:      { ru: 'Защита от утечек', en: 'Leak protection' },
 
 	sub_intro: { ru: 'Вставьте ссылку-подписку VLESS/Trojan (та же, что в V2rayNG/V2Box) — сервера из неё появятся ниже и станут доступны для выбора в профилях.',
 	             en: 'Paste a VLESS/Trojan subscription link (the same one you use in V2rayNG/V2Box) — its servers will show up below and become selectable in profiles.' },
@@ -183,6 +203,22 @@ var DICT = {
 	ks_disabled: { ru: 'Выключено', en: 'Disabled' },
 	ks_geosite_note: { ru: '(частичное покрытие для geosite — см. пояснение выше)', en: '(partial coverage for geosite — see note above)' },
 
+	prot_intro: { ru: 'Перехват LAN-трафика: без него ни один профиль/kill-switch не видит реальные пакеты устройств — это включает сам механизм, через который SmartRoute вообще может что-то маршрутизировать (свой nftables-редирект, не сломанный xkeen -ap на OpenWrt/nftables). Выключайте только для диагностики.',
+	            en: "LAN traffic capture: without it, no profile/kill-switch ever sees real device packets — this is the mechanism SmartRoute routing depends on in the first place (our own nftables redirect, not xkeen's broken -ap on OpenWrt/nftables). Only turn it off for diagnostics." },
+	prot_redirect_enabled: { ru: 'Перехват трафика включён', en: 'Traffic capture enabled' },
+	prot_ports_label: { ru: 'Порты перехвата (через запятую)', en: 'Captured ports (comma-separated)' },
+	prot_ports_placeholder: { ru: '80,443', en: '80,443' },
+	prot_ports_save: { ru: 'Сохранить порты', en: 'Save ports' },
+	prot_dns_title: { ru: 'Защита от утечек DNS', en: 'DNS leak protection' },
+	prot_dns_intro: { ru: 'Принудительно заворачивает все DNS-запросы (порт 53) с LAN на этот роутер, даже если устройство прописано на сторонний DNS (8.8.8.8 и т.п.). Без этого запросы могут уходить напрямую мимо VPN и раскрывать, какие сайты вы посещаете, а kill-switch не увидит домены для блокировки.',
+	              en: "Forces every LAN DNS query (port 53) through this router, even if a device is hardcoded to a third-party DNS (8.8.8.8, etc). Without this, queries can leave directly, bypassing the VPN and revealing which sites you visit — and the kill-switch never sees the domains to block." },
+	prot_ipv6_title: { ru: 'Защита от утечек IPv6', en: 'IPv6 leak protection' },
+	prot_ipv6_intro: { ru: 'Наш перехват работает только для IPv4 — сайт, доступный по IPv6, может открыться напрямую через провайдера в обход VPN и всех правил/kill-switch. Эта опция полностью блокирует LAN→WAN IPv6-трафик, чтобы такие соединения падали и уходили через IPv4 (уже защищённый) вместо утечки.',
+	               en: "Our redirect is IPv4-only — a site reachable over IPv6 could load directly through your ISP, bypassing the VPN and every rule/kill-switch. This option blocks all LAN→WAN IPv6 traffic outright, so those connections fail closed and fall back to IPv4 (which is covered) instead of leaking." },
+	prot_saving: { ru: 'Сохраняю…', en: 'Saving…' },
+	prot_saved_ok: { ru: 'Применено', en: 'Applied' },
+	prot_save_failed: { ru: 'Не удалось применить', en: 'Failed to apply' },
+
 	lang_switch: { ru: 'EN', en: 'RU' }
 };
 
@@ -261,7 +297,12 @@ return L.Class.extend({
 		getRefreshHours: callGetRefreshHours,
 		setRefreshHours: callSetRefreshHours,
 		refreshNow: callRefreshNow,
-		listKillswitchEnabled: callListKillswitchEnabled
+		listKillswitchEnabled: callListKillswitchEnabled,
+		redirectStatus: callRedirectStatus,
+		redirectSetEnabled: callRedirectSetEnabled,
+		redirectSetPorts: callRedirectSetPorts,
+		redirectSetDnsProtect: callRedirectSetDnsProtect,
+		redirectSetIpv6Protect: callRedirectSetIpv6Protect
 	},
 	T: T,
 	lang: srLang,

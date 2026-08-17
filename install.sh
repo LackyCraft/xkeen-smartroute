@@ -240,6 +240,83 @@ else
 	log "xkeen уже установлен: $(xkeen -status 2>/dev/null | head -n1 || echo ok)"
 fi
 
+# xkeen ships 01_log.json/03_inbounds.json/05_routing.json with `//` comments
+# (and, on some mirrors, non-UTF8 Cyrillic in those comments). Functionally
+# harmless to Xray itself, but xkeen-UI's GUI Mode (visual routing/log editor,
+# see its own Settings page) parses these files as strict JSON to render
+# them -- a file with comments fails that parse and the UI just shows nothing,
+# which looks like the config doesn't exist at all. Overwritten unconditionally
+# on every run (not just fresh installs) so an existing install picks this up
+# too; functionally identical to xkeen's own templates, just comment-free.
+cat > /opt/etc/xray/configs/01_log.json <<'XRAY_LOG_EOF'
+{
+  "log": {
+    "access": "/opt/var/log/xray/access.log",
+    "error": "/opt/var/log/xray/error.log",
+    "loglevel": "none",
+    "dnsLog": false
+  }
+}
+XRAY_LOG_EOF
+
+cat > /opt/etc/xray/configs/03_inbounds.json <<'XRAY_INBOUNDS_EOF'
+{
+  "inbounds": [
+    {
+      "tag": "redirect",
+      "port": 61219,
+      "protocol": "dokodemo-door",
+      "settings": {
+        "network": "tcp",
+        "followRedirect": true
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": ["http", "tls", "quic"]
+      }
+    }
+  ]
+}
+XRAY_INBOUNDS_EOF
+
+# Same content as xkeen's own template, minus comments, with one deliberate
+# fix: the trailing catch-all's outboundTag corrected from "vless-reality" (a
+# placeholder outbound install.sh deletes -- see the 04_outbounds.json step
+# above) to "direct". lib/genroute.sh already appends its own "direct"
+# catch-all that takes effect first (confdir load-order), so this rule is
+# unreachable in practice -- fixed anyway so xkeen-UI's visualizer doesn't
+# point at a tag that doesn't exist.
+cat > /opt/etc/xray/configs/05_routing.json <<'XRAY_ROUTING_EOF'
+{
+  "routing": {
+    "rules": [
+      {
+        "inboundTag": ["redirect", "tproxy"],
+        "domain": [
+          "regexp:^([\\w\\-\\.]+\\.)ru$",
+          "regexp:^([\\w\\-\\.]+\\.)su$",
+          "regexp:^([\\w\\-\\.]+\\.)xn--p1ai$",
+          "regexp:^([\\w\\-\\.]+\\.)xn--p1acf$",
+          "regexp:^([\\w\\-\\.]+\\.)xn--80asehdb$",
+          "regexp:^([\\w\\-\\.]+\\.)xn--c1avg$",
+          "regexp:^([\\w\\-\\.]+\\.)xn--80aswg$",
+          "regexp:^([\\w\\-\\.]+\\.)xn--80adxhks$",
+          "regexp:^([\\w\\-\\.]+\\.)moscow$",
+          "regexp:^([\\w\\-\\.]+\\.)xn--d1acj3b$"
+        ],
+        "outboundTag": "direct",
+        "type": "field"
+      },
+      {
+        "inboundTag": ["redirect", "tproxy"],
+        "outboundTag": "direct",
+        "type": "field"
+      }
+    ]
+  }
+}
+XRAY_ROUTING_EOF
+
 # ---------------------------------------------------------------------------
 log "Шаг 3/6: xkeen-UI (веб-панель, порт 1000)"
 
@@ -304,7 +381,7 @@ log "Шаг 4/6: XKeen SmartRoute (наш LuCI-модуль + генератор
 
 mkdir -p "$SR_ETC_DIR/lists" "$SR_ETC_DIR/lists/custom" "$SR_ETC_DIR/profiles" "$SR_ETC_DIR/state" "$SR_LIB_DIR"
 
-for f in common.sh subscription.sh genroute.sh killswitch.sh; do
+for f in common.sh subscription.sh genroute.sh killswitch.sh redirect.sh; do
 	wget -O "$SR_LIB_DIR/$f" "$REPO_RAW/lib/$f" || die "не удалось скачать lib/$f"
 	chmod +x "$SR_LIB_DIR/$f"
 done
@@ -325,7 +402,8 @@ for f in root/usr/share/rpcd/acl.d/luci-app-xkeen-smartroute.json \
          root/www/luci-static/resources/view/xkeen-smartroute/subscriptions.js \
          root/www/luci-static/resources/view/xkeen-smartroute/profiles.js \
          root/www/luci-static/resources/view/xkeen-smartroute/status.js \
-         root/www/luci-static/resources/view/xkeen-smartroute/killswitch.js ; do
+         root/www/luci-static/resources/view/xkeen-smartroute/killswitch.js \
+         root/www/luci-static/resources/view/xkeen-smartroute/protection.js ; do
 	dest="/${f#root/}"
 	mkdir -p "$(dirname "$dest")"
 	wget -O "$dest" "$REPO_RAW/luci-app-xkeen-smartroute/$f" || die "не удалось скачать $f"
