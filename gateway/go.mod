@@ -9,6 +9,7 @@ require (
 )
 
 require (
+	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
 	github.com/pires/go-proxyproto v0.11.0 // indirect
 	github.com/sagernet/sing v0.5.1 // indirect
 	golang.org/x/net v0.55.0 // indirect

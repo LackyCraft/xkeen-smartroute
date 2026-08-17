@@ -84,6 +84,19 @@ sr_regen() {
 	# dependencies are resolved", with no further detail pointing at why).
 	# Only write it while it's actually needed so a fixed-server-only setup
 	# doesn't carry a dangling probe config.
+	#
+	# enableConcurrency (probe every candidate in parallel instead of one at
+	# a time) was tried and reverted: on real hardware (a ~250MB-RAM router,
+	# no swap) a 166-server subscription under concurrent probing spiked
+	# load average to 3.2+ and free memory from ~110MB to ~30MB within a
+	# single probe cycle -- xray's own RSS jumped from ~37MB to 114MB almost
+	# immediately, and most probes then failed from local resource
+	# starvation (timeouts), not from the servers actually being down. That
+	# produced a *worse* signal than sequential probing (166/166 reported
+	# dead, most falsely) while risking a repeat of the OOM-kill this
+	# project already hit once during testing. Sequential probing is slower
+	# to reach full coverage on a large subscription, but it's the only mode
+	# that doesn't lie about server health on hardware this constrained.
 	if [ "$(echo "$balancers" | jq 'length')" -gt 0 ]; then
 		jq -n '{observatory:{subjectSelector:["sr_"], probeUrl:"https://www.gstatic.com/generate_204", probeInterval:"30s"}}' >"$SR_OBSERVATORY_FILE"
 	else

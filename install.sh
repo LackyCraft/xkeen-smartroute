@@ -169,7 +169,7 @@ if ! command -v xkeen >/dev/null 2>&1; then
 {
   "api": {
     "tag": "api",
-    "services": ["HandlerService", "LoggerService", "StatsService", "RoutingService"]
+    "services": ["HandlerService", "LoggerService", "StatsService", "RoutingService", "ObservatoryService"]
   },
   "policy": {
     "levels": {
@@ -479,7 +479,7 @@ GATEWAY_INIT_EOF
 fi
 
 # ---------------------------------------------------------------------------
-log "Шаг 6/6: cron (обновление geosite/geoip раз в 8 часов, подписок — по расписанию)"
+log "Шаг 6/6: cron (обновление geosite/geoip раз в 8 часов, подписок — по расписанию, ночной рестарт Xray)"
 
 CRON_GEO="0 */8 * * * xkeen -ug >/dev/null 2>&1; xkeen -uk >/dev/null 2>&1 #xkeen-smartroute-cron"
 # Fires hourly, but subscription.sh refresh itself checks a timestamp against
@@ -487,7 +487,16 @@ CRON_GEO="0 */8 * * * xkeen -ug >/dev/null 2>&1; xkeen -uk >/dev/null 2>&1 #xkee
 # crontab) and exits immediately if it isn't due yet -- simpler and more
 # flexible than rewriting a cron schedule string for an arbitrary N-hour gap.
 CRON_SUB="7 * * * * sh $SR_LIB_DIR/subscription.sh refresh >/dev/null 2>&1 #xkeen-smartroute-cron"
-( crontab -l 2>/dev/null | grep -v 'xkeen-smartroute-cron' ; echo "$CRON_GEO" ; echo "$CRON_SUB" ) | crontab -
+# Xray's own RSS grows with uptime (observed on real hardware: ~37MB right
+# after a restart, ~120MB+ after some hours running with observatory
+# continuously probing ~10 outbounds every 30s) -- on a router with ~250MB
+# total RAM and no swap, that's enough to risk the kernel OOM-killer taking
+# it out at the worst possible moment. A once-a-day restart at a quiet hour
+# bounds the growth cheaply; sr_restart_xray already validates the merged
+# config first and only swaps the process if that passes, so this can't turn
+# a working router into a broken one the way a blind `kill` + relaunch could.
+CRON_RESTART="15 5 * * * sh -c '. $SR_LIB_DIR/common.sh; sr_restart_xray' >/dev/null 2>&1 #xkeen-smartroute-cron"
+( crontab -l 2>/dev/null | grep -v 'xkeen-smartroute-cron' ; echo "$CRON_GEO" ; echo "$CRON_SUB" ; echo "$CRON_RESTART" ) | crontab -
 /etc/init.d/cron restart >/dev/null 2>&1 || true
 
 # ---------------------------------------------------------------------------

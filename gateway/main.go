@@ -34,6 +34,8 @@ func main() {
 	}
 	defer xc.Close()
 
+	startFailoverLoop(xc)
+
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /version", handleVersion)
