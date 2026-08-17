@@ -26,14 +26,16 @@
 #     armed until it's disabled -- it does NOT get toggled by polling whether
 #     xray is alive (an earlier version did, once a minute via cron, which
 #     left up to a 60s window where a dead xray wasn't yet blocked). That
-#     polling turned out to be unnecessary: xkeen's own PREROUTING REDIRECT
-#     sends matched traffic to xray's local inbound via DNAT, and DNAT to a
-#     local address routes the packet through INPUT, never through FORWARD --
-#     so properly redirected traffic can never reach this rule in the first
-#     place, whether xray is up or down. The rule only ever fires for traffic
-#     that *isn't* captured by the redirect at all (xray's process or its own
-#     firewall rules gone), which is exactly the failure mode it exists for.
-#     Always-on and gap-free, and simpler than the polling version was.
+#     polling turned out to be unnecessary: lib/redirect.sh's own PREROUTING
+#     redirect (nftables `redirect to :port`, not xkeen's -ap -- see that
+#     file for why) sends matched traffic to xray's local inbound via a form
+#     of DNAT, and DNAT to a local address routes the packet through INPUT,
+#     never through FORWARD -- so properly redirected traffic can never reach
+#     this rule in the first place, whether xray is up or down. The rule only
+#     ever fires for traffic that *isn't* captured by the redirect at all
+#     (xray's process, or lib/redirect.sh's own rules, gone), which is
+#     exactly the failure mode it exists for. Always-on and gap-free, and
+#     simpler than the polling version was.
 #
 # Usage:
 #   killswitch.sh enable <profile-name>

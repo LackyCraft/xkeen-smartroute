@@ -66,6 +66,36 @@ else
 	log "Entware уже установлен, пропускаю."
 fi
 
+# Entware's own installer is supposed to leave a boot hook behind
+# (/etc/init.d/entware, calling /opt/etc/init.d/rc.unslung) so every S*
+# script under /opt/etc/init.d/ -- xray, xkeen-UI, smartroute-gateway, all
+# of it -- actually starts after a reboot. Confirmed missing on real
+# hardware: nothing under /opt started again after a router reboot until
+# this was created by hand. Idempotent and harmless to recreate even if it
+# was already there correctly.
+if [ ! -x /etc/init.d/entware ]; then
+	log "Хук автозапуска Entware отсутствует (/etc/init.d/entware) -- без него xray/xkeen-UI/панель не переживут перезагрузку. Создаю."
+	cat > /etc/init.d/entware <<'ENTWARE_HOOK_EOF'
+#!/bin/sh /etc/rc.common
+START=99
+STOP=10
+
+boot() {
+	/opt/etc/init.d/rc.unslung start
+}
+
+start() {
+	/opt/etc/init.d/rc.unslung start
+}
+
+stop() {
+	/opt/etc/init.d/rc.unslung stop
+}
+ENTWARE_HOOK_EOF
+	chmod +x /etc/init.d/entware
+	/etc/init.d/entware enable
+fi
+
 export PATH="/opt/bin:/opt/sbin:$PATH"
 /opt/bin/opkg update >/dev/null 2>&1 || true
 /opt/bin/opkg install jq curl bash coreutils-base64 coreutils-tr coreutils-timeout unzip shadow-su grep sed >/dev/null 2>&1 \

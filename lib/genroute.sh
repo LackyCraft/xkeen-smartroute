@@ -59,6 +59,21 @@ sr_regen() {
 		fi
 	done
 
+	# xkeen's own base 05_routing.json ends with an unconditional catch-all
+	# ("everything else on the redirect/tproxy inbound") pointing at
+	# outboundTag "vless-reality" -- the placeholder outbound install.sh
+	# deliberately removes (it ships with empty address/id/publicKey and
+	# would stop Xray from starting at all). Once real LAN traffic actually
+	# flows through the redirect (lib/redirect.sh, not xkeen's own broken
+	# -ap), any domain that isn't covered by one of our profiles hits that
+	# dead tag and just hangs instead of going out directly. Config-file
+	# load order means our rules already run before xkeen's own, so
+	# appending an explicit "anything else -> direct" rule here both fixes
+	# that and makes it the effective final word regardless of what xkeen's
+	# own file says.
+	catchall='{"type":"field","inboundTag":["redirect","tproxy"],"outboundTag":"direct"}'
+	rules="$(echo "$rules" | jq --argjson r "$catchall" '. + [$r]')"
+
 	jq -n --argjson rules "$rules" '{routing:{domainStrategy:"IPIfNonMatch", rules:$rules}}' >"$SR_ROUTING_FILE"
 	jq -n --argjson bal "$balancers" '{routing:{balancers:$bal}}' >"$SR_BALANCER_FILE"
 
