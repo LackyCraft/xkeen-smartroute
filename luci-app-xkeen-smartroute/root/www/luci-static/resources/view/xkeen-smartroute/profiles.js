@@ -9,7 +9,8 @@ return view.extend({
 			sr.rpc.listServers(),
 			sr.rpc.listCategories(),
 			sr.rpc.listCustomCategories(),
-			sr.rpc.listProfiles()
+			sr.rpc.listProfiles(),
+			sr.rpc.listLanDevices()
 		]);
 	},
 
@@ -69,6 +70,55 @@ return view.extend({
 		this.buildServerCheckboxes(servers, mode);
 	},
 
+	// Device-based routing (Policy-Based Routing by device): a checklist of
+	// devices currently seen on the LAN (DHCP leases + ARP table, via
+	// list_lan_devices), plus a manual IP/CIDR entry for anything not
+	// currently on the network (or a whole subnet). Both feed the same
+	// checkbox list so save just reads whatever's checked, regardless of
+	// where the entry came from.
+	deviceIpLabel: function (d) {
+		var parts = [d.ip];
+		if (d.hostname) parts.push('(' + d.hostname + (d.mac ? ', ' + d.mac : '') + ')');
+		else if (d.mac) parts.push('(' + d.mac + ')');
+		return parts.join(' ');
+	},
+
+	addDeviceCheckbox: function (ip, label, checked) {
+		var box = document.getElementById('sr-device-picker');
+		if (!box) return;
+		var existing = box.querySelector('input[value="' + CSS.escape(ip) + '"]');
+		if (existing) { existing.checked = true; return; }
+		var input = E('input', { 'type': 'checkbox', 'name': 'sr-device-choice', 'value': ip });
+		input.checked = !!checked;
+		box.appendChild(E('label', { 'style': 'display:block' }, [input, ' ', label]));
+	},
+
+	buildDevicePicker: function (devices) {
+		var box = document.getElementById('sr-device-picker');
+		box.innerHTML = '';
+		if (!devices.length) {
+			box.appendChild(E('p', { 'class': 'cbi-value-description' }, sr.T('devices_none_detected')));
+			return;
+		}
+		var view = this;
+		devices.forEach(function (d) { view.addDeviceCheckbox(d.ip, view.deviceIpLabel(d), false); });
+	},
+
+	handleAddManualDevice: function (ev) {
+		var input = document.getElementById('sr-device-manual');
+		var val = input.value.trim();
+		if (!val) return;
+		// IPv4 address or CIDR only -- matches what genroute.sh itself
+		// accepts server-side; catching the typo here beats a save-time
+		// error round-trip.
+		if (!/^\d{1,3}(\.\d{1,3}){3}(\/\d{1,2})?$/.test(val)) {
+			ui.addNotification(null, E('p', {}, sr.T('devices_manual_invalid')));
+			return;
+		}
+		this.addDeviceCheckbox(val, val, true);
+		input.value = '';
+	},
+
 	handleSaveProfile: function (servers, ev) {
 		var name = document.getElementById('sr-profile-name').value.trim();
 		var mode = document.getElementById('sr-mode').value;
@@ -76,18 +126,28 @@ return view.extend({
 		var chosen = Array.prototype.slice.call(
 			document.querySelectorAll('input[name="sr-server-choice"]:checked')
 		).map(function (i) { return i.value; });
+		var devices = Array.prototype.slice.call(
+			document.querySelectorAll('input[name="sr-device-choice"]:checked')
+		).map(function (i) { return i.value; });
 
 		if (!name) { ui.addNotification(null, E('p', {}, sr.T('profile_name'))); return; }
 		if (!chosen.length) { ui.addNotification(null, E('p', {}, sr.T('need_servers_first'))); return; }
 
 		var domain_source;
-		if (srcRaw.indexOf('geosite::') === 0) {
+		if (srcRaw.indexOf('any::') === 0) {
+			domain_source = { type: 'any' };
+		} else if (srcRaw.indexOf('geosite::') === 0) {
 			domain_source = { type: 'geosite', value: srcRaw.slice('geosite::'.length) };
 		} else {
 			domain_source = { type: 'custom', file: srcRaw.slice('custom::'.length) };
 		}
 
-		var profile = { name: name, domain_source: domain_source, mode: mode };
+		if (domain_source.type === 'any' && !devices.length) {
+			ui.addNotification(null, E('p', {}, sr.T('devices_no_domain_warning')));
+			return;
+		}
+
+		var profile = { name: name, domain_source: domain_source, mode: mode, devices: devices };
 		if (mode === 'fixed') profile.fixed_server = chosen[0];
 		else profile.servers = chosen;
 
@@ -139,9 +199,13 @@ return view.extend({
 		]);
 
 		profiles.forEach(function (p) {
-			var domainsLabel = p.domain_source.type === 'geosite'
-				? 'geosite:' + p.domain_source.value
-				: p.domain_source.file;
+			var srcType = (p.domain_source && p.domain_source.type) || 'any';
+			var domainsLabel = srcType === 'geosite' ? 'geosite:' + p.domain_source.value
+				: srcType === 'custom' ? p.domain_source.file
+				: sr.T('domain_source_any');
+			if ((p.devices || []).length) {
+				domainsLabel += ' [' + p.devices.join(', ') + ']';
+			}
 			var targetLabel = p.mode === 'fixed'
 				? p.fixed_server
 				: (p.servers || []).join(', ') + ' (leastPing)';
@@ -166,8 +230,10 @@ return view.extend({
 		var categories = data[1] || [];
 		var customCategories = data[2] || [];
 		var profiles = data[3] || [];
+		var lanDevices = data[4] || [];
 
 		var domainSourceSelect = E('select', { 'class': 'cbi-input-select', 'id': 'sr-domain-source' }, [
+			E('option', { 'value': 'any::' }, sr.T('domain_source_any')),
 			E('optgroup', { 'label': sr.T('domain_source_geosite') },
 				categories.map(function (c) {
 					return E('option', { 'value': 'geosite::' + c.key }, sr.lang() === 'en' ? c.label_en : c.label_ru);
@@ -206,6 +272,20 @@ return view.extend({
 				E('label', { 'id': 'sr-server-picker-label' }, sr.T('pick_server')),
 				E('div', { 'id': 'sr-server-picker', 'style': 'margin:.25em 0 1em' }),
 
+				E('label', {}, sr.T('devices_title')),
+				E('p', { 'class': 'cbi-value-description', 'style': 'margin:.25em 0' }, sr.T('devices_intro')),
+				E('div', { 'style': 'display:flex;gap:.5em;align-items:center;max-width:28em;margin:.25em 0 .5em' }, [
+					E('input', {
+						'type': 'text', 'id': 'sr-device-manual', 'class': 'cbi-input-text',
+						'placeholder': sr.T('devices_manual_placeholder')
+					}),
+					E('button', {
+						'class': 'cbi-button',
+						'click': ui.createHandlerFn(view, 'handleAddManualDevice')
+					}, sr.T('devices_manual_add'))
+				]),
+				E('div', { 'id': 'sr-device-picker', 'style': 'margin:.25em 0 1em' }),
+
 				E('button', {
 					'class': 'cbi-button cbi-button-positive',
 					'click': ui.createHandlerFn(view, function (ev) { return view.handleSaveProfile(servers, ev); })
@@ -237,6 +317,7 @@ return view.extend({
 
 		requestAnimationFrame(function () {
 			view.buildServerCheckboxes(servers, 'fixed');
+			view.buildDevicePicker(lanDevices);
 			view.renderProfilesTable(profiles);
 		});
 

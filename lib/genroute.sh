@@ -15,9 +15,16 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 . "$SCRIPT_DIR/common.sh"
 
 domain_match_array() {
-	# profile json on stdin -> jq array of Xray "domain" match strings
-	src_type="$(jq -r '.domain_source.type' "$1")"
-	if [ "$src_type" = "geosite" ]; then
+	# profile json on stdin -> jq array of Xray "domain" match strings.
+	# "any" (or a profile with no domain_source at all -- device-only
+	# profiles, see device_match_array below) means "don't restrict by
+	# domain", so the caller omits the "domain" key from the rule entirely
+	# rather than getting an empty array (an empty non-null "domain":[]
+	# would match nothing at all, the opposite of "any").
+	src_type="$(jq -r '.domain_source.type // "any"' "$1")"
+	if [ "$src_type" = "any" ]; then
+		jq -n '[]'
+	elif [ "$src_type" = "geosite" ]; then
 		val="$(jq -r '.domain_source.value' "$1")"
 		jq -n --arg v "geosite:$val" '[$v]'
 	else
@@ -31,6 +38,28 @@ domain_match_array() {
 	fi
 }
 
+# device_match_array: profile json -> jq array of Xray "source" match
+# strings (IPv4 addresses or CIDR blocks) -- Policy-Based Routing by device
+# ("only the TV goes through VPN") instead of by domain. Optional on every
+# profile; a profile can match by domain only (existing behavior), by
+# device only (empty/absent domain_source), or both at once ("only the TV,
+# only for this streaming service").
+device_match_array() {
+	jq -c '[(.devices // [])[] | select(length > 0)]' "$1"
+}
+
+# build_rule_fields <profile.json> -> partial JSON object with "domain"
+# and/or "source" keys, whichever the profile actually restricts by. Merged
+# with {type:"field", outboundTag|balancerTag:...} by the caller. jq's `+`
+# on objects unions keys, so accumulating like this cleanly omits whichever
+# side is unrestricted instead of writing a key that matches nothing.
+build_rule_fields() {
+	domains="$(domain_match_array "$1")"
+	devices="$(device_match_array "$1")"
+	jq -n --argjson d "$domains" --argjson s "$devices" \
+		'{} + (if ($d|length) > 0 then {domain:$d} else {} end) + (if ($s|length) > 0 then {source:$s} else {} end)'
+}
+
 sr_regen() {
 	sr_ensure_dirs
 	rules="[]"
@@ -40,12 +69,11 @@ sr_regen() {
 		[ -e "$pf" ] || continue
 		name="$(jq -r '.name' "$pf")"
 		mode="$(jq -r '.mode' "$pf")"
-		domains="$(domain_match_array "$pf")"
+		fields="$(build_rule_fields "$pf")"
 
 		if [ "$mode" = "fixed" ]; then
 			target_tag="$(jq -r '.fixed_server' "$pf")"
-			rule="$(jq -n --argjson d "$domains" --arg tag "$target_tag" \
-				'{type:"field", domain:$d, outboundTag:$tag}')"
+			rule="$(echo "$fields" | jq --arg tag "$target_tag" '. + {type:"field", outboundTag:$tag}')"
 			rules="$(echo "$rules" | jq --argjson r "$rule" '. + [$r]')"
 		else
 			bal_tag="bal_$name"
@@ -53,8 +81,7 @@ sr_regen() {
 			balancer="$(jq -n --arg tag "$bal_tag" --argjson sel "$servers" \
 				'{tag:$tag, selector:$sel, strategy:{type:"leastPing"}}')"
 			balancers="$(echo "$balancers" | jq --argjson b "$balancer" '. + [$b]')"
-			rule="$(jq -n --argjson d "$domains" --arg tag "$bal_tag" \
-				'{type:"field", domain:$d, balancerTag:$tag}')"
+			rule="$(echo "$fields" | jq --arg tag "$bal_tag" '. + {type:"field", balancerTag:$tag}')"
 			rules="$(echo "$rules" | jq --argjson r "$rule" '. + [$r]')"
 		fi
 	done
@@ -113,6 +140,29 @@ case "${1:-}" in
 		[ -n "${2:-}" ] && [ -f "$2" ] || sr_die "profile json file required"
 		name="$(jq -r '.name' "$2")"
 		[ -n "$name" ] && [ "$name" != "null" ] || sr_die "profile json must have a .name"
+
+		# A profile with neither a domain restriction nor a device
+		# restriction would generate a rule matching every domain from
+		# every device -- silently shadowing every other profile (rule
+		# order = array order, first match wins) and our own catch-all.
+		# Reject it at save time with a clear reason instead of letting it
+		# through to become a confusing routing bug.
+		src_type="$(jq -r '.domain_source.type // "any"' "$2")"
+		n_devices="$(jq '[(.devices // [])[] | select(length > 0)] | length' "$2")"
+		if [ "$src_type" = "any" ] && [ "$n_devices" -eq 0 ]; then
+			sr_die "profile must match by domain, by device, or both -- got neither"
+		fi
+
+		# IPv4 address or CIDR only -- Xray's routing "source" field doesn't
+		# accept anything else, and a malformed entry here would otherwise
+		# only surface as an opaque Xray config-validation failure much
+		# later, in sr_restart_xray, far from the actual mistake.
+		for dev in $(jq -r '(.devices // [])[]' "$2" 2>/dev/null); do
+			case "$dev" in
+				*[!0-9./]*) sr_die "invalid device entry '$dev' -- expected an IPv4 address or CIDR (e.g. 192.168.1.50 or 192.168.1.0/24)" ;;
+			esac
+		done
+
 		cp "$2" "$SR_PROFILES_DIR/$name.json"
 		sr_regen
 		;;

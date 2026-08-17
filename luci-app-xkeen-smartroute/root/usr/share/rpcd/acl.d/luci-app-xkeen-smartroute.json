@@ -6,7 +6,7 @@
 				"luci.xkeen-smartroute": [
 					"list_servers", "list_categories", "list_custom_categories",
 					"list_profiles", "get_status", "random_hwid", "get_refresh_hours",
-					"list_killswitch_enabled", "redirect_status"
+					"list_killswitch_enabled", "redirect_status", "list_lan_devices"
 				]
 			}
 		},

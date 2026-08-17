@@ -44,7 +44,8 @@ case "$1" in
 	"redirect_set_enabled": {"enabled":"bool1"},
 	"redirect_set_ports": {"ports":"str1"},
 	"redirect_set_dns_protect": {"enabled":"bool1"},
-	"redirect_set_ipv6_protect": {"enabled":"bool1"}
+	"redirect_set_ipv6_protect": {"enabled":"bool1"},
+	"list_lan_devices": {}
 }
 EOF
 		;;
@@ -195,6 +196,30 @@ EOF
 				enabled="$(echo "$args" | jq -r '.enabled // false')"
 				sh "$LIB_DIR/redirect.sh" ipv6-protect "$([ "$enabled" = "true" ] && echo on || echo off)" >/tmp/sr_redirect.log 2>&1
 				sh "$LIB_DIR/redirect.sh" status 2>/dev/null
+				;;
+			list_lan_devices)
+				# Device-based routing (Policy-Based Routing by device, not
+				# domain) needs a way to pick "the TV" without the user
+				# typing its IP by hand. Two sources, merged and deduped by
+				# IP: dnsmasq's own lease file (has a hostname, but only for
+				# devices that got their IP via this router's DHCP) and the
+				# kernel ARP/neighbor table (catches devices with a
+				# manually-set static IP too, just without a hostname) --
+				# restricted to the LAN bridge device so upstream neighbors
+				# (the WAN gateway/router this box sits behind) don't show
+				# up as if they were a routable "device" on this LAN.
+				lan_dev="$(uci get network.lan.device 2>/dev/null || echo br-lan)"
+				raw="$(
+					{
+						[ -f /tmp/dhcp.leases ] && awk '{print $3","$2","$4}' /tmp/dhcp.leases 2>/dev/null
+						[ -f /proc/net/arp ] && awk -v dev="$lan_dev" 'NR>1 && $4!="00:00:00:00:00:00" && $NF==dev {print $1","$4",-"}' /proc/net/arp 2>/dev/null
+					} | awk -F, '!seen[$1]++'
+				)"
+				devices="$(printf '%s\n' "$raw" | jq -R -s '
+					split("\n") | map(select(length>0) | split(",")) |
+					map({ip:.[0], mac:.[1], hostname:(if .[2]=="-" then null else .[2] end)})
+				' 2>/dev/null)"
+				wrap_array devices "$devices"
 				;;
 			*) json_err "unknown_method" ;;
 		esac

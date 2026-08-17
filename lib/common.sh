@@ -2,6 +2,20 @@
 # Shared helpers for XKeen SmartRoute shell scripts.
 # Expects POSIX sh (ash/busybox) + jq (from Entware).
 
+# rpcd (the ubus backend that runs these scripts whenever the LuCI panel
+# itself saves/deletes a profile or toggles a setting) execs its script
+# handlers with a bare system PATH -- /usr/sbin:/usr/bin:/sbin:/bin, no
+# /opt/anything -- confirmed on real hardware via /proc/<rpcd-pid>/environ.
+# Every binary this project actually depends on (xray, jq, curl, ...) lives
+# under Entware's /opt/sbin or /opt/bin, so without this, `command -v xray`
+# in sr_restart_xray silently fails and profile changes made through the
+# real web UI never actually reach the running Xray process -- the JSON
+# gets written, but nothing restarts to pick it up until something else
+# (cron, a manual SSH session with the right PATH) happens to do it later.
+# Every other entry point (cron, manual SSH) already has a workable PATH,
+# so this is a no-op for them and only matters for the rpcd path.
+export PATH="/opt/sbin:/opt/bin:$PATH"
+
 SR_ETC_DIR="/etc/xkeen-smartroute"
 SR_LISTS_DIR="$SR_ETC_DIR/lists"
 SR_STATE_DIR="$SR_ETC_DIR/state"

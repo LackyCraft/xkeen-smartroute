@@ -115,6 +115,12 @@ var callRedirectSetIpv6Protect = rpc.declare({
 	object: 'luci.xkeen-smartroute', method: 'redirect_set_ipv6_protect',
 	params: ['enabled']
 });
+var _callListLanDevices = rpc.declare({
+	object: 'luci.xkeen-smartroute', method: 'list_lan_devices'
+});
+function callListLanDevices() {
+	return _callListLanDevices().then(function (r) { return (r && r.devices) || []; });
+}
 
 var DICT = {
 	app_name:            { ru: 'XKeen SmartRoute DanyByLC', en: 'XKeen SmartRoute DanyByLC' },
@@ -181,6 +187,25 @@ var DICT = {
 	col_domains: { ru: 'Домены', en: 'Domains' },
 	col_target: { ru: 'Куда', en: 'Target' },
 	need_servers_first: { ru: 'Сначала импортируйте подписку на вкладке «Подписки».', en: 'Import a subscription on the Subscriptions tab first.' },
+
+	devices_title: { ru: 'Устройства (необязательно)', en: 'Devices (optional)' },
+	devices_intro: { ru: 'Ограничьте профиль конкретными устройствами — например, «только телевизор» вместо всей сети. Можно оставить пустым (профиль сработает для всех устройств) или сочетать со списком доменов выше — например, «только телевизор, только для YouTube».',
+	                 en: "Restrict this profile to specific devices — e.g. \"only the TV\" instead of the whole network. Leave empty for all devices, or combine with the domain list above — e.g. \"only the TV, only for YouTube\"." },
+	devices_none_selected: { ru: 'Устройства не выбраны — сработает для всего трафика, попадающего под список доменов выше.', en: 'No devices selected — applies to all traffic matching the domain list above.' },
+	devices_no_domain_warning: { ru: 'Ни домены, ни устройства не выбраны — профиль ничего не будет матчить.', en: 'Neither domains nor devices are selected — this profile would match nothing.' },
+	devices_manual_label: { ru: 'Добавить вручную (IP или CIDR)', en: 'Add manually (IP or CIDR)' },
+	devices_manual_placeholder: { ru: '192.168.1.50 или 192.168.1.0/24', en: '192.168.1.50 or 192.168.1.0/24' },
+	devices_manual_add: { ru: 'Добавить', en: 'Add' },
+	devices_manual_invalid: { ru: 'Введите IPv4-адрес или CIDR, например 192.168.1.50 или 192.168.1.0/24', en: 'Enter an IPv4 address or CIDR, e.g. 192.168.1.50 or 192.168.1.0/24' },
+	devices_detected_title: { ru: 'Обнаруженные в сети', en: 'Detected on the network' },
+	devices_loading: { ru: 'Ищу устройства…', en: 'Looking for devices…' },
+	devices_none_detected: { ru: 'Устройства не найдены (проверьте DHCP-аренды роутера).', en: 'No devices found (check the router\'s DHCP leases).' },
+	devices_selected_title: { ru: 'Выбрано', en: 'Selected' },
+	col_device_ip: { ru: 'IP', en: 'IP' },
+	col_device_mac: { ru: 'MAC', en: 'MAC' },
+	col_device_hostname: { ru: 'Имя', en: 'Hostname' },
+	remove_btn: { ru: 'Убрать', en: 'Remove' },
+	domain_source_any: { ru: 'Все домены (только по устройству)', en: 'All domains (device-only match)' },
 
 	custom_domain_title: { ru: 'Добавить свой домен(ы)', en: 'Add your own domain(s)' },
 	custom_domain_intro: { ru: 'Если нужного сайта нет ни в geosite, ни в готовых списках — впишите домены через запятую, мы сложим их в свой список и он сразу появится в выборе выше.',
@@ -302,7 +327,8 @@ return L.Class.extend({
 		redirectSetEnabled: callRedirectSetEnabled,
 		redirectSetPorts: callRedirectSetPorts,
 		redirectSetDnsProtect: callRedirectSetDnsProtect,
-		redirectSetIpv6Protect: callRedirectSetIpv6Protect
+		redirectSetIpv6Protect: callRedirectSetIpv6Protect,
+		listLanDevices: callListLanDevices
 	},
 	T: T,
 	lang: srLang,
