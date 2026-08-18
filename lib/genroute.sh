@@ -128,6 +128,7 @@ build_rule_fields() {
 # working -- sidesteps the bug entirely instead of waiting on it.
 sr_pick_top1() {
 	pf="$1"
+	skip_fresh_ping="${2:-}"
 	[ -s "$SR_PING_FILE" ] || echo '{}' >"$SR_PING_FILE"
 	[ -s "$SR_HEALTH_FILE" ] || echo '{}' >"$SR_HEALTH_FILE"
 	[ -s "$SR_SERVERS_FILE" ] || echo '[]' >"$SR_SERVERS_FILE"
@@ -146,7 +147,21 @@ sr_pick_top1() {
 	' "$pf")"
 	[ "$(echo "$servers" | jq 'length')" -gt 0 ] || return 0
 
-	echo "$servers" | jq -r '.[]' | sh "$SCRIPT_DIR/subscription.sh" ping-tags >/dev/null 2>&1
+	# A fresh pool-scoped ping is a real network operation (one TCP connect
+	# per server, sequential) -- fine for the 3-minute cron's own background
+	# regen, but interactive callers (the Profiles page's Save/Delete
+	# buttons, via genroute.sh's "save"/"delete" cases) can't afford to block
+	# on it: measured 71s for just 3 profiles' pools on this hardware, well
+	# past both ubus/rpcd's own call timeout and the browser's XHR timeout.
+	# Confirmed live -- Save "worked" (the profile file and routing did get
+	# written) but the UI never got the response back, leaving the button
+	# stuck on "Сохраняю..." until a manual page reload. Callers that pass a
+	# truthy $2 skip the fresh probe entirely and rank purely on whatever
+	# ping.json/health.json already have -- at most a few minutes stale
+	# (kept fresh by the cron's own regen + subscription.sh's periodic ping
+	# sweep), which sr_pick_top1's tiering already treats as a perfectly
+	# valid signal, not an error case.
+	[ -n "$skip_fresh_ping" ] || echo "$servers" | jq -r '.[]' | sh "$SCRIPT_DIR/subscription.sh" ping-tags >/dev/null 2>&1
 
 	jq -rn --argjson servers "$servers" --slurpfile ping "$SR_PING_FILE" --slurpfile health "$SR_HEALTH_FILE" '
 		($ping[0] // {}) as $p |
@@ -166,11 +181,14 @@ sr_pick_top1() {
 }
 
 sr_regen() {
+	skip_fresh_ping="${1:-}"
 	sr_ensure_dirs
 
 	# sr_pick_top1 now does a real, network-bound ping pass per balancer-mode
 	# profile (see its own comment) instead of pure local file processing,
-	# so a regen can legitimately take a while with several such profiles.
+	# so a regen can legitimately take a while with several such profiles --
+	# unless the caller passed skip_fresh_ping (see sr_pick_top1's own
+	# comment on why "save"/"delete" below always do).
 	# The cron calling this runs every 3 minutes (install.sh); without a
 	# lock, a slow run overlapping the next tick would mean two regens
 	# racing to ping the same pools and write the same routing file at
@@ -209,7 +227,7 @@ sr_regen() {
 		if [ "$mode" = "fixed" ]; then
 			target_tag="$(jq -r '.fixed_server' "$pf")"
 		else
-			target_tag="$(sr_pick_top1 "$pf")"
+			target_tag="$(sr_pick_top1 "$pf" "$skip_fresh_ping")"
 		fi
 		[ -n "$target_tag" ] || { sr_log "profile '$name' has no servers, skipping"; continue; }
 		rule="$(echo "$fields" | jq --arg tag "$target_tag" '. + {type:"field", outboundTag:$tag}')"
@@ -320,12 +338,16 @@ case "${1:-}" in
 		done
 
 		cp "$2" "$SR_PROFILES_DIR/$name.json"
-		sr_regen
+		# skip_fresh_ping=1: an interactive Save can't block on a network
+		# probe of every balancer-mode profile's pool (see sr_pick_top1's
+		# comment) -- rank on whatever ping.json/health.json already have,
+		# the next cron regen (<=3min) fills in anything genuinely new.
+		sr_regen 1
 		;;
 	delete)
 		[ -n "${2:-}" ] || sr_die "profile name required"
 		rm -f "$SR_PROFILES_DIR/$2.json"
-		sr_regen
+		sr_regen 1
 		;;
 	regen) sr_regen ;;
 	list)
