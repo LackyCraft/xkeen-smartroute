@@ -279,34 +279,30 @@ cat > /opt/etc/xray/configs/03_inbounds.json <<'XRAY_INBOUNDS_EOF'
 }
 XRAY_INBOUNDS_EOF
 
-# Same content as xkeen's own template, minus comments, with one deliberate
-# fix: the trailing catch-all's outboundTag corrected from "vless-reality" (a
-# placeholder outbound install.sh deletes -- see the 04_outbounds.json step
-# above) to "direct". lib/genroute.sh already appends its own "direct"
-# catch-all that takes effect first (confdir load-order), so this rule is
-# unreachable in practice -- fixed anyway so xkeen-UI's visualizer doesn't
-# point at a tag that doesn't exist.
+# Same content as xkeen's own template, minus comments, MINUS the ".ru/.su/...
+# domains always go direct" rule xkeen ships by default.
+#
+# That rule used to be kept on the (wrong) assumption that Xray's confdir
+# merge always evaluates lib/genroute.sh's own 05_routing.smartroute.json
+# rules first, making this file's rules dead/unreachable regardless of their
+# content. Real on-router testing proved the opposite: a profile that
+# explicitly included 2ip.ru (a .ru domain) still leaked the real IP with
+# leak-protection fully enabled, because THIS file's domain-specific ".ru ->
+# direct" rule was actually winning over the user's own SmartRoute rule for
+# that same domain. Xray's actual confdir load order interleaves same-prefix
+# files by full filename, and "05_routing.json" sorts before
+# "05_routing.smartroute.json" -- so this rule was live and taking priority
+# the entire time. See AGENTS.md ("05_routing.json .ru precedence leak") for
+# the full writeup if this resurfaces.
+#
+# The plain, domain-unrestricted catch-all rule below is left in (still
+# pointed at "direct", not xkeen's broken placeholder "vless-reality" tag) --
+# it's harmless regardless of load order since it's the exact same fallback
+# lib/genroute.sh's own catch-all already provides, just redundant.
 cat > /opt/etc/xray/configs/05_routing.json <<'XRAY_ROUTING_EOF'
 {
   "routing": {
     "rules": [
-      {
-        "inboundTag": ["redirect", "tproxy"],
-        "domain": [
-          "regexp:^([\\w\\-\\.]+\\.)ru$",
-          "regexp:^([\\w\\-\\.]+\\.)su$",
-          "regexp:^([\\w\\-\\.]+\\.)xn--p1ai$",
-          "regexp:^([\\w\\-\\.]+\\.)xn--p1acf$",
-          "regexp:^([\\w\\-\\.]+\\.)xn--80asehdb$",
-          "regexp:^([\\w\\-\\.]+\\.)xn--c1avg$",
-          "regexp:^([\\w\\-\\.]+\\.)xn--80aswg$",
-          "regexp:^([\\w\\-\\.]+\\.)xn--80adxhks$",
-          "regexp:^([\\w\\-\\.]+\\.)moscow$",
-          "regexp:^([\\w\\-\\.]+\\.)xn--d1acj3b$"
-        ],
-        "outboundTag": "direct",
-        "type": "field"
-      },
       {
         "inboundTag": ["redirect", "tproxy"],
         "outboundTag": "direct",
@@ -478,6 +474,25 @@ GATEWAY_INIT_EOF
 	fi
 fi
 
+# xkeen's own geo-data updater (xkeen -ug, wired into cron just below) fetches
+# real geosite/geoip databases into /opt/etc/xray/dat, but names them by
+# source (e.g. geosite_v2fly.dat, geoip_v2fly.dat) rather than the plain
+# "geosite.dat"/"geoip.dat" Xray's own default asset lookup expects for a
+# bare "geosite:category" domain rule. Without this, every routing rule that
+# uses geosite: (every profile the LuCI UI creates) silently fails to parse
+# at Xray startup -- no crash, no error in the usual logs, Xray just ends up
+# with zero working routing rules and falls back to its documented "no rule
+# matched -> use the first outbound" behavior for literally all traffic.
+# Confirmed for real on this project's own test router. Idempotent: only
+# creates the symlink if a same-named real file isn't already sitting there
+# (some setups may already have a plainly-named geosite.dat from elsewhere).
+for pair in "geosite_v2fly.dat:geosite.dat" "geoip_v2fly.dat:geoip.dat"; do
+	src="${pair%%:*}"; dst="${pair##*:}"
+	if [ -f "/opt/etc/xray/dat/$src" ] && [ ! -e "/opt/etc/xray/dat/$dst" ]; then
+		ln -sf "/opt/etc/xray/dat/$src" "/opt/etc/xray/dat/$dst"
+	fi
+done
+
 # ---------------------------------------------------------------------------
 log "Шаг 6/6: cron (обновление geosite/geoip раз в 8 часов, подписок — по расписанию, ночной рестарт Xray)"
 
@@ -496,7 +511,25 @@ CRON_SUB="7 * * * * sh $SR_LIB_DIR/subscription.sh refresh >/dev/null 2>&1 #xkee
 # config first and only swaps the process if that passes, so this can't turn
 # a working router into a broken one the way a blind `kill` + relaunch could.
 CRON_RESTART="15 5 * * * sh -c '. $SR_LIB_DIR/common.sh; sr_restart_xray' >/dev/null 2>&1 #xkeen-smartroute-cron"
-( crontab -l 2>/dev/null | grep -v 'xkeen-smartroute-cron' ; echo "$CRON_GEO" ; echo "$CRON_SUB" ; echo "$CRON_RESTART" ) | crontab -
+# balancer-mode profiles pick their single fastest, not-currently-dead
+# server themselves now (see genroute.sh's sr_pick_top1 -- Xray's own
+# balancerTag is unusable, see AGENTS.md) from smartroute-gateway's
+# health.json (real observatory verdicts, refreshed continuously in the
+# background every 20s by failover.go regardless of this cron) plus
+# ping.json as a fallback signal. genroute.sh regen just re-reads those
+# already-fresh files and rewrites routing rules -- no network calls of its
+# own -- so it's cheap enough to run every 3 minutes without the "a full
+# sequential ping sweep takes real time" concern that applied when regen
+# itself needed to trigger a fresh ping pass first.
+CRON_REGEN="*/3 * * * * sh $SR_LIB_DIR/genroute.sh regen >/dev/null 2>&1 #xkeen-smartroute-cron"
+# ping.json (sr_pick_top1's fallback ranking for a server health.json
+# hasn't reached yet, and the Subscriptions page's displayed numbers) still
+# needs its own refresh -- just far less urgently than regen now that
+# picking a *working* server doesn't depend on it. Every 2 hours, sequential
+# (see the sequential-vs-concurrent-probing note in genroute.sh for why not
+# more often/parallel on this hardware).
+CRON_PING="0 */2 * * * sh $SR_LIB_DIR/subscription.sh ping >/dev/null 2>&1 #xkeen-smartroute-cron"
+( crontab -l 2>/dev/null | grep -v 'xkeen-smartroute-cron' ; echo "$CRON_GEO" ; echo "$CRON_SUB" ; echo "$CRON_RESTART" ; echo "$CRON_REGEN" ; echo "$CRON_PING" ) | crontab -
 /etc/init.d/cron restart >/dev/null 2>&1 || true
 
 # ---------------------------------------------------------------------------
