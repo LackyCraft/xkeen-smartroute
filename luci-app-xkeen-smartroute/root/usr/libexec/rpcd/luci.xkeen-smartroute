@@ -10,6 +10,23 @@ SR_ETC_DIR="/etc/xkeen-smartroute"
 
 json_err() { printf '{"error":"%s"}\n' "$1"; }
 
+# sanitize_domain: a bare hostname is what Xray's "domain" field actually
+# matches against (Host/SNI, never a full URL) -- but pasting a full URL you
+# just had open in a browser tab is the obvious, natural thing to try. Strip
+# scheme, path/query/fragment, and a trailing :port so "https://2ip.ru/"
+# becomes "2ip.ru" instead of silently saving the URL verbatim (observed for
+# real: a saved list containing "https://2ip.ru/" never matched a single
+# real request, because nothing a browser sends ever equals that string).
+sanitize_domain() {
+	printf '%s' "$1" \
+		| sed -E 's#^[a-zA-Z][a-zA-Z0-9+.-]*://##' \
+		| sed -E 's#[/?#].*$##' \
+		| sed -E 's#:[0-9]+$##' \
+		| tr 'A-Z' 'a-z'
+}
+
+CUSTOM_CATEGORIES_FILE="$SR_ETC_DIR/lists/custom-categories.json"
+
 # ubus/rpcd rejects a bare top-level JSON array as a script result ("Invalid
 # argument") -- every array-shaped result must be wrapped in an object.
 # wrap_array <field> <json-array-or-empty> -> {"<field>": [...]}
@@ -37,6 +54,8 @@ case "$1" in
 	"killswitch_set": {"name":"str1","enabled":"bool1"},
 	"list_killswitch_enabled": {},
 	"ping_servers": {},
+	"get_pings": {},
+	"get_health": {},
 	"get_refresh_hours": {},
 	"set_refresh_hours": {"hours":"str1"},
 	"refresh_now": {},
@@ -45,7 +64,18 @@ case "$1" in
 	"redirect_set_ports": {"ports":"str1"},
 	"redirect_set_dns_protect": {"enabled":"bool1"},
 	"redirect_set_ipv6_protect": {"enabled":"bool1"},
-	"list_lan_devices": {}
+	"redirect_set_quic_protect": {"enabled":"bool1"},
+	"list_lan_devices": {},
+	"list_subscriptions": {},
+	"list_custom_lists": {},
+	"delete_custom_list": {"key":"str1"},
+	"add_domain_to_list": {"key":"str1","domain":"str1"},
+	"remove_domain_from_list": {"key":"str1","domain":"str1"},
+	"delete_subscription": {"label":"str1"},
+	"refresh_subscription": {"label":"str1"},
+	"ping_subscription": {"label":"str1"},
+	"service_status": {},
+	"service_control": {"service":"str1","action":"str1"}
 }
 EOF
 		;;
@@ -107,13 +137,89 @@ EOF
 				jq -n '{ok:true}'
 				;;
 			add_custom_domain)
-				list_name="$(echo "$args" | jq -r '.list_name // empty' | tr -cs 'A-Za-z0-9_-' '_')"
-				domains="$(echo "$args" | jq -r '.domains // empty')"
-				[ -n "$list_name" ] && [ -n "$domains" ] || { json_err "missing_fields"; exit 0; }
+				display_name="$(echo "$args" | jq -r '.list_name // empty')"
+				list_name="$(echo "$display_name" | tr -cs 'A-Za-z0-9_-' '_')"
+				domains_raw="$(echo "$args" | jq -r '.domains // empty')"
+				[ -n "$list_name" ] && [ -n "$domains_raw" ] || { json_err "missing_fields"; exit 0; }
 				mkdir -p "$SR_ETC_DIR/lists/custom"
-				echo "$domains" | tr ',' '\n' | sed 's/^ *//; s/ *$//' | grep -v '^$' >> "$SR_ETC_DIR/lists/custom/${list_name}.lst"
-				sort -u -o "$SR_ETC_DIR/lists/custom/${list_name}.lst" "$SR_ETC_DIR/lists/custom/${list_name}.lst"
+				list_file="$SR_ETC_DIR/lists/custom/${list_name}.lst"
+
+				# This form only ever creates a *new* list -- adding more
+				# domains to one that already exists, or removing domains
+				# from it, goes through list_custom_lists/
+				# add_domain_to_list/remove_domain_from_list below instead
+				# (the Domain Management section). Silently merging into
+				# an existing file here is exactly the "two different lists
+				# I meant to keep separate quietly became one" confusion
+				# this was rejected for.
+				if [ -f "$list_file" ]; then
+					json_err "list_already_exists"; exit 0
+				fi
+				[ -s "$CUSTOM_CATEGORIES_FILE" ] || echo '[]' >"$CUSTOM_CATEGORIES_FILE"
+				if jq -e --arg k "$list_name" '.[] | select(.key == $k)' "$CUSTOM_CATEGORIES_FILE" >/dev/null 2>&1; then
+					json_err "list_already_exists"; exit 0
+				fi
+
+				sanitized="$(echo "$domains_raw" | tr ',' '\n' | while IFS= read -r d; do
+					d="$(printf '%s' "$d" | sed 's/^ *//; s/ *$//')"
+					[ -n "$d" ] && sanitize_domain "$d"
+				done)"
+				[ -n "$sanitized" ] || { json_err "no_valid_domains"; exit 0; }
+				printf '%s\n' "$sanitized" | sort -u > "$list_file"
+
+				entry="$(jq -n --arg k "$list_name" --arg f "custom/${list_name}.lst" --arg lbl "$display_name" \
+					'{key:$k, file:$f, label_ru:$lbl, label_en:$lbl}')"
+				jq --argjson e "$entry" '. + [$e]' "$CUSTOM_CATEGORIES_FILE" > "$CUSTOM_CATEGORIES_FILE.new" \
+					&& mv "$CUSTOM_CATEGORIES_FILE.new" "$CUSTOM_CATEGORIES_FILE"
+
 				jq -n --arg f "custom/${list_name}.lst" '{ok:true, file:$f}'
+				;;
+			list_custom_lists)
+				sr_lists="$SR_ETC_DIR/lists/custom"
+				mkdir -p "$sr_lists"
+				[ -s "$CUSTOM_CATEGORIES_FILE" ] || echo '[]' >"$CUSTOM_CATEGORIES_FILE"
+				out='[]'
+				for f in "$sr_lists"/*.lst; do
+					[ -e "$f" ] || continue
+					base="$(basename "$f" .lst)"
+					domains_json="$(jq -R -s 'split("\n") | map(select((length>0) and (startswith("#")|not)))' "$f" 2>/dev/null || echo '[]')"
+					meta="$(jq --arg k "$base" '[.[] | select(.key == $k)][0] // {}' "$CUSTOM_CATEGORIES_FILE")"
+					entry="$(jq -n --arg key "$base" --arg file "custom/${base}.lst" --argjson meta "$meta" --argjson domains "$domains_json" \
+						'{key:$key, file:$file, label_ru:($meta.label_ru // $key), label_en:($meta.label_en // $key), domains:$domains}')"
+					out="$(printf '%s' "$out" | jq --argjson e "$entry" '. + [$e]')"
+				done
+				wrap_array lists "$out"
+				;;
+			delete_custom_list)
+				key="$(echo "$args" | jq -r '.key // empty' | tr -cs 'A-Za-z0-9_-' '_')"
+				[ -n "$key" ] || { json_err "missing_key"; exit 0; }
+				rm -f "$SR_ETC_DIR/lists/custom/${key}.lst"
+				[ -s "$CUSTOM_CATEGORIES_FILE" ] || echo '[]' >"$CUSTOM_CATEGORIES_FILE"
+				jq --arg k "$key" '[.[] | select(.key != $k)]' "$CUSTOM_CATEGORIES_FILE" > "$CUSTOM_CATEGORIES_FILE.new" \
+					&& mv "$CUSTOM_CATEGORIES_FILE.new" "$CUSTOM_CATEGORIES_FILE"
+				jq -n '{ok:true}'
+				;;
+			add_domain_to_list)
+				key="$(echo "$args" | jq -r '.key // empty' | tr -cs 'A-Za-z0-9_-' '_')"
+				domain_raw="$(echo "$args" | jq -r '.domain // empty')"
+				[ -n "$key" ] && [ -n "$domain_raw" ] || { json_err "missing_fields"; exit 0; }
+				list_file="$SR_ETC_DIR/lists/custom/${key}.lst"
+				[ -f "$list_file" ] || { json_err "unknown_list"; exit 0; }
+				domain="$(sanitize_domain "$domain_raw")"
+				[ -n "$domain" ] || { json_err "no_valid_domains"; exit 0; }
+				echo "$domain" >> "$list_file"
+				sort -u -o "$list_file" "$list_file"
+				jq -n '{ok:true}'
+				;;
+			remove_domain_from_list)
+				key="$(echo "$args" | jq -r '.key // empty' | tr -cs 'A-Za-z0-9_-' '_')"
+				domain="$(echo "$args" | jq -r '.domain // empty')"
+				[ -n "$key" ] && [ -n "$domain" ] || { json_err "missing_fields"; exit 0; }
+				list_file="$SR_ETC_DIR/lists/custom/${key}.lst"
+				[ -f "$list_file" ] || { json_err "unknown_list"; exit 0; }
+				grep -Fxv "$domain" "$list_file" > "$list_file.new" 2>/dev/null || true
+				mv "$list_file.new" "$list_file"
+				jq -n '{ok:true}'
 				;;
 			get_status)
 				running=0
@@ -144,9 +250,34 @@ EOF
 				wrap_array names "$(sh "$LIB_DIR/killswitch.sh" list-enabled 2>/dev/null)"
 				;;
 			ping_servers)
-				out="$(sh "$LIB_DIR/subscription.sh" ping 2>/tmp/sr_ping.log)"
+				# Backgrounded: sequential probing (see subscription.sh,
+				# changed from parallel after concurrent probing was found to
+				# overload this project's actual -- memory-constrained --
+				# test hardware) means a big subscription can take minutes,
+				# well past rpcd/ubus's own call timeout. The UI polls
+				# get_pings afterward instead of waiting on this call.
+				sh "$LIB_DIR/subscription.sh" ping >/tmp/sr_ping.log 2>&1 &
+				jq -n '{ok:true, note:"started in background"}'
+				;;
+			get_pings)
+				# Fast, read-only: just the last cached ping.json, for page
+				# load -- never triggers a new probe run itself.
+				out="$(cat "$SR_ETC_DIR/state/ping.json" 2>/dev/null)"
 				[ -n "$out" ] || out='{}'
 				printf '%s' "$out" | jq '{pings: (. // {})}' 2>/dev/null || echo '{"pings":{}}'
+				;;
+			get_health)
+				# smartroute-gateway's failover.go polls Xray's observatory
+				# (ObservatoryService.GetOutboundStatus -- a real
+				# VLESS/REALITY connection + HTTP GET through each outbound,
+				# not a bare TCP connect) every 20s and persists the result
+				# here regardless of whether any balancer exists to use it.
+				# Read-only, same "just the last cached snapshot" shape as
+				# get_pings -- this file is written by a process that's
+				# already running continuously, nothing to trigger here.
+				out="$(cat "$SR_ETC_DIR/state/health.json" 2>/dev/null)"
+				[ -n "$out" ] || out='{}'
+				printf '%s' "$out" | jq '{health: (. // {})}' 2>/dev/null || echo '{"health":{}}'
 				;;
 			get_refresh_hours)
 				h="$(sh "$LIB_DIR/subscription.sh" get-refresh-hours 2>/dev/null)"
@@ -196,6 +327,72 @@ EOF
 				enabled="$(echo "$args" | jq -r '.enabled // false')"
 				sh "$LIB_DIR/redirect.sh" ipv6-protect "$([ "$enabled" = "true" ] && echo on || echo off)" >/tmp/sr_redirect.log 2>&1
 				sh "$LIB_DIR/redirect.sh" status 2>/dev/null
+				;;
+			redirect_set_quic_protect)
+				enabled="$(echo "$args" | jq -r '.enabled // false')"
+				sh "$LIB_DIR/redirect.sh" quic-protect "$([ "$enabled" = "true" ] && echo on || echo off)" >/tmp/sr_redirect.log 2>&1
+				sh "$LIB_DIR/redirect.sh" status 2>/dev/null
+				;;
+			list_subscriptions)
+				wrap_array subscriptions "$(sh "$LIB_DIR/subscription.sh" list-subscriptions 2>/dev/null)"
+				;;
+			delete_subscription)
+				label="$(echo "$args" | jq -r '.label // empty')"
+				[ -n "$label" ] || { json_err "missing_label"; exit 0; }
+				sh "$LIB_DIR/subscription.sh" delete-subscription "$label" >/tmp/sr_delsub.log 2>&1
+				jq -n '{ok:true}'
+				;;
+			refresh_subscription)
+				# Backgrounded, same as refresh_now: a subscription's own
+				# fetch+import+restart can run long enough to blow past
+				# rpcd/ubus's own call timeout, especially for a large
+				# subscription -- the UI polls list_subscriptions/list_servers
+				# afterward instead of waiting on this call to finish.
+				label="$(echo "$args" | jq -r '.label // empty')"
+				[ -n "$label" ] || { json_err "missing_label"; exit 0; }
+				sh "$LIB_DIR/subscription.sh" refresh-one "$label" >/tmp/sr_refresh_one.log 2>&1 &
+				jq -n '{ok:true, note:"started in background"}'
+				;;
+			ping_subscription)
+				# Backgrounded for the same reason: sequential probing (see
+				# subscription.sh) of a large subscription can take minutes.
+				label="$(echo "$args" | jq -r '.label // empty')"
+				[ -n "$label" ] || { json_err "missing_label"; exit 0; }
+				sh "$LIB_DIR/subscription.sh" ping-subscription "$label" >/tmp/sr_ping_one.log 2>&1 &
+				jq -n '{ok:true, note:"started in background"}'
+				;;
+			service_status)
+				xray_running=0; xkeenui_running=0; gateway_running=0
+				pgrep -x xray >/dev/null 2>&1 && xray_running=1
+				pgrep -f xkeen-ui >/dev/null 2>&1 && xkeenui_running=1
+				pgrep -f /opt/share/xkeen-smartroute/gateway >/dev/null 2>&1 && gateway_running=1
+				jq -n --argjson x "$xray_running" --argjson u "$xkeenui_running" --argjson g "$gateway_running" \
+					'{xray:($x==1), xkeen_ui:($u==1), gateway:($g==1)}'
+				;;
+			service_control)
+				# Confirmed safe on real hardware: xray/xkeen-ui/gateway can
+				# each be started/stopped/restarted independently, in any
+				# order, without crashing or hanging the other two -- neither
+				# xkeen-ui nor gateway depends on xray being up to run, they
+				# just show it as stopped/log a connection error.
+				service="$(echo "$args" | jq -r '.service // empty')"
+				action="$(echo "$args" | jq -r '.action // empty')"
+				case "$action" in start|stop|restart) ;; *) json_err "invalid_action"; exit 0 ;; esac
+				case "$service" in
+					xray)
+						( . "$LIB_DIR/common.sh"; case "$action" in
+							start) sr_start_xray ;; stop) sr_stop_xray ;; restart) sr_restart_xray ;;
+						esac ) >/tmp/sr_svc_xray.log 2>&1
+						;;
+					xkeen-ui)
+						/opt/etc/init.d/S99xkeen-ui "$action" >/tmp/sr_svc_xkeenui.log 2>&1
+						;;
+					gateway)
+						/opt/etc/init.d/S98smartroute-gateway "$action" >/tmp/sr_svc_gateway.log 2>&1
+						;;
+					*) json_err "unknown_service"; exit 0 ;;
+				esac
+				jq -n '{ok:true}'
 				;;
 			list_lan_devices)
 				# Device-based routing (Policy-Based Routing by device, not

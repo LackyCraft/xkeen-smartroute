@@ -6,7 +6,8 @@
 				"luci.xkeen-smartroute": [
 					"list_servers", "list_categories", "list_custom_categories",
 					"list_profiles", "get_status", "random_hwid", "get_refresh_hours",
-					"list_killswitch_enabled", "redirect_status", "list_lan_devices"
+					"list_killswitch_enabled", "redirect_status", "list_lan_devices",
+					"list_subscriptions", "get_pings", "get_health", "service_status", "list_custom_lists"
 				]
 			}
 		},
@@ -16,7 +17,11 @@
 					"import_subscription", "save_profile", "delete_profile",
 					"add_custom_domain", "killswitch_set", "ping_servers",
 					"set_refresh_hours", "refresh_now", "redirect_set_enabled",
-					"redirect_set_ports", "redirect_set_dns_protect", "redirect_set_ipv6_protect"
+					"redirect_set_ports", "redirect_set_dns_protect", "redirect_set_ipv6_protect",
+					"redirect_set_quic_protect",
+					"delete_subscription", "refresh_subscription", "ping_subscription",
+					"service_control", "delete_custom_list", "add_domain_to_list",
+					"remove_domain_from_list"
 				]
 			}
 		}

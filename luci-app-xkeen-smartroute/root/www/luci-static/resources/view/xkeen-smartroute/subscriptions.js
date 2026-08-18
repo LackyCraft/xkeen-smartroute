@@ -5,7 +5,13 @@
 
 return view.extend({
 	load: function () {
-		return Promise.all([sr.rpc.listServers(), sr.rpc.getRefreshHours()]);
+		return Promise.all([
+			sr.rpc.listSubscriptions(),
+			sr.rpc.listServers(),
+			sr.rpc.getPings(),
+			sr.rpc.getRefreshHours(),
+			sr.rpc.getHealth()
+		]);
 	},
 
 	handleGenerateHwid: function (ev) {
@@ -57,20 +63,7 @@ return view.extend({
 			}
 			ui.addNotification(null, E('p', {}, sr.T('sub_imported_ok')), 'info');
 			urlInput.value = '';
-			this.servers = res || [];
-			this.renderTable();
-		}, this));
-	},
-
-	handlePing: function (ev) {
-		var btn = ev.target;
-		btn.disabled = true;
-		btn.textContent = sr.T('pinging');
-		return sr.rpc.pingServers().then(L.bind(function (pings) {
-			btn.disabled = false;
-			btn.textContent = sr.T('ping_btn');
-			this.pings = pings || {};
-			this.renderTable();
+			return this.reloadAll();
 		}, this));
 	},
 
@@ -89,59 +82,251 @@ return view.extend({
 		});
 	},
 
-	handleRefreshNow: function (ev) {
+	handleRefreshAllNow: function (ev) {
+		var view = this;
 		var btn = ev.target;
 		btn.disabled = true;
+		btn.textContent = sr.T('sub_refreshing_one');
+		view.refreshingAll = true;
+		view.renderSubscriptions();
 		return sr.rpc.refreshNow().then(function () {
-			btn.disabled = false;
 			ui.addNotification(null, E('p', {}, sr.T('refresh_now_started')), 'info');
+			return view.pollAndRerender(8, 4000).then(function () {
+				view.refreshingAll = false;
+				btn.disabled = false;
+				btn.textContent = sr.T('refresh_now_btn');
+				view.renderSubscriptions();
+			});
 		});
 	},
 
-	renderTable: function () {
-		var container = document.getElementById('sr-servers-table');
-		if (!container) return;
-		var servers = this.servers || [];
-		var pings = this.pings || {};
+	handlePingAll: function (ev) {
+		var view = this;
+		var btn = ev.target;
+		btn.disabled = true;
+		btn.textContent = sr.T('pinging');
+		view.pingingAll = true;
+		view.renderSubscriptions();
+		return sr.rpc.pingServers().then(function () {
+			ui.addNotification(null, E('p', {}, sr.T('sub_ping_started')), 'info');
+			return view.pollAndRerender(10, 3000).then(function () {
+				view.pingingAll = false;
+				btn.disabled = false;
+				btn.textContent = sr.T('sub_ping_all_btn');
+				view.renderSubscriptions();
+			});
+		});
+	},
 
-		if (!servers.length) {
-			container.innerHTML = '';
-			container.appendChild(E('p', { 'class': 'cbi-value-description' }, sr.T('no_servers')));
+	handleRefreshSubscription: function (label, ev) {
+		var view = this;
+		var btn = ev.target;
+		btn.disabled = true;
+		btn.textContent = sr.T('sub_refreshing_one');
+		view.refreshingLabels = view.refreshingLabels || {};
+		view.refreshingLabels[label] = true;
+		view.renderSubscriptions();
+		return sr.rpc.refreshSubscription(label).then(function () {
+			return view.pollAndRerender(8, 4000).then(function () {
+				delete view.refreshingLabels[label];
+				btn.disabled = false;
+				btn.textContent = sr.T('refresh_btn');
+				view.renderSubscriptions();
+			});
+		});
+	},
+
+	handlePingSubscription: function (label, ev) {
+		var view = this;
+		var btn = ev.target;
+		btn.disabled = true;
+		btn.textContent = sr.T('pinging');
+		view.pingingLabels = view.pingingLabels || {};
+		view.pingingLabels[label] = true;
+		view.renderSubscriptions();
+		return sr.rpc.pingSubscription(label).then(function () {
+			return view.pollAndRerender(8, 3000).then(function () {
+				delete view.pingingLabels[label];
+				btn.disabled = false;
+				btn.textContent = sr.T('ping_btn');
+				view.renderSubscriptions();
+			});
+		});
+	},
+
+	handleDeleteSubscription: function (label) {
+		if (!confirm(sr.T('sub_delete_confirm').replace('%s', label))) return;
+		var view = this;
+		return sr.rpc.deleteSubscription(label).then(function () {
+			return view.reloadAll();
+		});
+	},
+
+	handleToggleExpand: function (label) {
+		this.expanded = this.expanded || {};
+		this.expanded[label] = !this.expanded[label];
+		this.renderSubscriptions();
+	},
+
+	// Backgrounded ping/refresh calls have no "done" signal to wait on --
+	// poll the cheap read-only endpoints a handful of times and re-render as
+	// data arrives, then stop. Good enough feedback without blocking the UI
+	// on an operation that (for a big subscription) can take minutes.
+	pollAndRerender: function (times, intervalMs) {
+		var view = this;
+		var i = 0;
+		function tick() {
+			return Promise.all([sr.rpc.listSubscriptions(), sr.rpc.listServers(), sr.rpc.getPings(), sr.rpc.getHealth()]).then(function (data) {
+				view.subscriptions = data[0] || [];
+				view.servers = data[1] || [];
+				view.pings = data[2] || {};
+				view.health = data[3] || {};
+				view.renderSubscriptions();
+				i++;
+				if (i >= times) return;
+				return new Promise(function (resolve) { setTimeout(resolve, intervalMs); }).then(tick);
+			});
+		}
+		return tick();
+	},
+
+	reloadAll: function () {
+		var view = this;
+		return Promise.all([sr.rpc.listSubscriptions(), sr.rpc.listServers(), sr.rpc.getPings(), sr.rpc.getHealth()]).then(function (data) {
+			view.subscriptions = data[0] || [];
+			view.servers = data[1] || [];
+			view.pings = data[2] || {};
+			view.health = data[3] || {};
+			view.renderSubscriptions();
+		});
+	},
+
+	pingLabel: function (tag) {
+		var ms = (this.pings || {})[tag];
+		if (ms === null || ms === undefined) return sr.T('ping_timeout');
+		if (typeof ms === 'number') return ms + ' ms';
+		return '—';
+	},
+
+	// healthAge: "checked_at" -> a short "Xм назад"/"Xm ago" string. This can
+	// be a *long* time for a tag health.json is still carrying from before
+	// the last Xray restart (see gateway/failover.go's persistHealth --
+	// merged forward across restarts on purpose, not dropped), so showing
+	// this next to the alive/dead dot is what tells the user "this verdict
+	// might be stale, not just present".
+	healthAge: function (checkedAt) {
+		if (!checkedAt) return '';
+		var ms = Date.now() - new Date(checkedAt).getTime();
+		if (!(ms >= 0)) return '';
+		var mins = Math.floor(ms / 60000);
+		if (mins < 1) return sr.lang() === 'en' ? 'just now' : 'только что';
+		if (mins < 60) return mins + (sr.lang() === 'en' ? 'm ago' : 'м назад');
+		var hours = Math.floor(mins / 60);
+		return hours + (sr.lang() === 'en' ? 'h ago' : 'ч назад');
+	},
+
+	// healthLabel: a colored dot + word + age, from smartroute-gateway's real
+	// observatory data (see xkeen-smartroute.js's callGetHealth) -- a tag
+	// absent from the map hasn't been reached by observatory's probe sweep
+	// yet (still sparse for a while after every Xray restart), which is a
+	// genuinely different state from "confirmed dead" and shown as such.
+	healthLabel: function (tag) {
+		var h = (this.health || {})[tag];
+		if (!h) return E('span', { 'style': 'color:var(--color-text-secondary,#888)' }, '○ ' + sr.T('health_unknown'));
+		var age = this.healthAge(h.checked_at);
+		var ageSpan = age ? E('span', { 'style': 'color:var(--color-text-secondary,#888);font-size:.9em' }, ' (' + age + ')') : '';
+		if (h.alive) return E('span', {}, [E('span', { 'style': 'color:#2e7d32' }, '● ' + sr.T('health_alive')), ageSpan]);
+		return E('span', {}, [E('span', { 'style': 'color:#c62828' }, '● ' + sr.T('health_dead')), ageSpan]);
+	},
+
+	renderSubscriptions: function () {
+		var view = this;
+		var container = document.getElementById('sr-subscriptions-list');
+		if (!container) return;
+		var subs = view.subscriptions || [];
+		var servers = view.servers || [];
+		container.innerHTML = '';
+
+		if (!subs.length) {
+			container.appendChild(E('p', { 'class': 'cbi-value-description' }, sr.T('sub_no_subscriptions')));
 			return;
 		}
 
-		var table = E('table', { 'class': 'table cbi-section-table' }, [
-			E('tr', { 'class': 'tr table-titles' }, [
-				E('th', { 'class': 'th' }, sr.T('col_server')),
-				E('th', { 'class': 'th' }, sr.T('col_protocol')),
-				E('th', { 'class': 'th' }, sr.T('col_subscription')),
-				E('th', { 'class': 'th' }, sr.T('col_ping'))
-			])
-		]);
+		subs.forEach(function (s) {
+			var isOpen = !!(view.expanded && view.expanded[s.label]);
+			var subServers = servers.filter(function (srv) { return srv.subscription === s.label; });
+			var isPinging = !!(view.pingingAll || (view.pingingLabels && view.pingingLabels[s.label]));
+			var isRefreshing = !!(view.refreshingAll || (view.refreshingLabels && view.refreshingLabels[s.label]));
 
-		servers.forEach(function (s) {
-			var ms = pings[s.tag];
-			var pingText = '—';
-			if (ms === null) pingText = sr.T('ping_timeout');
-			else if (typeof ms === 'number') pingText = ms + ' ms';
-			table.appendChild(E('tr', { 'class': 'tr' }, [
-				E('td', { 'class': 'td' }, s.name),
-				E('td', { 'class': 'td' }, s.protocol),
-				E('td', { 'class': 'td' }, s.subscription),
-				E('td', { 'class': 'td' }, pingText)
-			]));
+			var refreshBtn = E('button', { 'class': 'cbi-button' }, sr.T('refresh_btn'));
+			refreshBtn.addEventListener('click', function (ev) { view.handleRefreshSubscription(s.label, ev); });
+			var pingBtn = E('button', { 'class': 'cbi-button' }, sr.T('ping_btn'));
+			pingBtn.addEventListener('click', function (ev) { view.handlePingSubscription(s.label, ev); });
+			var deleteBtn = E('button', { 'class': 'cbi-button cbi-button-remove' }, sr.T('delete_btn'));
+			deleteBtn.addEventListener('click', function () { view.handleDeleteSubscription(s.label); });
+
+			var labelParts = [(isOpen ? '▾ ' : '▸ ') + s.label + ' — ' + s.server_count + ' ' + sr.T('sub_servers_word')];
+			var toggle = E('a', { 'href': '#', 'style': 'font-weight:bold;text-decoration:none' }, labelParts);
+			toggle.addEventListener('click', function (ev) { ev.preventDefault(); view.handleToggleExpand(s.label); });
+
+			var headerRow = [toggle];
+			if (isPinging || isRefreshing) {
+				headerRow.push(E('span', { 'style': 'margin-left:.5em' }, sr.spinner()));
+				headerRow.push(E('span', { 'class': 'cbi-value-description', 'style': 'margin-left:.35em' },
+					isRefreshing ? sr.T('sub_refreshing_one') : sr.T('pinging')));
+			}
+
+			var card = E('div', { 'class': 'cbi-section', 'style': 'margin-bottom:.75em' }, [
+				E('div', { 'style': 'display:flex;align-items:center;gap:1em;flex-wrap:wrap' }, [
+					E('div', {}, headerRow),
+					E('div', { 'style': 'margin-left:auto;display:flex;gap:.5em' }, [refreshBtn, pingBtn, deleteBtn])
+				])
+			]);
+
+			if (isOpen) {
+				var table = E('table', { 'class': 'table cbi-section-table', 'style': 'margin-top:.5em' }, [
+					E('tr', { 'class': 'tr table-titles' }, [
+						E('th', { 'class': 'th' }, sr.T('col_server')),
+						E('th', { 'class': 'th' }, sr.T('col_address')),
+						E('th', { 'class': 'th' }, sr.T('col_protocol')),
+						E('th', { 'class': 'th' }, sr.T('col_ping')),
+						E('th', { 'class': 'th' }, sr.T('col_health'))
+					])
+				]);
+				if (!subServers.length) {
+					table.appendChild(E('tr', { 'class': 'tr' }, [E('td', { 'class': 'td', 'colspan': '5' }, sr.T('no_servers'))]));
+				}
+				subServers.forEach(function (srv) {
+					// While a ping run for this subscription (or all of them)
+					// is in flight, ping.json isn't updated until the whole
+					// run finishes -- showing whatever value was cached
+					// *before* the run reads as a final, current result
+					// instead of "still checking". A spinner is honest about
+					// which one it actually is.
+					var pingCell = isPinging ? sr.spinner() : view.pingLabel(srv.tag);
+					table.appendChild(E('tr', { 'class': 'tr' }, [
+						E('td', { 'class': 'td' }, sr.renderName(srv.name)),
+						E('td', { 'class': 'td' }, srv.address + ':' + srv.port),
+						E('td', { 'class': 'td' }, srv.protocol),
+						E('td', { 'class': 'td' }, pingCell),
+						E('td', { 'class': 'td' }, view.healthLabel(srv.tag))
+					]));
+				});
+				card.appendChild(table);
+			}
+
+			container.appendChild(card);
 		});
-
-		container.innerHTML = '';
-		container.appendChild(table);
 	},
 
 	render: function (data) {
 		var view = this;
-		var servers = data[0] || [];
-		var refreshHours = data[1] || 12;
-		this.servers = servers;
-		this.pings = {};
+		this.subscriptions = data[0] || [];
+		this.servers = data[1] || [];
+		this.pings = data[2] || {};
+		var refreshHours = data[3] || 12;
+		this.health = data[4] || {};
+		this.expanded = {};
 
 		var clientSelect = E('select', { 'id': 'sr-sub-client', 'class': 'cbi-input-select', 'style': 'display:block;max-width:320px;margin:.25em 0' },
 			sr.CLIENT_PRESETS.map(function (c) {
@@ -187,6 +372,33 @@ return view.extend({
 			])
 		]);
 
+		var addBox = E('div', { 'class': 'cbi-section' }, [
+			E('h3', {}, sr.T('sub_add_title')),
+			E('p', {}, sr.T('sub_intro')),
+			E('input', {
+				'type': 'text', 'id': 'sr-sub-url', 'class': 'cbi-input-text',
+				'style': 'width:100%;max-width:640px;display:block;margin-bottom:.5em',
+				'placeholder': sr.T('sub_url_placeholder')
+			}),
+			E('input', {
+				'type': 'text', 'id': 'sr-sub-label', 'class': 'cbi-input-text',
+				'style': 'width:100%;max-width:320px;display:block;margin-bottom:.5em',
+				'placeholder': sr.T('sub_label_placeholder')
+			}),
+			E('label', {}, sr.T('sub_client_label')),
+			E('div', { 'style': 'margin:.25em 0' }, [clientSelect]),
+			E('p', { 'class': 'cbi-value-description' }, sr.T('sub_client_hint')),
+			E('a', {
+				'href': '#', 'style': 'display:inline-block;margin:.25em 0 .75em',
+				'click': function (ev) { ev.preventDefault(); view.handleToggleAdvanced(ev); }
+			}, '▸ ' + sr.T('sub_advanced_toggle')),
+			advancedBox,
+			E('button', {
+				'class': 'cbi-button cbi-button-positive',
+				'click': ui.createHandlerFn(view, 'handleImport')
+			}, sr.T('sub_import_btn'))
+		]);
+
 		var refreshBox = E('div', { 'class': 'cbi-section' }, [
 			E('h3', {}, sr.T('refresh_settings_title')),
 			E('label', {}, sr.T('refresh_interval_label')),
@@ -194,46 +406,24 @@ return view.extend({
 				E('input', { 'type': 'number', 'id': 'sr-refresh-hours', 'class': 'cbi-input-text', 'min': '1', 'style': 'flex:1', 'value': String(refreshHours) }),
 				E('button', { 'class': 'cbi-button', 'click': ui.createHandlerFn(view, 'handleSaveRefreshHours') }, sr.T('refresh_save_btn'))
 			]),
-			E('button', { 'class': 'cbi-button', 'click': ui.createHandlerFn(view, 'handleRefreshNow') }, sr.T('refresh_now_btn'))
+			E('button', { 'class': 'cbi-button', 'click': ui.createHandlerFn(view, 'handleRefreshAllNow') }, sr.T('refresh_now_btn'))
 		]);
 
 		var root = E('div', {}, [
 			sr.langSwitchButton(),
 			E('h2', {}, sr.T('app_name') + ' — ' + sr.T('nav_subscriptions')),
-			E('p', {}, sr.T('sub_intro')),
-			E('div', { 'class': 'cbi-section' }, [
-				E('input', {
-					'type': 'text', 'id': 'sr-sub-url', 'class': 'cbi-input-text',
-					'style': 'width:100%;max-width:640px;display:block;margin-bottom:.5em',
-					'placeholder': sr.T('sub_url_placeholder')
-				}),
-				E('input', {
-					'type': 'text', 'id': 'sr-sub-label', 'class': 'cbi-input-text',
-					'style': 'width:100%;max-width:320px;display:block;margin-bottom:.5em',
-					'placeholder': sr.T('sub_label_placeholder')
-				}),
-				E('label', {}, sr.T('sub_client_label')),
-				E('div', { 'style': 'margin:.25em 0' }, [clientSelect]),
-				E('p', { 'class': 'cbi-value-description' }, sr.T('sub_client_hint')),
-				E('a', {
-					'href': '#', 'style': 'display:inline-block;margin:.25em 0 .75em',
-					'click': function (ev) { ev.preventDefault(); view.handleToggleAdvanced(ev); }
-				}, '▸ ' + sr.T('sub_advanced_toggle')),
-				advancedBox,
-				E('button', {
-					'class': 'cbi-button cbi-button-positive',
-					'click': ui.createHandlerFn(view, 'handleImport')
-				}, sr.T('sub_import_btn'))
-			]),
+
+			addBox,
 			refreshBox,
-			E('div', { 'style': 'display:flex;align-items:center;gap:1em' }, [
-				E('h3', { 'style': 'margin:0' }, sr.T('sub_table_title')),
-				E('button', { 'class': 'cbi-button', 'click': ui.createHandlerFn(view, 'handlePing') }, sr.T('ping_btn'))
+
+			E('div', { 'style': 'display:flex;align-items:center;gap:1em;margin-top:1em' }, [
+				E('h3', { 'style': 'margin:0' }, sr.T('sub_subscriptions_title')),
+				E('button', { 'class': 'cbi-button', 'click': ui.createHandlerFn(view, 'handlePingAll') }, sr.T('sub_ping_all_btn'))
 			]),
-			E('div', { 'id': 'sr-servers-table' })
+			E('div', { 'id': 'sr-subscriptions-list', 'style': 'margin-top:.5em' })
 		]);
 
-		requestAnimationFrame(function () { view.renderTable(); });
+		requestAnimationFrame(function () { view.renderSubscriptions(); });
 
 		return root;
 	}

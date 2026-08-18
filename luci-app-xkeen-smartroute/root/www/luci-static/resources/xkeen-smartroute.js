@@ -64,6 +64,24 @@ var callAddCustomDomain = rpc.declare({
 	object: 'luci.xkeen-smartroute', method: 'add_custom_domain',
 	params: ['list_name', 'domains']
 });
+var _callListCustomLists = rpc.declare({
+	object: 'luci.xkeen-smartroute', method: 'list_custom_lists'
+});
+function callListCustomLists() {
+	return _callListCustomLists().then(function (r) { return (r && r.lists) || []; });
+}
+var callDeleteCustomList = rpc.declare({
+	object: 'luci.xkeen-smartroute', method: 'delete_custom_list',
+	params: ['key']
+});
+var callAddDomainToList = rpc.declare({
+	object: 'luci.xkeen-smartroute', method: 'add_domain_to_list',
+	params: ['key', 'domain']
+});
+var callRemoveDomainFromList = rpc.declare({
+	object: 'luci.xkeen-smartroute', method: 'remove_domain_from_list',
+	params: ['key', 'domain']
+});
 var callGetStatus = rpc.declare({
 	object: 'luci.xkeen-smartroute', method: 'get_status'
 });
@@ -76,6 +94,24 @@ var _callPingServers = rpc.declare({
 });
 function callPingServers() {
 	return _callPingServers().then(function (r) { return (r && r.pings) || {}; });
+}
+var _callGetPings = rpc.declare({
+	object: 'luci.xkeen-smartroute', method: 'get_pings'
+});
+function callGetPings() {
+	return _callGetPings().then(function (r) { return (r && r.pings) || {}; });
+}
+var _callGetHealth = rpc.declare({
+	object: 'luci.xkeen-smartroute', method: 'get_health'
+});
+// health: {tag: {alive: bool, delay_ms: num, last_error: str}}, from
+// smartroute-gateway's failover.go -- a real VLESS/REALITY connection +
+// HTTP GET through each outbound (Xray's observatory), not a bare TCP
+// connect like the ping data above. A tag absent from this map hasn't been
+// reached by observatory's probe sweep yet (still sparse for a while after
+// every Xray restart -- see AGENTS.md), not confirmed either way.
+function callGetHealth() {
+	return _callGetHealth().then(function (r) { return (r && r.health) || {}; });
 }
 var _callGetRefreshHours = rpc.declare({
 	object: 'luci.xkeen-smartroute', method: 'get_refresh_hours'
@@ -115,12 +151,41 @@ var callRedirectSetIpv6Protect = rpc.declare({
 	object: 'luci.xkeen-smartroute', method: 'redirect_set_ipv6_protect',
 	params: ['enabled']
 });
+var callRedirectSetQuicProtect = rpc.declare({
+	object: 'luci.xkeen-smartroute', method: 'redirect_set_quic_protect',
+	params: ['enabled']
+});
 var _callListLanDevices = rpc.declare({
 	object: 'luci.xkeen-smartroute', method: 'list_lan_devices'
 });
 function callListLanDevices() {
 	return _callListLanDevices().then(function (r) { return (r && r.devices) || []; });
 }
+var _callListSubscriptions = rpc.declare({
+	object: 'luci.xkeen-smartroute', method: 'list_subscriptions'
+});
+function callListSubscriptions() {
+	return _callListSubscriptions().then(function (r) { return (r && r.subscriptions) || []; });
+}
+var callDeleteSubscription = rpc.declare({
+	object: 'luci.xkeen-smartroute', method: 'delete_subscription',
+	params: ['label']
+});
+var callRefreshSubscription = rpc.declare({
+	object: 'luci.xkeen-smartroute', method: 'refresh_subscription',
+	params: ['label']
+});
+var callPingSubscription = rpc.declare({
+	object: 'luci.xkeen-smartroute', method: 'ping_subscription',
+	params: ['label']
+});
+var callServiceStatus = rpc.declare({
+	object: 'luci.xkeen-smartroute', method: 'service_status'
+});
+var callServiceControl = rpc.declare({
+	object: 'luci.xkeen-smartroute', method: 'service_control',
+	params: ['service', 'action']
+});
 
 var DICT = {
 	app_name:            { ru: 'XKeen SmartRoute DanyByLC', en: 'XKeen SmartRoute DanyByLC' },
@@ -154,6 +219,10 @@ var DICT = {
 	col_protocol: { ru: 'Протокол', en: 'Protocol' },
 	col_subscription: { ru: 'Подписка', en: 'Subscription' },
 	col_ping: { ru: 'Пинг', en: 'Ping' },
+	col_health: { ru: 'Observatory', en: 'Observatory' },
+	health_alive: { ru: 'жив', en: 'alive' },
+	health_dead: { ru: 'мёртв', en: 'dead' },
+	health_unknown: { ru: 'ещё не проверен', en: 'not checked yet' },
 	no_servers: { ru: 'Пока нет ни одного сервера — импортируйте подписку выше.', en: 'No servers yet — import a subscription above.' },
 	ping_btn: { ru: 'Проверить пинг', en: 'Check ping' },
 	pinging: { ru: 'Проверяю…', en: 'Checking…' },
@@ -164,7 +233,16 @@ var DICT = {
 	refresh_now_btn: { ru: 'Обновить все подписки сейчас', en: 'Refresh all subscriptions now' },
 	refresh_now_started: { ru: 'Обновление запущено в фоне — обновите список серверов через несколько секунд', en: 'Refresh started in the background — reload the server list in a few seconds' },
 	refresh_saved_ok: { ru: 'Интервал сохранён', en: 'Interval saved' },
+	sub_add_title: { ru: 'Добавить подписку', en: 'Add a subscription' },
+	sub_subscriptions_title: { ru: 'Ваши подписки', en: 'Your subscriptions' },
+	sub_servers_word: { ru: 'серверов', en: 'servers' },
+	sub_ping_all_btn: { ru: 'Проверить пинг всех', en: 'Ping all' },
+	sub_ping_started: { ru: 'Проверка пинга запущена в фоне (по очереди, может занять время)', en: 'Ping check started in the background (one at a time, may take a while)' },
+	sub_no_subscriptions: { ru: 'Подписок пока нет — добавьте выше.', en: 'No subscriptions yet — add one above.' },
+	sub_delete_confirm: { ru: 'Удалить подписку «%s» и все её сервера?', en: 'Delete subscription "%s" and all its servers?' },
+	sub_refreshing_one: { ru: 'Обновляю…', en: 'Refreshing…' },
 
+	add_profile_title: { ru: 'Добавить профиль', en: 'Add a profile' },
 	profiles_intro: { ru: 'Профиль — это правило: «эти домены → на эти сервера». Можно направить список на один конкретный сервер (fixed) или на группу — тогда Xray сам будет постоянно выбирать самый быстрый живой сервер из группы (balancer / leastPing).',
 	                   en: 'A profile is a rule: "these domains → these servers". Point a list at one specific server (fixed), or at a group — Xray will then continuously pick the fastest healthy server from the group itself (balancer / leastPing).' },
 	profile_name: { ru: 'Название профиля', en: 'Profile name' },
@@ -182,6 +260,16 @@ var DICT = {
 	saved_ok: { ru: 'Сохранено, xray перезапущен', en: 'Saved, xray restarted' },
 	save_failed: { ru: 'Не удалось сохранить профиль', en: 'Failed to save profile' },
 	delete_btn: { ru: 'Удалить', en: 'Delete' },
+	edit_btn: { ru: 'Изменить', en: 'Edit' },
+	edit_loaded_note: { ru: 'Профиль загружен в форму выше — измените и сохраните', en: 'Profile loaded into the form above — change it and save' },
+	domains_manage_title: { ru: 'Управление списками доменов', en: 'Domain list management' },
+	domains_manage_intro: { ru: 'Ваши собственные списки доменов (не путать со списками из geosite Xray). Можно посмотреть, что в них, добавить или убрать отдельный домен, или удалить список целиком.',
+	                         en: "Your own domain lists (not the built-in Xray geosite categories). View what's in them, add or remove a single domain, or delete the whole list." },
+	domains_no_lists: { ru: 'Собственных списков пока нет — добавьте выше.', en: 'No custom lists yet — add one above.' },
+	domains_add_domain_placeholder: { ru: 'example.com', en: 'example.com' },
+	domains_delete_list_confirm: { ru: 'Удалить список «%s» целиком?', en: 'Delete list "%s" entirely?' },
+	domains_list_already_exists: { ru: 'Список с таким именем уже есть — добавьте домен в него ниже вместо создания нового.', en: "A list with that name already exists — add the domain to it below instead of creating a new one." },
+	domains_sanitized_note: { ru: 'Сохранён только домен (без адреса страницы): ', en: 'Only the domain was saved (page address stripped): ' },
 	existing_profiles: { ru: 'Существующие профили', en: 'Existing profiles' },
 	no_profiles: { ru: 'Профилей ещё нет.', en: 'No profiles yet.' },
 	col_domains: { ru: 'Домены', en: 'Domains' },
@@ -240,6 +328,9 @@ var DICT = {
 	prot_ipv6_title: { ru: 'Защита от утечек IPv6', en: 'IPv6 leak protection' },
 	prot_ipv6_intro: { ru: 'Наш перехват работает только для IPv4 — сайт, доступный по IPv6, может открыться напрямую через провайдера в обход VPN и всех правил/kill-switch. Эта опция полностью блокирует LAN→WAN IPv6-трафик, чтобы такие соединения падали и уходили через IPv4 (уже защищённый) вместо утечки.',
 	               en: "Our redirect is IPv4-only — a site reachable over IPv6 could load directly through your ISP, bypassing the VPN and every rule/kill-switch. This option blocks all LAN→WAN IPv6 traffic outright, so those connections fail closed and fall back to IPv4 (which is covered) instead of leaking." },
+	prot_quic_title: { ru: 'Защита от утечек через QUIC/HTTP3', en: 'QUIC/HTTP3 leak protection' },
+	prot_quic_intro: { ru: 'Наш перехват ловит только TCP-трафик. Сайты, объявляющие поддержку HTTP/3 (заголовок Alt-Svc: h3), браузер может открыть по QUIC — это тот же порт 443, но по UDP, и он проходит мимо перехвата целиком, в обход VPN и правил. Подтверждено на практике. Эта опция блокирует исходящий UDP на перехватываемых портах с LAN — браузеры при этом просто откатываются на обычный TCP/TLS, без потери функциональности.',
+	                en: "Our redirect only catches TCP traffic. A site that advertises HTTP/3 support (Alt-Svc: h3 header) may get requested over QUIC — the same port 443, but over UDP — which bypasses the redirect entirely, VPN and rules included. Confirmed in practice. This option blocks outbound UDP on the captured ports from the LAN; browsers just fall back to plain TCP/TLS cleanly, no functionality lost." },
 	prot_saving: { ru: 'Сохраняю…', en: 'Saving…' },
 	prot_saved_ok: { ru: 'Применено', en: 'Applied' },
 	prot_save_failed: { ru: 'Не удалось применить', en: 'Failed to apply' },
@@ -261,6 +352,95 @@ function T(key) {
 	var e = DICT[key];
 	if (!e) return key;
 	return e[lang] || e.ru || key;
+}
+
+// Flag emoji (pairs of Unicode Regional Indicator Symbols, U+1F1E6-U+1F1FF)
+// don't render as actual flags in several real environments -- Windows in
+// particular has never rendered a regional-indicator pair as a flag glyph
+// (shows the two letters in a box instead, by Microsoft's own long-standing
+// design choice), unlike macOS/iOS/Android. Server names pulled straight
+// from a subscription often lead with one ("🇩🇪 Германия 3"). Rather than
+// dropping the flag, swap it for an actual image -- the same approach
+// Discord/Slack/X use (Twemoji), served from jsDelivr's mirror of
+// jdecked/twemoji (the actively maintained continuation of Twitter's
+// original, now-archived project). No local asset bundling, but it does mean
+// the flag image needs the *browser's* own internet access to load -- not
+// the router's; if that fails (offline admin machine, CDN unreachable), the
+// onerror handler below just falls back to the plain emoji character.
+var TWEMOJI_SVG_BASE = 'https://cdn.jsdelivr.net/gh/jdecked/twemoji@latest/assets/svg/';
+
+function srFindFlag(s) {
+	try {
+		var m = /\p{Regional_Indicator}{2}/u.exec(s);
+	} catch (e) {
+		m = /[\uD83C][\uDDE6-\uDDFF][\uD83C][\uDDE6-\uDDFF]/.exec(s);
+	}
+	if (!m) return null;
+	var pair = m[0];
+	var codepoints = [];
+	for (var i = 0; i < pair.length;) {
+		var cp = pair.codePointAt(i);
+		codepoints.push(cp.toString(16));
+		i += (cp > 0xFFFF ? 2 : 1);
+	}
+	return { codepoints: codepoints.join('-'), index: m.index, length: pair.length };
+}
+
+// srRenderName(name) -> DOM node. The one (if any) flag-emoji pair found
+// anywhere in the string is replaced with a small <img>; everything else
+// (including any other, non-flag emoji, which render fine as-is) passes
+// through untouched. Safe to pass into E(...) as a child directly.
+function srRenderName(name) {
+	if (!name) return document.createTextNode('');
+	var flag = srFindFlag(name);
+	if (!flag) return document.createTextNode(name);
+	var before = name.slice(0, flag.index);
+	var glyph = name.slice(flag.index, flag.index + flag.length);
+	var after = name.slice(flag.index + flag.length);
+	var img = E('img', {
+		'src': TWEMOJI_SVG_BASE + flag.codepoints + '.svg',
+		'alt': glyph,
+		'style': 'height:1em;width:1.33em;vertical-align:-0.15em;margin:0 .15em 0 0'
+	});
+	img.addEventListener('error', function () {
+		img.replaceWith(document.createTextNode(glyph));
+	});
+	return E('span', {}, [document.createTextNode(before), img, document.createTextNode(after)]);
+}
+
+// srSpinner() -> a small inline spinning indicator, CSS-only (no external
+// asset). Injects its @keyframes once per page. Used anywhere a background
+// operation (ping/refresh, in particular) is in flight and the on-disk data
+// it'll eventually update hasn't changed yet -- showing the last cached
+// value during that window reads as a wrong/final result, not as "still
+// working", so callers should swap it in instead of the stale value.
+var _srSpinnerStyleInjected = false;
+function srSpinner() {
+	if (!_srSpinnerStyleInjected) {
+		document.head.appendChild(E('style', {}, '@keyframes sr-spin{to{transform:rotate(360deg)}}'));
+		_srSpinnerStyleInjected = true;
+	}
+	return E('span', {
+		'style': 'display:inline-block;width:.9em;height:.9em;border:2px solid var(--border-color-medium,#ccc);' +
+			'border-top-color:var(--color-primary,#2f7dd0);border-radius:50%;animation:sr-spin .7s linear infinite;' +
+			'vertical-align:-0.15em'
+	});
+}
+
+// srSanitizeDomain: mirrors sanitize_domain() in the rpcd backend exactly
+// (strip URL scheme, path/query/fragment, trailing :port, lowercase) --
+// pasting a full URL you just had open in a browser tab is the obvious
+// thing to try in a "domain" field, and the backend already saves the
+// sanitized form regardless, so showing the *un*-sanitized text back after
+// save would just be confusing. Doing it client-side too means the user
+// sees exactly what's going to be saved before they click anything.
+function srSanitizeDomain(s) {
+	if (!s) return s;
+	return s
+		.replace(/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//, '')
+		.replace(/[/?#].*$/, '')
+		.replace(/:\d+$/, '')
+		.toLowerCase();
 }
 
 function srLangSwitchButton() {
@@ -315,10 +495,16 @@ return L.Class.extend({
 		saveProfile: callSaveProfile,
 		deleteProfile: callDeleteProfile,
 		addCustomDomain: callAddCustomDomain,
+		listCustomLists: callListCustomLists,
+		deleteCustomList: callDeleteCustomList,
+		addDomainToList: callAddDomainToList,
+		removeDomainFromList: callRemoveDomainFromList,
 		getStatus: callGetStatus,
 		killswitchSet: callKillswitchSet,
 		randomHwid: callRandomHwid,
 		pingServers: callPingServers,
+		getPings: callGetPings,
+		getHealth: callGetHealth,
 		getRefreshHours: callGetRefreshHours,
 		setRefreshHours: callSetRefreshHours,
 		refreshNow: callRefreshNow,
@@ -328,12 +514,22 @@ return L.Class.extend({
 		redirectSetPorts: callRedirectSetPorts,
 		redirectSetDnsProtect: callRedirectSetDnsProtect,
 		redirectSetIpv6Protect: callRedirectSetIpv6Protect,
-		listLanDevices: callListLanDevices
+		redirectSetQuicProtect: callRedirectSetQuicProtect,
+		listLanDevices: callListLanDevices,
+		listSubscriptions: callListSubscriptions,
+		deleteSubscription: callDeleteSubscription,
+		refreshSubscription: callRefreshSubscription,
+		pingSubscription: callPingSubscription,
+		serviceStatus: callServiceStatus,
+		serviceControl: callServiceControl
 	},
 	T: T,
 	lang: srLang,
 	setLang: srSetLang,
 	langSwitchButton: srLangSwitchButton,
+	renderName: srRenderName,
+	spinner: srSpinner,
+	sanitizeDomain: srSanitizeDomain,
 	CLIENT_PRESETS: CLIENT_PRESETS,
 	DEVICE_OS_OPTIONS: DEVICE_OS_OPTIONS,
 	DEVICE_MODEL_OPTIONS: DEVICE_MODEL_OPTIONS,

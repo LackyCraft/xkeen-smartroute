@@ -3,6 +3,8 @@
 'require ui';
 'require xkeen-smartroute as sr';
 
+var BOX_STYLE = 'border:1px solid var(--border-color-medium,#ccc);border-radius:6px;padding:1em;margin-bottom:1.25em';
+
 return view.extend({
 	load: function () {
 		return sr.rpc.redirectStatus();
@@ -38,6 +40,16 @@ return view.extend({
 		});
 	},
 
+	handleQuicToggle: function (ev) {
+		var view = this;
+		var enabled = ev.target.checked;
+		ev.target.disabled = true;
+		return sr.rpc.redirectSetQuicProtect(enabled).then(function (status) {
+			ev.target.disabled = false;
+			view.applyStatus(status);
+		});
+	},
+
 	handleSavePorts: function (ev) {
 		var view = this;
 		var ports = view.portsInput.value.trim();
@@ -58,6 +70,7 @@ return view.extend({
 		if (this.enabledToggle) this.enabledToggle.checked = !!status.enabled;
 		if (this.dnsToggle) this.dnsToggle.checked = !!status.dns_protect;
 		if (this.ipv6Toggle) this.ipv6Toggle.checked = !!status.ipv6_protect;
+		if (this.quicToggle) this.quicToggle.checked = !!status.quic_protect;
 		if (this.portsInput && typeof status.ports === 'string') this.portsInput.value = status.ports;
 	},
 
@@ -77,6 +90,10 @@ return view.extend({
 		view.ipv6Toggle.checked = !!status.ipv6_protect;
 		view.ipv6Toggle.addEventListener('change', function (ev) { view.handleIpv6Toggle(ev); });
 
+		view.quicToggle = E('input', { 'type': 'checkbox' });
+		view.quicToggle.checked = !!status.quic_protect;
+		view.quicToggle.addEventListener('change', function (ev) { view.handleQuicToggle(ev); });
+
 		view.portsInput = E('input', {
 			'type': 'text',
 			'class': 'cbi-input-text',
@@ -91,8 +108,8 @@ return view.extend({
 			sr.langSwitchButton(),
 			E('h2', {}, sr.T('app_name') + ' — ' + sr.T('nav_protection')),
 
-			E('div', { 'class': 'cbi-section' }, [
-				E('p', {}, sr.T('prot_intro')),
+			E('div', { 'style': BOX_STYLE }, [
+				E('p', { 'style': 'margin-top:0' }, sr.T('prot_intro')),
 				E('label', { 'class': 'cbi-value' }, [
 					view.enabledToggle,
 					' ',
@@ -100,16 +117,16 @@ return view.extend({
 				])
 			]),
 
-			E('div', { 'class': 'cbi-section' }, [
+			E('div', { 'style': BOX_STYLE }, [
 				E('label', { 'class': 'cbi-value-title' }, sr.T('prot_ports_label')),
-				E('div', { 'style': 'display:flex;gap:.5em;align-items:center;max-width:20em' }, [
+				E('div', { 'style': 'display:flex;gap:.5em;align-items:center;max-width:20em;margin-top:.35em' }, [
 					view.portsInput,
 					savePortsBtn
 				])
 			]),
 
-			E('div', { 'class': 'cbi-section' }, [
-				E('h3', {}, sr.T('prot_dns_title')),
+			E('div', { 'style': BOX_STYLE }, [
+				E('h3', { 'style': 'margin-top:0' }, sr.T('prot_dns_title')),
 				E('p', { 'class': 'cbi-value-description' }, sr.T('prot_dns_intro')),
 				E('label', { 'class': 'cbi-value' }, [
 					view.dnsToggle,
@@ -118,13 +135,23 @@ return view.extend({
 				])
 			]),
 
-			E('div', { 'class': 'cbi-section' }, [
-				E('h3', {}, sr.T('prot_ipv6_title')),
+			E('div', { 'style': BOX_STYLE }, [
+				E('h3', { 'style': 'margin-top:0' }, sr.T('prot_ipv6_title')),
 				E('p', { 'class': 'cbi-value-description' }, sr.T('prot_ipv6_intro')),
 				E('label', { 'class': 'cbi-value' }, [
 					view.ipv6Toggle,
 					' ',
 					sr.T('prot_ipv6_title')
+				])
+			]),
+
+			E('div', { 'style': BOX_STYLE }, [
+				E('h3', { 'style': 'margin-top:0' }, sr.T('prot_quic_title')),
+				E('p', { 'class': 'cbi-value-description' }, sr.T('prot_quic_intro')),
+				E('label', { 'class': 'cbi-value' }, [
+					view.quicToggle,
+					' ',
+					sr.T('prot_quic_title')
 				])
 			])
 		]);
