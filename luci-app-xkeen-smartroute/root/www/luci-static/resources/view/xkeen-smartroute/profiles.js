@@ -301,6 +301,16 @@ return view.extend({
 		var devices = Array.prototype.slice.call(
 			document.querySelectorAll('input[name="sr-device-choice"]:checked')
 		).map(function (i) { return i.value; });
+		var ipRangesRaw = document.getElementById('sr-ip-ranges').value.trim();
+		var ip_ranges = ipRangesRaw ? ipRangesRaw.split(/[\s,]+/).map(function (s) { return s.trim(); }).filter(Boolean) : [];
+		// IPv4/IPv6 address or CIDR only -- matches what genroute.sh itself
+		// accepts server-side; catching a typo here beats a save-time
+		// error round-trip.
+		var badIp = ip_ranges.filter(function (s) { return !/^[0-9a-fA-F.:]+(\/\d{1,3})?$/.test(s); })[0];
+		if (badIp) {
+			ui.addNotification(null, E('p', {}, sr.T('ip_ranges_invalid') + ': ' + badIp));
+			return;
+		}
 
 		if (!name) { ui.addNotification(null, E('p', {}, sr.T('profile_name'))); return; }
 		if (!chosen.length) { ui.addNotification(null, E('p', {}, sr.T('need_servers_first'))); return; }
@@ -314,12 +324,12 @@ return view.extend({
 			domain_source = { type: 'custom', file: srcRaw.slice('custom::'.length) };
 		}
 
-		if (domain_source.type === 'any' && !devices.length) {
+		if (domain_source.type === 'any' && !devices.length && !ip_ranges.length) {
 			ui.addNotification(null, E('p', {}, sr.T('devices_no_domain_warning')));
 			return;
 		}
 
-		var profile = { name: name, domain_source: domain_source, mode: mode, devices: devices };
+		var profile = { name: name, domain_source: domain_source, mode: mode, devices: devices, ip_ranges: ip_ranges };
 		if (mode === 'fixed') profile.fixed_server = chosen[0];
 		else profile.servers = chosen;
 
@@ -377,6 +387,7 @@ return view.extend({
 		});
 
 		(p.devices || []).forEach(function (d) { view.addDeviceCheckbox(d, d, true); });
+		document.getElementById('sr-ip-ranges').value = (p.ip_ranges || []).join('\n');
 
 		window.scrollTo({ top: 0, behavior: 'smooth' });
 		ui.addNotification(null, E('p', {}, sr.T('edit_loaded_note')), 'info');
@@ -451,11 +462,13 @@ return view.extend({
 
 		profiles.forEach(function (p) {
 			var srcType = (p.domain_source && p.domain_source.type) || 'any';
+			var ipRanges = p.ip_ranges || [];
 			var domainsParts = [];
 			if (srcType === 'geosite') domainsParts.push('geosite:' + p.domain_source.value);
 			else if (srcType === 'custom') domainsParts.push(p.domain_source.file);
-			else domainsParts.push(sr.T('domain_source_any'));
+			else if (!ipRanges.length) domainsParts.push(sr.T('domain_source_any'));
 			if ((p.devices || []).length) domainsParts.push('📱 ' + p.devices.join(', '));
+			if (ipRanges.length) domainsParts.push('🌐 ' + ipRanges.join(', '));
 
 			var targetNode;
 			if (p.mode === 'fixed') {
@@ -569,6 +582,14 @@ return view.extend({
 				}, sr.T('devices_manual_add'))
 			]),
 			E('div', { 'id': 'sr-device-picker', 'style': 'margin:.25em 0 1em' }),
+
+			E('label', {}, sr.T('ip_ranges_title')),
+			E('p', { 'class': 'cbi-value-description', 'style': 'margin:.25em 0' }, sr.T('ip_ranges_intro')),
+			E('textarea', {
+				'id': 'sr-ip-ranges', 'class': 'cbi-input-textarea', 'rows': 4,
+				'style': 'display:block;width:100%;max-width:28em;margin:.25em 0 1em',
+				'placeholder': sr.T('ip_ranges_placeholder')
+			}),
 
 			E('button', {
 				'class': 'cbi-button cbi-button-positive',

@@ -62,16 +62,50 @@ device_match_array() {
 	jq -c '[(.devices // [])[] | select(length > 0)]' "$1"
 }
 
-# build_rule_fields <profile.json> -> partial JSON object with "domain"
-# and/or "source" keys, whichever the profile actually restricts by. Merged
-# with {type:"field", outboundTag|balancerTag:...} by the caller. jq's `+`
-# on objects unions keys, so accumulating like this cleanly omits whichever
-# side is unrestricted instead of writing a key that matches nothing.
-build_rule_fields() {
+# ip_match_array: profile json -> jq array of Xray "ip" match strings
+# (IPv4/IPv6 addresses or CIDR blocks). Optional, separate from domain
+# matching entirely -- see build_rule_list's own comment for why.
+ip_match_array() {
+	jq -c '[(.ip_ranges // [])[] | select(length > 0)]' "$1"
+}
+
+# build_rule_list <profile.json> -> jq array of partial JSON objects, one
+# per Xray routing rule this profile needs (usually one, sometimes two).
+# Each has "domain" and/or "source", or "ip" and/or "source" -- never
+# "domain" and "ip" on the *same* rule object, and that split is the whole
+# point of this function: Xray ANDs every field present on one rule
+# together, so a single {domain:[...], ip:[...]} rule would mean "matches
+# this domain list AND is this destination IP" (matches almost nothing),
+# not the "matches this domain list OR is this destination IP" a profile
+# actually wants. Emitting them as separate rule objects -- both pointing at
+# the same outboundTag by the caller -- gets OR semantics for free from
+# Xray's own "first matching rule in the array wins" behavior instead.
+#
+# ip_ranges exists because plenty of real apps' *native* clients don't route
+# by domain at all: Telegram's desktop/mobile apps talk MTProto, which
+# mostly dials known datacenter IP ranges directly with no DNS lookup or TLS
+# SNI for Xray's sniffer to see -- confirmed for real: web.telegram.org
+# (ordinary HTTPS, a real SNI, matched fine by geosite:telegram) worked
+# while the native apps on phone/desktop didn't, on the exact same profile.
+# A domain-only rule can never catch that traffic; only an IP/CIDR-based one
+# can. Each entry is Telegram's/whatever app's own published datacenter
+# ranges, pasted in by the user -- SmartRoute doesn't hardcode any app's IP
+# list itself (they drift over time and aren't something to bit-rot in this
+# repo).
+build_rule_list() {
 	domains="$(domain_match_array "$1")"
 	devices="$(device_match_array "$1")"
-	jq -n --argjson d "$domains" --argjson s "$devices" \
-		'{} + (if ($d|length) > 0 then {domain:$d} else {} end) + (if ($s|length) > 0 then {source:$s} else {} end)'
+	ips="$(ip_match_array "$1")"
+	jq -n --argjson d "$domains" --argjson s "$devices" --argjson i "$ips" '
+		[
+			(if ($d|length) > 0 or ($i|length) == 0 then
+				{} + (if ($d|length) > 0 then {domain:$d} else {} end) + (if ($s|length) > 0 then {source:$s} else {} end)
+			else empty end),
+			(if ($i|length) > 0 then
+				{ip:$i} + (if ($s|length) > 0 then {source:$s} else {} end)
+			else empty end)
+		]
+	'
 }
 
 # sr_pick_top1: profile json -> the single best server tag from its
@@ -222,7 +256,7 @@ sr_regen() {
 		[ -e "$pf" ] || continue
 		name="$(jq -r '.name' "$pf")"
 		mode="$(jq -r '.mode' "$pf")"
-		fields="$(build_rule_fields "$pf")"
+		field_list="$(build_rule_list "$pf")"
 
 		if [ "$mode" = "fixed" ]; then
 			target_tag="$(jq -r '.fixed_server' "$pf")"
@@ -230,8 +264,12 @@ sr_regen() {
 			target_tag="$(sr_pick_top1 "$pf" "$skip_fresh_ping")"
 		fi
 		[ -n "$target_tag" ] || { sr_log "profile '$name' has no servers, skipping"; continue; }
-		rule="$(echo "$fields" | jq --arg tag "$target_tag" '. + {type:"field", outboundTag:$tag}')"
-		rules="$(echo "$rules" | jq --argjson r "$rule" '. + [$r]')"
+		# build_rule_list can return more than one rule fragment (a plain
+		# domain rule plus a separate ip_ranges rule -- see its own comment
+		# for why they can't be merged into one) -- all of them route to the
+		# same target_tag, so they're just appended as independent entries.
+		new_rules="$(echo "$field_list" | jq --arg tag "$target_tag" 'map(. + {type:"field", outboundTag:$tag})')"
+		rules="$(echo "$rules" | jq --argjson r "$new_rules" '. + $r')"
 		current="$(echo "$current" | jq --arg name "$name" --arg tag "$target_tag" '. + {($name): $tag}')"
 	done
 
@@ -315,16 +353,17 @@ case "${1:-}" in
 		name="$(jq -r '.name' "$2")"
 		[ -n "$name" ] && [ "$name" != "null" ] || sr_die "profile json must have a .name"
 
-		# A profile with neither a domain restriction nor a device
-		# restriction would generate a rule matching every domain from
-		# every device -- silently shadowing every other profile (rule
-		# order = array order, first match wins) and our own catch-all.
-		# Reject it at save time with a clear reason instead of letting it
-		# through to become a confusing routing bug.
+		# A profile matching by none of domain, device, or ip_ranges would
+		# generate a rule matching every domain from every device --
+		# silently shadowing every other profile (rule order = array order,
+		# first match wins) and our own catch-all. Reject it at save time
+		# with a clear reason instead of letting it through to become a
+		# confusing routing bug.
 		src_type="$(jq -r '.domain_source.type // "any"' "$2")"
 		n_devices="$(jq '[(.devices // [])[] | select(length > 0)] | length' "$2")"
-		if [ "$src_type" = "any" ] && [ "$n_devices" -eq 0 ]; then
-			sr_die "profile must match by domain, by device, or both -- got neither"
+		n_ip_ranges="$(jq '[(.ip_ranges // [])[] | select(length > 0)] | length' "$2")"
+		if [ "$src_type" = "any" ] && [ "$n_devices" -eq 0 ] && [ "$n_ip_ranges" -eq 0 ]; then
+			sr_die "profile must match by domain, device, or IP range -- got none"
 		fi
 
 		# IPv4 address or CIDR only -- Xray's routing "source" field doesn't
@@ -334,6 +373,14 @@ case "${1:-}" in
 		for dev in $(jq -r '(.devices // [])[]' "$2" 2>/dev/null); do
 			case "$dev" in
 				*[!0-9./]*) sr_die "invalid device entry '$dev' -- expected an IPv4 address or CIDR (e.g. 192.168.1.50 or 192.168.1.0/24)" ;;
+			esac
+		done
+
+		# IPv4/IPv6 address or CIDR only, same reasoning as devices above --
+		# Xray's "ip" routing field rejects anything else outright.
+		for ipr in $(jq -r '(.ip_ranges // [])[]' "$2" 2>/dev/null); do
+			case "$ipr" in
+				*[!0-9a-fA-F.:/]*) sr_die "invalid IP range '$ipr' -- expected an IPv4/IPv6 address or CIDR (e.g. 91.108.56.0/22)" ;;
 			esac
 		done
 
