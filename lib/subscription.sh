@@ -275,7 +275,21 @@ sr_import() {
 	[ -s "$SR_OUTBOUNDS_STATE_FILE" ] || echo '[]' >"$SR_OUTBOUNDS_STATE_FILE"
 
 	jq --arg lbl "$label" '[.[] | select(.subscription != $lbl)]' "$SR_SERVERS_FILE" >"$SR_SERVERS_FILE.new"
-	jq -s '.[0] + .[1] | unique_by(.tag)' "$SR_SERVERS_FILE.new" "$tmp_servers" >"$SR_SERVERS_FILE"
+	# unique_by(.tag) used to sit here, but jq's unique/unique_by SORTS its
+	# result by the extraction key -- it doesn't just dedup. That silently
+	# reordered every subscription's server list alphabetically by tag on
+	# every import/refresh, discarding the order the subscription server
+	# itself sent (which the UI's "Ваши подписки" list is supposed to
+	# mirror). This keeps first-seen order instead: tag the merged array
+	# with its original index (to_entries), group duplicate tags together
+	# (group_by is a stable sort, so each group's first element is the
+	# first occurrence), keep just that first element per tag, then
+	# sort_by the original index to restore the pre-dedup ordering.
+	jq -s '
+		(.[0] + .[1]) as $all |
+		($all | to_entries | group_by(.value.tag) | map(.[0])) as $first |
+		($first | sort_by(.key) | map(.value))
+	' "$SR_SERVERS_FILE.new" "$tmp_servers" >"$SR_SERVERS_FILE"
 	rm -f "$SR_SERVERS_FILE.new"
 
 	# Same full replace-by-label semantics as servers.json above, not a
@@ -289,10 +303,27 @@ sr_import() {
 	# filter; the label itself is stripped back out below before this ever
 	# reaches Xray's real config.
 	jq --arg lbl "$label" '[.[] | select(.subscription != $lbl)]' "$SR_OUTBOUNDS_STATE_FILE" >"$SR_OUTBOUNDS_STATE_FILE.new"
-	jq -s '.[0] + .[1] | unique_by(.tag)' "$SR_OUTBOUNDS_STATE_FILE.new" "$tmp_outbounds" >"$SR_OUTBOUNDS_STATE_FILE"
+	# Same order-preserving dedup as servers.json above, not unique_by(.tag)
+	# (which sorts by tag).
+	jq -s '
+		(.[0] + .[1]) as $all |
+		($all | to_entries | group_by(.value.tag) | map(.[0])) as $first |
+		($first | sort_by(.key) | map(.value))
+	' "$SR_OUTBOUNDS_STATE_FILE.new" "$tmp_outbounds" >"$SR_OUTBOUNDS_STATE_FILE"
 	rm -f "$SR_OUTBOUNDS_STATE_FILE.new"
 
-	jq -n --argjson list "$(jq '[.[] | del(.subscription)]' "$SR_OUTBOUNDS_STATE_FILE")" '{outbounds:$list}' >"$SR_OUTBOUNDS_FILE"
+	# Not `jq -n --argjson list "$(jq ... "$SR_OUTBOUNDS_STATE_FILE")" ...` --
+	# piping a large outbounds set (real subscriptions here run well past a
+	# hundred servers) through the shell as a single command-line argument
+	# hits the OS's ARG_MAX and fails outright ("Argument list too long"),
+	# and since `>` truncates its target file before the command even runs,
+	# that failure was silently leaving Xray's real outbounds config as a
+	# 0-byte file -- confirmed for real on this project's own test router at
+	# 192 servers. Reading the state file directly (no shell argument in the
+	# middle) and writing to a temp file before the final `mv` avoids both
+	# the size limit and ever leaving a truncated file if something does
+	# still go wrong mid-write.
+	jq '{outbounds: [.[] | del(.subscription)]}' "$SR_OUTBOUNDS_STATE_FILE" >"$SR_OUTBOUNDS_FILE.tmp" && mv "$SR_OUTBOUNDS_FILE.tmp" "$SR_OUTBOUNDS_FILE"
 
 	count="$(jq 'length' "$SR_SERVERS_FILE")"
 	sr_log "imported subscription '$label': now $count server(s) known in total"
@@ -375,14 +406,91 @@ sr_do_refresh() {
 	jq -n --arg now "$now" '{last: ($now|tonumber)}' >"$SR_REFRESH_STATE_FILE"
 }
 
-# --- ping: TCP-connect latency per server, run in parallel ---
+# --- subscriptions as first-class entities: list/delete/refresh-one ---
+# SR_SUBS_META_FILE (saved by sr_save_subscription_meta on every import)
+# already has everything needed to treat a subscription as its own object
+# instead of just a label string stamped on servers/outbounds.
+
+sr_list_subscriptions() {
+	sr_ensure_dirs
+	[ -s "$SR_SUBS_META_FILE" ] || { echo '[]'; return 0; }
+	[ -s "$SR_SERVERS_FILE" ] || echo '[]' >"$SR_SERVERS_FILE"
+	jq -n --slurpfile subs "$SR_SUBS_META_FILE" --slurpfile servers "$SR_SERVERS_FILE" '
+		($servers[0] // []) as $srv |
+		[$subs[0][] | . as $sub | $sub + {server_count: ([$srv[] | select(.subscription == $sub.label)] | length)}]
+	'
+}
+
+# delete-subscription: removes every server/outbound this label ever
+# contributed (same filter sr_import already uses to *replace* a label's
+# entries on refresh -- deleting is just replacing with nothing) and drops
+# its saved meta entry so it stops being auto-refreshed. Restarts Xray so
+# the smaller outbound set actually takes effect; a profile that referenced
+# one of the removed servers is left alone here (sr_restart_xray's own
+# pre-restart validation is what catches that, same as any other stale-tag
+# situation -- see AGENTS.md).
+sr_delete_subscription() {
+	label="${1:?subscription label required}"
+	sr_ensure_dirs
+	[ -s "$SR_SERVERS_FILE" ] || echo '[]' >"$SR_SERVERS_FILE"
+	[ -s "$SR_OUTBOUNDS_STATE_FILE" ] || echo '[]' >"$SR_OUTBOUNDS_STATE_FILE"
+
+	jq --arg lbl "$label" '[.[] | select(.subscription != $lbl)]' "$SR_SERVERS_FILE" >"$SR_SERVERS_FILE.new"
+	mv "$SR_SERVERS_FILE.new" "$SR_SERVERS_FILE"
+	jq --arg lbl "$label" '[.[] | select(.subscription != $lbl)]' "$SR_OUTBOUNDS_STATE_FILE" >"$SR_OUTBOUNDS_STATE_FILE.new"
+	mv "$SR_OUTBOUNDS_STATE_FILE.new" "$SR_OUTBOUNDS_STATE_FILE"
+	# Not `jq -n --argjson list "$(jq ... "$SR_OUTBOUNDS_STATE_FILE")" ...` --
+	# piping a large outbounds set (real subscriptions here run well past a
+	# hundred servers) through the shell as a single command-line argument
+	# hits the OS's ARG_MAX and fails outright ("Argument list too long"),
+	# and since `>` truncates its target file before the command even runs,
+	# that failure was silently leaving Xray's real outbounds config as a
+	# 0-byte file -- confirmed for real on this project's own test router at
+	# 192 servers. Reading the state file directly (no shell argument in the
+	# middle) and writing to a temp file before the final `mv` avoids both
+	# the size limit and ever leaving a truncated file if something does
+	# still go wrong mid-write.
+	jq '{outbounds: [.[] | del(.subscription)]}' "$SR_OUTBOUNDS_STATE_FILE" >"$SR_OUTBOUNDS_FILE.tmp" && mv "$SR_OUTBOUNDS_FILE.tmp" "$SR_OUTBOUNDS_FILE"
+
+	[ -s "$SR_SUBS_META_FILE" ] || echo '[]' >"$SR_SUBS_META_FILE"
+	jq --arg lbl "$label" '[.[] | select(.label != $lbl)]' "$SR_SUBS_META_FILE" >"$SR_SUBS_META_FILE.new"
+	mv "$SR_SUBS_META_FILE.new" "$SR_SUBS_META_FILE"
+
+	sr_restart_xray || true
+	sr_log "subscription '$label' deleted"
+}
+
+# refresh-one: re-runs sr_import with exactly the saved params for one
+# label, instead of sr_do_refresh's loop over every saved subscription --
+# what the Subscriptions page's per-subscription "Обновить" button calls.
+sr_refresh_one() {
+	label="${1:?subscription label required}"
+	sr_ensure_dirs
+	[ -s "$SR_SUBS_META_FILE" ] || sr_die "no saved subscriptions"
+	entry="$(jq -c --arg lbl "$label" '.[] | select(.label == $lbl)' "$SR_SUBS_META_FILE")"
+	[ -n "$entry" ] || sr_die "unknown subscription '$label'"
+	u="$(printf '%s' "$entry" | jq -r '.url')"
+	c="$(printf '%s' "$entry" | jq -r '.client')"
+	o="$(printf '%s' "$entry" | jq -r '.os')"
+	lo="$(printf '%s' "$entry" | jq -r '.locale')"
+	m="$(printf '%s' "$entry" | jq -r '.model')"
+	v="$(printf '%s' "$entry" | jq -r '.ver')"
+	h="$(printf '%s' "$entry" | jq -r '.hwid')"
+	sr_import "$u" "$label" "$c" "$o" "$lo" "$m" "$v" "$h"
+	sr_restart_xray
+}
+
+# --- ping: TCP-connect latency per server ---
 # Real usability signal without needing a raw-socket ICMP ping (which would
 # need to run as root anyway and gets blocked by some networks/servers);
 # curl's time_connect is just the TCP handshake, independent of whether TLS
-# or the VPN handshake itself succeeds. Run in the background per server and
-# wait, rather than one after another -- 70 servers at up to a few seconds
-# each, sequentially, would make the button take minutes instead of ~3-4s.
-SR_PING_FILE="$SR_STATE_DIR/ping.json"
+# or the VPN handshake itself succeeds. Sequential, not backgrounded/parallel
+# -- confirmed on real hardware (this project's own test router, ~250MB RAM,
+# no swap) that firing many concurrent probes at once (the same mistake
+# observatory's enableConcurrency made, see AGENTS.md) spikes load and memory
+# enough to produce false timeouts, or worse. Slower for a big subscription,
+# but doesn't lie and doesn't risk another OOM.
+# SR_PING_FILE now lives in common.sh (genroute.sh's sr_pick_top1 also needs it)
 SR_PING_TIMEOUT=3
 
 sr_ping_one() {
@@ -415,18 +523,13 @@ sr_ping_all() {
 	tmp_list="$(mktemp)"
 	jq -c '.[]' "$SR_SERVERS_FILE" > "$tmp_list"
 	i=0
-	# Read from a real file, not a `cmd | while read` pipe: piping into the
-	# loop would run it (and every `&` job started inside it) in a subshell,
-	# so the `wait` below -- in the parent shell -- would have no children to
-	# wait for and return immediately, before any ping finished.
 	while IFS= read -r s; do
 		i=$((i + 1))
 		tag="$(printf '%s' "$s" | jq -r '.tag')"
 		host="$(printf '%s' "$s" | jq -r '.address')"
 		port="$(printf '%s' "$s" | jq -r '.port // 443')"
-		sr_ping_one "$tag" "$host" "$port" "$tmp_dir/$i.json" &
+		sr_ping_one "$tag" "$host" "$port" "$tmp_dir/$i.json"
 	done < "$tmp_list"
-	wait
 	rm -f "$tmp_list"
 
 	jq -s '[.[]] | INDEX(.tag) | map_values(.ping_ms)' "$tmp_dir"/*.json 2>/dev/null > "$SR_PING_FILE" || echo '{}' > "$SR_PING_FILE"
@@ -434,13 +537,98 @@ sr_ping_all() {
 	cat "$SR_PING_FILE"
 }
 
+# ping-subscription: same one-at-a-time probing as sr_ping_all, but scoped
+# to a single label's servers -- what the Subscriptions page's
+# per-subscription "Проверить пинг" button calls. Results are merged into
+# the same SR_PING_FILE other subscriptions' cached values already live in,
+# not a separate file, so the UI reads ping data from one place regardless
+# of which button (per-subscription or "ping everything") last ran.
+sr_ping_subscription() {
+	label="${1:?subscription label required}"
+	sr_require curl; sr_require jq
+	sr_ensure_dirs
+	[ -s "$SR_SERVERS_FILE" ] || { echo '{}'; return 0; }
+	tmp_dir="$(mktemp -d)"
+	tmp_list="$(mktemp)"
+	jq -c --arg lbl "$label" '.[] | select(.subscription == $lbl)' "$SR_SERVERS_FILE" > "$tmp_list"
+	i=0
+	while IFS= read -r s; do
+		i=$((i + 1))
+		tag="$(printf '%s' "$s" | jq -r '.tag')"
+		host="$(printf '%s' "$s" | jq -r '.address')"
+		port="$(printf '%s' "$s" | jq -r '.port // 443')"
+		sr_ping_one "$tag" "$host" "$port" "$tmp_dir/$i.json"
+	done < "$tmp_list"
+	rm -f "$tmp_list"
+
+	[ -s "$SR_PING_FILE" ] || echo '{}' >"$SR_PING_FILE"
+	tmp_new="$(mktemp)"
+	jq -s '[.[]] | INDEX(.tag) | map_values(.ping_ms)' "$tmp_dir"/*.json 2>/dev/null > "$tmp_new" || echo '{}' > "$tmp_new"
+	# Merge into the existing ping cache (this subscription's tags overwrite
+	# their old values, every other subscription's cached pings pass through
+	# untouched) rather than replacing the whole file -- POSIX sh has no
+	# process substitution, so both inputs to jq -s have to be real files.
+	jq -s '.[0] * .[1]' "$SR_PING_FILE" "$tmp_new" > "$SR_PING_FILE.new" && mv "$SR_PING_FILE.new" "$SR_PING_FILE"
+	rm -f "$tmp_new"
+	rm -rf "$tmp_dir"
+	cat "$SR_PING_FILE"
+}
+
+# ping-tags: reads server tags one per line from stdin and pings just
+# those, sequentially, merging into the same shared ping cache
+# sr_ping_all/sr_ping_subscription write to. Scoped to an arbitrary tag
+# list rather than a whole subscription -- what genroute.sh's sr_pick_top1
+# uses to get a *fresh* reachability check against one profile's own server
+# pool (tens of servers) on every regen, instead of relying on
+# sr_ping_all's whole-subscription sweep (hundreds of servers, only run
+# every couple hours -- see install.sh's cron) which could be stale by the
+# time a specific profile's pick actually matters.
+sr_ping_tags() {
+	sr_require curl; sr_require jq
+	sr_ensure_dirs
+	[ -s "$SR_SERVERS_FILE" ] || { echo '{}'; return 0; }
+	tags_file="$(mktemp)"
+	cat > "$tags_file"
+	if [ ! -s "$tags_file" ]; then
+		rm -f "$tags_file"
+		[ -s "$SR_PING_FILE" ] && cat "$SR_PING_FILE" || echo '{}'
+		return 0
+	fi
+
+	tmp_dir="$(mktemp -d)"
+	i=0
+	while IFS= read -r tag; do
+		[ -n "$tag" ] || continue
+		i=$((i + 1))
+		entry="$(jq -c --arg t "$tag" '[.[] | select(.tag == $t)][0] // empty' "$SR_SERVERS_FILE")"
+		[ -n "$entry" ] || continue
+		host="$(printf '%s' "$entry" | jq -r '.address')"
+		port="$(printf '%s' "$entry" | jq -r '.port // 443')"
+		sr_ping_one "$tag" "$host" "$port" "$tmp_dir/$i.json"
+	done < "$tags_file"
+	rm -f "$tags_file"
+
+	[ -s "$SR_PING_FILE" ] || echo '{}' >"$SR_PING_FILE"
+	tmp_new="$(mktemp)"
+	jq -s '[.[]] | INDEX(.tag) | map_values(.ping_ms)' "$tmp_dir"/*.json 2>/dev/null > "$tmp_new" || echo '{}' > "$tmp_new"
+	jq -s '.[0] * .[1]' "$SR_PING_FILE" "$tmp_new" > "$SR_PING_FILE.new" && mv "$SR_PING_FILE.new" "$SR_PING_FILE"
+	rm -f "$tmp_new"
+	rm -rf "$tmp_dir"
+	cat "$SR_PING_FILE"
+}
+
 case "${1:-}" in
 	import) sr_import "$2" "${3:-sub}" "${4:-smartroute}" "${5:-}" "${6:-}" "${7:-}" "${8:-}" "${9:-}" ;;
 	list) sr_ensure_dirs; [ -s "$SR_SERVERS_FILE" ] && cat "$SR_SERVERS_FILE" || echo '[]' ;;
+	list-subscriptions) sr_list_subscriptions ;;
+	delete-subscription) sr_delete_subscription "${2:-}" ;;
 	refresh) sr_refresh_due ;;
 	refresh-now) sr_force_refresh ;;
+	refresh-one) sr_refresh_one "${2:-}" ;;
 	get-refresh-hours) sr_get_refresh_hours ;;
 	set-refresh-hours) sr_set_refresh_hours "${2:-}" ;;
 	ping) sr_ping_all ;;
-	*) echo "usage: $0 {import <url> [label] [client] [os] [locale] [model] [ver] [hwid]|list|refresh|refresh-now|get-refresh-hours|set-refresh-hours <n>|ping}" >&2; exit 1 ;;
+	ping-subscription) sr_ping_subscription "${2:-}" ;;
+	ping-tags) sr_ping_tags ;;
+	*) echo "usage: $0 {import <url> [label] [client] [os] [locale] [model] [ver] [hwid]|list|list-subscriptions|delete-subscription <label>|refresh|refresh-now|refresh-one <label>|get-refresh-hours|set-refresh-hours <n>|ping|ping-subscription <label>|ping-tags (tags on stdin)}" >&2; exit 1 ;;
 esac
