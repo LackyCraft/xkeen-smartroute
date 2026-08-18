@@ -73,6 +73,36 @@ func (x *xrayClient) queryTraffic(ctx context.Context) (trafficTotals, error) {
 	return t, nil
 }
 
+// queryOutboundTrafficByTag is queryTraffic's per-tag breakdown instead of a
+// single summed total -- activity.go diffs this against the previous tick to
+// tell which specific outbounds have actually carried traffic recently, which
+// a single grand total can't answer.
+func (x *xrayClient) queryOutboundTrafficByTag(ctx context.Context) (map[string]trafficTotals, error) {
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	resp, err := x.stats.QueryStats(ctx, &statscmd.QueryStatsRequest{Pattern: "outbound>>>", Reset_: false})
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]trafficTotals{}
+	for _, s := range resp.GetStat() {
+		// "outbound>>>TAG>>>traffic>>>uplink" / "...>>>downlink"
+		parts := strings.Split(s.GetName(), ">>>")
+		if len(parts) != 4 {
+			continue
+		}
+		t := out[parts[1]]
+		switch parts[3] {
+		case "uplink":
+			t.Up += s.GetValue()
+		case "downlink":
+			t.Down += s.GetValue()
+		}
+		out[parts[1]] = t
+	}
+	return out, nil
+}
+
 // outboundHealth mirrors the fields of observatory's OutboundStatus that
 // actually matter for failover decisions: whether the *real* probe request
 // (routed through the outbound itself, REALITY handshake and all) succeeded,

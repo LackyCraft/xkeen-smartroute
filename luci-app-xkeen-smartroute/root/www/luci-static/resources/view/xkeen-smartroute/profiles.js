@@ -1,6 +1,7 @@
 'use strict';
 'require view';
 'require ui';
+'require poll';
 'require xkeen-smartroute as sr';
 
 // Shared "boxed" look for the page's three top-level blocks (add profile /
@@ -18,7 +19,9 @@ return view.extend({
 			sr.rpc.listProfiles(),
 			sr.rpc.listLanDevices(),
 			sr.rpc.getPings(),
-			sr.rpc.listCustomLists()
+			sr.rpc.listCustomLists(),
+			sr.rpc.getCurrent(),
+			sr.rpc.getActivity()
 		]);
 	},
 
@@ -386,8 +389,39 @@ return view.extend({
 		}, this));
 	},
 
+	// Refreshes just the two fast-changing signals behind the "online now"
+	// dot -- which tag each profile currently resolves to, and which tags
+	// have carried traffic in the last few seconds -- without re-fetching
+	// the whole page's data (servers/profiles/etc change rarely by
+	// comparison). Re-renders only the profiles table, so an open pool
+	// expander (profileTargetExpanded) survives the refresh the same way it
+	// already does across reloadProfilesTable/handleToggleProfileTarget.
+	pollActivity: function () {
+		var view = this;
+		return Promise.all([sr.rpc.getCurrent(), sr.rpc.getActivity()]).then(function (data) {
+			view.current = data[0] || {};
+			view.activeTags = {};
+			(data[1] || []).forEach(function (t) { view.activeTags[t] = true; });
+			if (view.profiles) view.renderProfilesTable(view.profiles);
+		});
+	},
+
 	serverForTag: function (tag) {
 		return (this.servers || []).filter(function (x) { return x.tag === tag; })[0] || { tag: tag, name: tag };
+	},
+
+	// Small colored dot: green + glow while the given outbound tag has
+	// carried traffic in the last few seconds (this.activeTags, refreshed by
+	// pollActivity), grey otherwise. Grey covers both "genuinely idle" and
+	// "no data yet" -- there's no third state worth the extra complexity,
+	// since the tooltip already explains what green means.
+	activityDot: function (tag) {
+		var active = !!(tag && this.activeTags && this.activeTags[tag]);
+		return E('span', {
+			'title': sr.T(active ? 'activity_online' : 'activity_idle'),
+			'style': 'display:inline-block;width:.6em;height:.6em;border-radius:50%;margin-right:.4em;' +
+				(active ? 'background:#2ecc71;box-shadow:0 0 4px #2ecc71' : 'background:var(--border-color-medium,#bbb)')
+		});
 	},
 
 	handleToggleProfileTarget: function (name) {
@@ -425,18 +459,23 @@ return view.extend({
 
 			var targetNode;
 			if (p.mode === 'fixed') {
-				targetNode = sr.renderName(view.serverForTag(p.fixed_server).name);
+				targetNode = E('span', {}, [view.activityDot(p.fixed_server), sr.renderName(view.serverForTag(p.fixed_server).name)]);
 			} else {
 				var tags = p.servers || [];
+				var currentTag = (view.current && view.current[p.name]) || '';
 				var isOpen = !!(view.profileTargetExpanded && view.profileTargetExpanded[p.name]);
 				var toggle = E('a', { 'href': '#', 'style': 'text-decoration:none' },
-					(isOpen ? '▾ ' : '▸ ') + tags.length + ' ' + sr.T('sub_servers_word') + ' (leastPing)');
+					(isOpen ? '▾ ' : '▸ ') + tags.length + ' ' + sr.T('sub_servers_word') + ' (auto)');
 				toggle.addEventListener('click', function (ev) { ev.preventDefault(); view.handleToggleProfileTarget(p.name); });
-				var children = [toggle];
+				var children = [];
+				if (currentTag) {
+					children.push(E('div', { 'style': 'margin-bottom:.25em' }, [view.activityDot(currentTag), sr.renderName(view.serverForTag(currentTag).name)]));
+				}
+				children.push(toggle);
 				if (isOpen) {
 					var list = E('div', { 'style': 'margin:.35em 0 0 .5em' });
 					tags.forEach(function (t) {
-						list.appendChild(E('div', { 'style': 'padding:.1em 0' }, [sr.renderName(view.serverForTag(t).name)]));
+						list.appendChild(E('div', { 'style': 'padding:.1em 0' }, [view.activityDot(t), sr.renderName(view.serverForTag(t).name)]));
 					});
 					children.push(list);
 				}
@@ -473,6 +512,9 @@ return view.extend({
 		var lanDevices = data[4] || [];
 		this.pings = data[5] || {};
 		this.customLists = data[6] || [];
+		this.current = data[7] || {};
+		this.activeTags = {};
+		(data[8] || []).forEach(function (t) { view.activeTags[t] = true; });
 		this.serverGroupExpanded = {};
 		this.customListExpanded = {};
 
@@ -580,6 +622,15 @@ return view.extend({
 			view.renderProfilesTable(profiles);
 			view.renderCustomLists();
 		});
+
+		// Live "online now" dot: poll.js ties this to the page's own
+		// lifecycle (paused when the browser tab is hidden, stopped when
+		// LuCI navigates away), so it doesn't need its own manual
+		// start/stop bookkeeping the way a raw setInterval would.
+		// activityInterval in gateway/activity.go is 3s -- polling from here
+		// at the same cadence means a dot lights up about as fast as the
+		// gateway itself can possibly know about it.
+		poll.add(function () { return view.pollActivity(); }, 3);
 
 		return root;
 	}

@@ -7,7 +7,8 @@
 					"list_servers", "list_categories", "list_custom_categories",
 					"list_profiles", "get_status", "random_hwid", "get_refresh_hours",
 					"list_killswitch_enabled", "redirect_status", "list_lan_devices",
-					"list_subscriptions", "get_pings", "get_health", "service_status", "list_custom_lists"
+					"list_subscriptions", "get_pings", "get_health", "get_current", "get_activity",
+					"service_status", "list_custom_lists"
 				]
 			}
 		},

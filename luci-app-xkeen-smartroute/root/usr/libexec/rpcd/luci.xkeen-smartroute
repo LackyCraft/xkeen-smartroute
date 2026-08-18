@@ -56,6 +56,8 @@ case "$1" in
 	"ping_servers": {},
 	"get_pings": {},
 	"get_health": {},
+	"get_current": {},
+	"get_activity": {},
 	"get_refresh_hours": {},
 	"set_refresh_hours": {"hours":"str1"},
 	"refresh_now": {},
@@ -278,6 +280,32 @@ EOF
 				out="$(cat "$SR_ETC_DIR/state/health.json" 2>/dev/null)"
 				[ -n "$out" ] || out='{}'
 				printf '%s' "$out" | jq '{health: (. // {})}' 2>/dev/null || echo '{"health":{}}'
+				;;
+			get_current)
+				# profile name -> the outbound tag lib/genroute.sh's
+				# sr_pick_top1 most recently picked for it, written on every
+				# regen (see sr_regen). Read-only cached snapshot, same shape
+				# as get_pings/get_health.
+				out="$(cat "$SR_ETC_DIR/state/current.json" 2>/dev/null)"
+				[ -n "$out" ] || out='{}'
+				printf '%s' "$out" | jq '{current: (. // {})}' 2>/dev/null || echo '{"current":{}}'
+				;;
+			get_activity)
+				# Which outbound tags have actually carried traffic in the
+				# last few seconds, for the Profiles page's live "online
+				# now" dot. Unlike every other get_* here, this is NOT a
+				# file read -- smartroute-gateway tracks it in memory only
+				# (see gateway/activity.go for why: a signal that needs to
+				# react in a couple of seconds would mean rewriting a state
+				# file on the router's own flash every 3-5s forever, the
+				# same constant-write pattern already rejected once for
+				# loglevel:warning log-scraping). A short timeout keeps a
+				# stopped/restarting gateway from hanging this rpcd call;
+				# an unreachable gateway just means "nothing is active"
+				# rather than an error the UI needs to handle specially.
+				out="$(curl -s -m 2 http://127.0.0.1:1001/activity 2>/dev/null)"
+				[ -n "$out" ] || out='{"active":[]}'
+				printf '%s' "$out" | jq '{active: (.active // [])}' 2>/dev/null || echo '{"active":[]}'
 				;;
 			get_refresh_hours)
 				h="$(sh "$LIB_DIR/subscription.sh" get-refresh-hours 2>/dev/null)"

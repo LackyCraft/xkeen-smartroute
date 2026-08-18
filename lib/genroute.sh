@@ -198,6 +198,7 @@ sr_regen() {
 	trap 'rm -rf "$lock_dir"' EXIT INT TERM
 
 	rules="[]"
+	current="{}"
 
 	for pf in "$SR_PROFILES_DIR"/*.json; do
 		[ -e "$pf" ] || continue
@@ -213,7 +214,20 @@ sr_regen() {
 		[ -n "$target_tag" ] || { sr_log "profile '$name' has no servers, skipping"; continue; }
 		rule="$(echo "$fields" | jq --arg tag "$target_tag" '. + {type:"field", outboundTag:$tag}')"
 		rules="$(echo "$rules" | jq --argjson r "$rule" '. + [$r]')"
+		current="$(echo "$current" | jq --arg name "$name" --arg tag "$target_tag" '. + {($name): $tag}')"
 	done
+
+	# current.json (profile name -> the tag actually picked this regen) is
+	# what lets the Profiles page show a real server name for balancer-mode
+	# profiles instead of just "N servers", and lets it pair that name with
+	# smartroute-gateway's live activity signal (GET /activity, see
+	# gateway/activity.go) for the "this profile is passing traffic right
+	# now" dot. Same unchanged-skip discipline as routing.smartroute.json
+	# below -- only touch flash when the picked tag actually moved.
+	new_current="$(echo "$current" | jq -S .)"
+	if [ ! -s "$SR_CURRENT_FILE" ] || [ "$(cat "$SR_CURRENT_FILE")" != "$new_current" ]; then
+		printf '%s' "$new_current" >"$SR_CURRENT_FILE"
+	fi
 
 	# Any domain not covered by one of our profiles needs an explicit
 	# "everything else -> direct" rule, or unmatched traffic on the

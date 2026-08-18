@@ -35,6 +35,7 @@ func main() {
 	defer xc.Close()
 
 	startFailoverLoop(xc)
+	startActivityLoop(xc)
 
 	mux := http.NewServeMux()
 
@@ -54,6 +55,7 @@ func main() {
 	mux.HandleFunc("GET /configs", handleConfigs)
 	mux.HandleFunc("PATCH /configs", handleConfigs)
 	mux.HandleFunc("GET /traffic", trafficWSHandler(xc))
+	mux.HandleFunc("GET /activity", handleActivity)
 	mux.HandleFunc("GET /logs", logsWSHandler())
 	mux.HandleFunc("OPTIONS /", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")

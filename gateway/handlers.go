@@ -39,12 +39,13 @@ func handleVersion(w http.ResponseWriter, r *http.Request) {
 // Clash's model is proxies (individual nodes) + groups (selectors that pick
 // among proxies). SmartRoute's model is servers (individual nodes, same
 // idea) + profiles (a domain list bound to either one fixed server or a
-// leastPing-balanced set). Each profile becomes one Clash group here; each
-// server becomes one Clash proxy. "now" on a group reflects the profile's
-// current mode -- the fixed server's name if mode=="fixed", or a synthetic
-// "auto (leastPing)" marker if it's balancer-mode, since Xray's balancer
-// picks silently and doesn't report the winner back through the API used
-// here today.
+// pool SmartRoute's own sr_pick_top1 chooses from). Each profile becomes one
+// Clash group here; each server becomes one Clash proxy. "now" on a
+// balancer-mode group is read from current.json (see loadCurrent) -- the
+// actual tag sr_pick_top1 most recently picked -- falling back to the
+// synthetic "auto (leastPing)" marker only if that file doesn't have an
+// entry for this profile yet (e.g. right after upgrading from an older
+// install that never wrote one).
 
 type clashProxy struct {
 	Name    string        `json:"name"`
@@ -66,6 +67,7 @@ func buildProxyMap() (map[string]clashProxy, error) {
 		return nil, err
 	}
 	pings, _ := loadPings()
+	current, _ := loadCurrent()
 	profiles, err := loadProfiles()
 	if err != nil {
 		return nil, err
@@ -94,6 +96,12 @@ func buildProxyMap() (map[string]clashProxy, error) {
 				now = n
 			} else {
 				now = p.FixedServer
+			}
+		} else if tag, ok := current[p.Name]; ok && tag != "" {
+			if n, ok := tagToName[tag]; ok {
+				now = n
+			} else {
+				now = tag
 			}
 		}
 		names := make([]string, 0, len(p.Servers)+1)
@@ -297,6 +305,14 @@ func handleRules(w http.ResponseWriter, r *http.Request) {
 		rules = append(rules, rule{Type: "DOMAIN-SET", Payload: payload, Proxy: p.Name})
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{"rules": rules})
+}
+
+// --- GET /activity: outbound tags that have carried traffic in the last
+// few seconds, for the LuCI Profiles page's live "online now" dot. See
+// activity.go for why this is in-memory only, never written to disk. ---
+
+func handleActivity(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]interface{}{"active": activeTagsSnapshot()})
 }
 
 func handleConfigs(w http.ResponseWriter, r *http.Request) {

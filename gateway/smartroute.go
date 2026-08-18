@@ -13,6 +13,7 @@ import (
 const (
 	serversFile = "/etc/xkeen-smartroute/state/servers.json"
 	pingFile    = "/etc/xkeen-smartroute/state/ping.json"
+	currentFile = "/etc/xkeen-smartroute/state/current.json"
 	profilesDir = "/etc/xkeen-smartroute/profiles"
 )
 
@@ -69,6 +70,30 @@ func loadPings() (map[string]*int, error) {
 	}
 	if err := json.Unmarshal(b, &out); err != nil {
 		return map[string]*int{}, nil
+	}
+	return out, nil
+}
+
+// loadCurrent reads current.json (profile name -> the outbound tag
+// lib/genroute.sh's sr_pick_top1 most recently picked for it, written on
+// every regen alongside routing.smartroute.json). For "fixed" mode this
+// duplicates FixedServer; for "balancer" mode it's the only way to know
+// which pool member is actually live right now, since that choice is made
+// entirely in shell/jq and never reported back through Xray's own API.
+func loadCurrent() (map[string]string, error) {
+	b, err := os.ReadFile(currentFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return map[string]string{}, nil
+		}
+		return nil, err
+	}
+	out := map[string]string{}
+	if len(b) == 0 {
+		return out, nil
+	}
+	if err := json.Unmarshal(b, &out); err != nil {
+		return map[string]string{}, nil
 	}
 	return out, nil
 }

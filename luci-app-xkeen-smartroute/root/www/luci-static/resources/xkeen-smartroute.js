@@ -113,6 +113,26 @@ var _callGetHealth = rpc.declare({
 function callGetHealth() {
 	return _callGetHealth().then(function (r) { return (r && r.health) || {}; });
 }
+var _callGetCurrent = rpc.declare({
+	object: 'luci.xkeen-smartroute', method: 'get_current'
+});
+// current: {profile_name: outbound_tag}, the tag lib/genroute.sh's
+// sr_pick_top1 actually picked for a balancer-mode profile on its last
+// regen -- lets the UI show a real server name instead of just "N servers".
+function callGetCurrent() {
+	return _callGetCurrent().then(function (r) { return (r && r.current) || {}; });
+}
+var _callGetActivity = rpc.declare({
+	object: 'luci.xkeen-smartroute', method: 'get_activity'
+});
+// active: [outbound_tag, ...] that have carried traffic in the last few
+// seconds, straight from smartroute-gateway's in-memory tracker (never
+// written to disk -- see gateway/activity.go). Meant to be polled often
+// (every few seconds) while the Profiles page is open, for a live "this
+// profile is passing traffic right now" dot.
+function callGetActivity() {
+	return _callGetActivity().then(function (r) { return (r && r.active) || []; });
+}
 var _callGetRefreshHours = rpc.declare({
 	object: 'luci.xkeen-smartroute', method: 'get_refresh_hours'
 });
@@ -243,9 +263,11 @@ var DICT = {
 	sub_refreshing_one: { ru: 'Обновляю…', en: 'Refreshing…' },
 
 	add_profile_title: { ru: 'Добавить профиль', en: 'Add a profile' },
-	profiles_intro: { ru: 'Профиль — это правило: «эти домены → на эти сервера». Можно направить список на один конкретный сервер (fixed) или на группу — тогда Xray сам будет постоянно выбирать самый быстрый живой сервер из группы (balancer / leastPing).',
-	                   en: 'A profile is a rule: "these domains → these servers". Point a list at one specific server (fixed), or at a group — Xray will then continuously pick the fastest healthy server from the group itself (balancer / leastPing).' },
+	profiles_intro: { ru: 'Профиль — это правило: «эти домены → на эти сервера». Можно направить список на один конкретный сервер (fixed) или на группу — тогда SmartRoute сам будет постоянно выбирать самый быстрый живой сервер из группы (по пингу и собственному Observatory, не встроенный leastPing Xray — см. README).',
+	                   en: 'A profile is a rule: "these domains → these servers". Point a list at one specific server (fixed), or at a group — SmartRoute will then continuously pick the fastest healthy server from the group itself (by ping + its own Observatory data, not Xray\'s built-in leastPing — see README).' },
 	profile_name: { ru: 'Название профиля', en: 'Profile name' },
+	activity_online: { ru: 'Сейчас активен — идёт трафик', en: 'Active now — traffic is flowing' },
+	activity_idle: { ru: 'Нет трафика прямо сейчас', en: 'No traffic right now' },
 	profile_name_placeholder: { ru: 'например: youtube', en: 'e.g. youtube' },
 	domain_source: { ru: 'Список доменов', en: 'Domain list' },
 	domain_source_geosite: { ru: 'Категория geosite (Xray)', en: 'geosite category (Xray)' },
@@ -505,6 +527,8 @@ return L.Class.extend({
 		pingServers: callPingServers,
 		getPings: callGetPings,
 		getHealth: callGetHealth,
+		getCurrent: callGetCurrent,
+		getActivity: callGetActivity,
 		getRefreshHours: callGetRefreshHours,
 		setRefreshHours: callSetRefreshHours,
 		refreshNow: callRefreshNow,

@@ -29,6 +29,7 @@ SR_SERVERS_FILE="$SR_STATE_DIR/servers.json"
 SR_OUTBOUNDS_STATE_FILE="$SR_STATE_DIR/outbounds.json"
 SR_PING_FILE="$SR_STATE_DIR/ping.json"
 SR_HEALTH_FILE="$SR_STATE_DIR/health.json"
+SR_CURRENT_FILE="$SR_STATE_DIR/current.json"
 
 sr_log() {
 	logger -t xkeen-smartroute "$*" 2>/dev/null
