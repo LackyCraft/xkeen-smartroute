@@ -16,6 +16,7 @@ One-command deployment of per-domain routing over a VLESS/Trojan subscription on
 - [What xkeen-UI does](#what-xkeen-ui-does)
 - [What SmartRoute adds](#what-smartroute-adds)
 - [Cross-platform: how SmartRoute fixes xkeen on OpenWrt](#cross-platform-how-smartroute-fixes-xkeen-on-openwrt)
+- [How server-group picking actually works (and why not Xray's leastPing)](#how-server-group-picking-actually-works-and-why-not-xrays-leastping)
 - [The SmartRoute panel, and why not Mihomo](#the-smartroute-panel-and-why-not-mihomo)
 - [System requirements](#system-requirements)
 - [Installation](#installation)
@@ -66,7 +67,7 @@ Everything else (not matched by any profile) behaves as usual — direct, or thr
     config editor, logs, core/geosite/geoip updates
 ```
 
-Automatically picking the fastest server in a group is a built-in Xray-core mechanism — a **balancer with the `leastPing` strategy** on top of `observatory` (Xray itself pings every server in the group and keeps the route to the healthiest/fastest one). SmartRoute just generates that config from your choice in the UI — there's no custom logic bolted on top of Xray, this is an official core feature.
+Automatically picking the fastest server in a group was meant to be a built-in Xray-core mechanism (a `balancer` with the `leastPing` strategy on top of `observatory`) — but on the Xray-core version this project runs against, that turned out to be fundamentally broken in practice, so SmartRoute picks the server itself, using the same `observatory` data. Details, what was tested, and why — in [How server-group picking actually works](#how-server-group-picking-actually-works-and-why-not-xrays-leastping) below.
 
 ## What xkeen does
 
@@ -106,13 +107,13 @@ The `luci-app-xkeen-smartroute` module (LuCI) + `smartroute-gateway` (a standalo
 - **Subscription import** (VLESS/Trojan, V2rayNG/V2Box format: a base64 blob of links) — pulls a server list out of your subscription. Some subscription panels serve a plain HTML instructions page to a browser and only return the real list to a recognized VPN client (by `User-Agent` and device headers). The Subscriptions tab ships 17 client presets (Happ, v2rayNG, Clash/Clash Meta/Mihomo, sing-box, NekoBox, Shadowrocket, Stash, Surge, Loon, FlClash, V2Box, incy, etc.) plus manual Device-OS/Device-Locale/Device-Model/X-Ver-Os/X-Hwid fields (with a random-HWID generator button) under "Customize device headers…".
 - **Automatic subscription refresh**: every configurable interval (12 hours by default, changeable right in the UI) every saved subscription is re-fetched with no user action needed. Refresh is multi-subscription-safe: several subscriptions won't wipe each other's servers, and an invalid/empty response from the provider (a transient hiccup) doesn't wipe out already-saved servers — it's just skipped until the next attempt.
 - **Server ping**: TCP latency to every subscription server right in the UI (without ever showing IP addresses), tested against all servers in parallel.
-- **Routing profiles**: a domain list (an Xray geosite category *or* your own list), **and/or** specific devices on your network (Policy-Based Routing — see below) → one specific server (`fixed`) *or* a group of servers with automatic fastest-pick (`balancer` / `leastPing`).
+- **Routing profiles**: a domain list (an Xray geosite category *or* your own list), **and/or** specific devices on your network (Policy-Based Routing — see below) → one specific server (`fixed`) *or* a group of servers with automatic fastest-pick (`balancer`, our own algorithm — see [below](#how-server-group-picking-actually-works-and-why-not-xrays-leastping), not Xray's built-in `leastPing`).
 - **Policy-Based Routing by device**: a profile can be restricted not just by domain but by specific devices (IP/CIDR) — "only the TV goes through VPN", regardless of which sites it visits, or "only the TV, only for YouTube" — both restrictions at once. The Profiles tab shows devices detected via the router's DHCP leases and ARP table (with hostname and MAC where known), plus a manual IP/CIDR field for a statically-addressed device or a whole subnet.
 - **Ad-hoc custom domain lists**: type domains separated by commas in the UI, and a list you can attach to a server appears immediately.
 - **Bundled lists for what's missing from Xray's default database (geosite)** — see [below](#domain-lists-missing-from-geosite): currently Character.AI, Grok/x.ai, and the npm registry, auto-refreshed via GitHub Actions.
 - **DNS and IPv6 leak protection**: a dedicated "Leak protection" tab — forces LAN DNS through the router itself even if a device is hardcoded to a third-party resolver (closing off a way to bypass profiles/kill-switch around the VPN), and can optionally block LAN→WAN IPv6 outright, since our traffic capture is IPv4-only and a site reachable over IPv6 could otherwise load directly through your ISP, bypassing every rule.
 - **Gapless kill-switch**: once enabled for a profile, the firewall+ipset block stays armed permanently, not re-checked once a minute. DNAT-redirected traffic physically flows through the firewall's `INPUT` chain, not `FORWARD`, so the blocking rule never interferes with normal redirected traffic and can just stay on all the time — no window between Xray dying and the check catching up (the window that could have leaked a real IP before). Works for both custom domain lists and geosite categories. See the [UI](#ui) section → Kill-Switch.
-- **Real failover within a server group**: Xray-core's own `leastPing`+`observatory` combo can detect a broken outbound (its probe genuinely goes through the server, REALITY handshake included), but current core versions don't always stop selecting that same outbound for new connections — a known, still-unresolved upstream bug ([XTLS/Xray-core#5295](https://github.com/XTLS/Xray-core/issues/5295)). `smartroute-gateway` (see below) closes that gap itself: it reads the same observatory data, and when a balancer's current pick is confirmed dead, forces it onto the fastest outbound observatory currently believes is alive — the same API call `xray api bo` uses.
+- **Real live-server picking within a group** — our own algorithm, not Xray-core's built-in `leastPing` (which turned out to be fundamentally broken on the core version this project runs against, not just "doesn't always switch away" — see the [dedicated section below](#how-server-group-picking-actually-works-and-why-not-xrays-leastping) for the investigation, what was tested, and the upstream bug report).
 - **Resilient Xray restarts**: the merged config is validated (`xray run -test`) before every restart — if something's wrong (a broken node from a subscription, tags drifting out of sync after a server-list change), Xray is left alone and keeps running on its last-known-good config instead of crashing. On plain OpenWrt (as opposed to KeeneticOS, xkeen's native home) the restart itself bypasses `xkeen -restart`, which hangs indefinitely on that platform. Xray is additionally restarted once a day on a schedule (overnight by default): on modest hardware with no swap its memory footprint grows over time, and a scheduled restart is cheaper than waiting for the kernel's OOM-killer to do it for us.
 - **Status panel**: whether Xray is alive, how many servers and profiles are configured.
 - **The SmartRoute panel** (`smartroute-gateway`, a standalone service on port `1001`) — a live, Mihomo-style dashboard: server list with ping, real-time server switching within a profile, a traffic graph, Xray's logs — no need to switch the core to Mihomo. Details and reasoning — [below](#the-smartroute-panel-and-why-not-mihomo).
@@ -125,6 +126,50 @@ The `luci-app-xkeen-smartroute` module (LuCI) + `smartroute-gateway` (a standalo
 On that OpenWrt, the kernel talks **nftables** by default (via the `fw4` frontend), not classic iptables. But Entware installs its own, completely independent **legacy iptables** (`/opt/sbin/iptables` → `xtables-multi`) — and `xkeen -ap` writes its rules into that. The kernel only ever consults the real nftables stack (`/usr/sbin/iptables`, actually a compatible `xtables-nft-multi` wrapper, or `nft` itself). The result: `xkeen -ap 443,80` reports success — while real LAN devices' traffic keeps flowing right past Xray, as if the command had never run at all. We confirmed this directly on hardware: `conntrack` showed zero marking (`mark=0`) and zero connections reaching Xray's redirect port, even after `xkeen` considered the ports already enabled. This gap doesn't exist on genuine KeeneticOS — that's the stack `xkeen` was actually written against.
 
 So SmartRoute adds its own traffic capture (`lib/redirect.sh`), independent of `xkeen -ap` — through `fw4`'s officially supported extension point, the `/etc/nftables.d/` directory. Our module drops its own nft chain there (capturing TCP 80/443 into Xray's redirect inbound, plus optional DNS/IPv6 leak-protection rules), and it survives `fw4 reload`, `/etc/init.d/firewall restart`, and a full reboot — and it's what makes the whole "route by domain/device" idea possible on this platform in the first place. Without it, profiles, kill-switch, and Policy-Based Routing would just be valid JSON that no real LAN packet ever reaches.
+
+## How server-group picking actually works (and why not Xray's leastPing)
+
+A profile in "server group" (`balancer`) mode is supposed to pick the fastest live server out of the chosen pool on its own. The standard way to do that in Xray-core is `routing.balancers` with the `leastPing` strategy, backed by the built-in `observatory` (which genuinely tries to connect through every server in the group). That's how it was originally implemented here — but real-hardware testing turned up a fundamental problem specific to the Xray-core version this project runs against (26.2.6).
+
+### The problem
+
+Simply having **any** rule with a `balancerTag` — a reference into `routing.balancers` — anywhere in the config causes **every single routing rule to stop working**, including the balancer rule itself and even the final catch-all rule ("anything else → direct"). All traffic instead falls through to whatever the first outbound in the merged config happens to be, regardless of which domain is being opened or which profile is supposed to handle it.
+
+Confirmed on a live router by elimination:
+- A minimal test config (2 files, one domain rule + a catch-all, no balancer at all) works correctly.
+- The same config with the real 160-server subscription swapped in for the two test outbounds — still works.
+- Adding **one** `balancerTag` rule pointing at a real, healthy, already-selecting balancer — breaks everything, including requests to that exact balancer's own domain.
+- Tested both `leastPing` and `random` strategies (the latter has no dependency on `observatory` at all) — breaks identically either way, so it isn't an observatory-timing issue.
+- Tested with a balancer whose group has only a single server — breaks exactly the same way.
+
+A minimal reproduction was filed upstream: [XTLS/Xray-core#6642](https://github.com/XTLS/Xray-core/issues/6642).
+
+### What SmartRoute does instead
+
+Until that's fixed in Xray-core, SmartRoute doesn't use `routing.balancers`/`balancerTag` at all. Instead, `lib/genroute.sh` computes the "server #1" for each group itself and writes it as a plain `outboundTag` rule — the exact same mechanism `fixed`-mode profiles already use, and that's confirmed reliable.
+
+The pick is based on two independent signals, because neither one alone tells the whole story:
+
+1. **A fresh ping of just that profile's own servers** (not the whole subscription — only the ones actually in the group, which keeps it fast). Checks whether the server accepts a TCP connection right now.
+2. **Real `observatory` data** — the same Xray observer, but read not through the broken balancer, straight over gRPC (`ObservatoryService.GetOutboundStatus`) by `smartroute-gateway`, which already polls it every 20 seconds for the panel. This is a **genuine** VLESS/REALITY connection attempt through the server, not a bare TCP connect.
+
+Why both are needed: real-world testing turned up servers that answer a TCP connection almost instantly but can't actually complete a real VLESS/REALITY handshake (the server presents a genuine TLS certificate instead of the expected REALITY camouflage — a telltale sign the camouflage config is broken on the provider's side). A plain ping can't tell that server apart from a working one; only a real observatory check can.
+
+Final ranking of candidates, best first:
+1. Ping succeeded **and** observatory currently believes the server is alive — sorted by observatory's real delay.
+2. Ping succeeded, but observatory hasn't reached this particular server yet (it sweeps the whole subscription one server at a time, not instantly) — sorted by the fresh ping.
+3. Ping succeeded, but observatory previously flagged the server dead — used only if nothing else in the group qualifies at all.
+4. Ping failed outright — last resort.
+
+### Why not ping right before every connection
+
+It would seem safest to check the group's servers the instant a site is opened. In practice that would mean a delay on **every new domain** the browser touches (dozens per page load — CDNs, analytics, fonts), and for large groups (a pool of 50-60 servers) that delay would be noticeable. Instead, the pick is recomputed on a schedule (every 3 minutes via `cron`) from already-fresh data — the specific group's servers still get pinged again on every recompute, it just doesn't block the page the user is trying to open.
+
+### Keeping observatory's data across restarts
+
+Xray's own `observatory` only keeps results in memory — every Xray restart (a profile change, the nightly scheduled restart, etc.) resets its progress to zero, and re-sweeping a ~150-160-server subscription from scratch takes roughly an hour. `smartroute-gateway` now **persists** what it already knows across those resets (the `health.json` file is merged into, not overwritten wholesale), and every entry carries a timestamp for when it was last actually checked — so already-collected data doesn't just get thrown away while Xray re-sweeps the subscription.
+
+Each server's observatory status (alive / dead / not checked yet, with when it was last checked) is shown right in the server list on the Subscriptions tab.
 
 ## The SmartRoute panel, and why not Mihomo
 
@@ -186,7 +231,7 @@ The script is idempotent — safe to re-run any number of times; already-install
 | `/etc/nftables.d/20-xkeen-smartroute-redirect.nft` | Our nftables traffic-capture chain (see [Cross-platform](#cross-platform-how-smartroute-fixes-xkeen-on-openwrt)) — managed by `redirect.sh`, don't edit by hand |
 | `/etc/xkeen-smartroute/lists/` | Catalog of available domain lists (geosite categories + our own `.lst` files) |
 | `/etc/xkeen-smartroute/profiles/` | Your saved routing profiles (JSON) — domains and/or devices |
-| `/etc/xkeen-smartroute/state/` | `servers.json` — servers pulled from your subscriptions; `health.json` — real per-server health (see failover above) |
+| `/etc/xkeen-smartroute/state/` | `servers.json` — servers pulled from your subscriptions; `health.json` — real per-server observatory health (see [server-group picking](#how-server-group-picking-actually-works-and-why-not-xrays-leastping)) |
 | `/usr/libexec/rpcd/luci.xkeen-smartroute` | ubus backend for LuCI |
 | `/www/luci-static/resources/view/xkeen-smartroute/` | Module's JS pages |
 | `/opt/share/xkeen-smartroute/gateway` | The SmartRoute panel binary (port **1001**) |
@@ -301,6 +346,7 @@ Language switch (RU/EN) — a button in the top-right corner of every page in th
 ## Credits
 
 - Project author: [DanyByLC](https://github.com/LackyCraft)
+- Mentor/Reviewer:[achmel](https://github.com/achmel)
 - Project chat: [t.me/SmartRouteByLC](https://t.me/SmartRouteByLC)
 - [`xkeen`](https://github.com/Skrill0/XKeen) — Xray-core manager for Keenetic/Entware
 - [`xkeen-UI`](https://github.com/zxc-rv/XKeen-UI) — web panel for xkeen
