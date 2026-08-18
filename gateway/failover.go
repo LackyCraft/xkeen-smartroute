@@ -134,8 +134,29 @@ func reconcileBalancer(ctx context.Context, xc *xrayClient, balancerTag string, 
 	}
 }
 
+// persistHealth merges this tick's observatory data into health.json rather
+// than overwriting it outright. Xray's own in-process observatory state
+// resets to nothing on every restart (it's never persisted by Xray itself),
+// so `health` here only ever contains tags the *current* Xray process has
+// actually gotten around to re-probing since it started -- which, for a
+// large subscription, is a small and slowly-growing subset for a long time
+// after every restart (confirmed live: ~20-30s per outbound, so a ~160-node
+// subscription takes the better part of an hour to fully re-cover). A plain
+// overwrite would make every not-yet-re-probed tag's verdict vanish the
+// instant Xray restarts, right when genroute.sh's sr_pick_top1 (and the
+// LuCI Subscriptions page's health column) need it most. Keeping the old,
+// on-disk entry for any tag this tick didn't report -- stale but real, and
+// stamped with its own CheckedAt so callers can tell how old it is -- is
+// strictly more useful than treating it the same as "never checked".
 func persistHealth(health map[string]outboundHealth) {
-	b, err := json.Marshal(health)
+	merged := map[string]outboundHealth{}
+	if old, err := os.ReadFile(healthStateFile); err == nil {
+		_ = json.Unmarshal(old, &merged)
+	}
+	for tag, h := range health {
+		merged[tag] = h
+	}
+	b, err := json.Marshal(merged)
 	if err != nil {
 		return
 	}

@@ -78,10 +78,18 @@ func (x *xrayClient) queryTraffic(ctx context.Context) (trafficTotals, error) {
 // (routed through the outbound itself, REALITY handshake and all) succeeded,
 // not just whether the bare TCP/TLS endpoint answers -- see failover.go for
 // why that distinction is the entire point of this file existing.
+//
+// CheckedAt is ours, not Xray's -- stamped in persistHealth() at the moment
+// this verdict was last actually refreshed by a live probe. It's what lets
+// health.json keep serving a stale-but-real verdict across an Xray restart
+// (see persistHealth) instead of the entry just vanishing, and lets the UI
+// show the user how old a given answer is instead of presenting a
+// hours-stale "alive" the same way as one from 20 seconds ago.
 type outboundHealth struct {
-	Alive     bool   `json:"alive"`
-	DelayMs   int64  `json:"delay_ms"`
-	LastError string `json:"last_error,omitempty"`
+	Alive     bool      `json:"alive"`
+	DelayMs   int64     `json:"delay_ms"`
+	LastError string    `json:"last_error,omitempty"`
+	CheckedAt time.Time `json:"checked_at"`
 }
 
 // queryOutboundHealth returns every outbound observatory currently has an
@@ -96,12 +104,14 @@ func (x *xrayClient) queryOutboundHealth(ctx context.Context) (map[string]outbou
 	if err != nil {
 		return nil, err
 	}
+	now := time.Now()
 	out := map[string]outboundHealth{}
 	for _, s := range resp.GetStatus().GetStatus() {
 		out[s.GetOutboundTag()] = outboundHealth{
 			Alive:     s.GetAlive(),
 			DelayMs:   s.GetDelay(),
 			LastError: s.GetLastErrorReason(),
+			CheckedAt: now,
 		}
 	}
 	return out, nil
