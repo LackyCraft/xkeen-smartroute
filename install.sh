@@ -313,6 +313,42 @@ cat > /opt/etc/xray/configs/05_routing.json <<'XRAY_ROUTING_EOF'
 }
 XRAY_ROUTING_EOF
 
+# Same precedence bug as the .ru routing rule above, different file: xkeen's
+# own 06_policy.json ships with just {"policy":{"levels":{"0":{"connIdle":
+# 30}}}} -- no stats flags at all -- and Xray's confdir merge does not deep-
+# merge two files that both declare a top-level "policy" key, so whichever
+# one the merge picks wins *entirely*, silently discarding the other's
+# content. 06_policy.json sorts after 00_api.smartroute.json (SmartRoute's
+# own policy block, with statsOutboundUplink/Downlink -- see the "api" step
+# below), so its bare connIdle-only policy was winning and Xray's outbound
+# traffic counters stayed permanently empty ("{}" from a live statsquery no
+# matter how much traffic actually flowed) -- the LuCI Profiles page's
+# "online now" dot depends on exactly these counters. Confirmed live: moving
+# 06_policy.json aside and restarting Xray made per-outbound counters appear
+# immediately. Fixed the same way as the routing rule -- keep the file (some
+# tooling may expect the standard xkeen file layout to exist), just make its
+# content match 00_api.smartroute.json's policy block instead of a stripped-
+# down subset, so it no longer matters which file confdir actually picks.
+cat > /opt/etc/xray/configs/06_policy.json <<'XRAY_POLICY_EOF'
+{
+  "policy": {
+    "levels": {
+      "0": {
+        "connIdle": 30,
+        "statsUserUplink": true,
+        "statsUserDownlink": true
+      }
+    },
+    "system": {
+      "statsInboundUplink": true,
+      "statsInboundDownlink": true,
+      "statsOutboundUplink": true,
+      "statsOutboundDownlink": true
+    }
+  }
+}
+XRAY_POLICY_EOF
+
 # ---------------------------------------------------------------------------
 log "Шаг 3/6: xkeen-UI (веб-панель, порт 1000)"
 
