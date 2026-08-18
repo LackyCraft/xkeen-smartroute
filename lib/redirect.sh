@@ -27,6 +27,7 @@
 #   redirect.sh disable
 #   redirect.sh dns-protect on|off      # force LAN DNS(53) through this router
 #   redirect.sh ipv6-protect on|off     # drop LAN->WAN IPv6 forwarding
+#   redirect.sh quic-protect on|off     # block outbound UDP on the redirected ports
 #   redirect.sh status                  # print current flags as JSON
 
 set -eu
@@ -39,6 +40,7 @@ REDIRECT_PORT=61219
 FLAG_ENABLED="$SR_STATE_DIR/redirect_enabled"
 FLAG_DNS="$SR_STATE_DIR/redirect_dns_protect"
 FLAG_IPV6="$SR_STATE_DIR/redirect_ipv6_protect"
+FLAG_QUIC="$SR_STATE_DIR/redirect_quic_protect"
 FLAG_PORTS="$SR_STATE_DIR/redirect_ports"
 DEFAULT_PORTS="80,443"
 
@@ -54,6 +56,7 @@ rd_write() {
 	enabled="$(rd_flag "$FLAG_ENABLED" "0")"
 	dns_protect="$(rd_flag "$FLAG_DNS" "0")"
 	ipv6_protect="$(rd_flag "$FLAG_IPV6" "0")"
+	quic_protect="$(rd_flag "$FLAG_QUIC" "0")"
 	ports="$(rd_flag "$FLAG_PORTS" "$DEFAULT_PORTS")"
 	tcp_ports="$(printf '%s' "$ports" | tr ',' ' ')"
 
@@ -115,6 +118,28 @@ rd_write() {
 			echo "	iifname \"$LAN_DEVICE\" meta nfproto ipv6 counter drop"
 			echo "}"
 		fi
+
+		if [ "$quic_protect" = "1" ] && [ -n "$ports" ]; then
+			echo
+			echo "chain sr_smartroute_block_quic {"
+			echo "	type filter hook forward priority -1; policy accept;"
+			echo
+			echo "	# QUIC/HTTP3 leak protection: our redirect above only catches TCP"
+			echo "	# (\"tcp dport { ... } redirect\") -- a site that advertises HTTP/3"
+			echo "	# support (Alt-Svc: h3=\":443\") gets requested over QUIC, which runs"
+			echo "	# on the *same* port number but over UDP, invisible to a TCP-only"
+			echo "	# redirect and never reaching xray at all. Confirmed for real:"
+			echo "	# 2ip.ru (advertises h3) never showed up in xray's access log despite"
+			echo "	# loading fine in Safari -- it went out directly over UDP/443,"
+			echo "	# leaking the real IP. Browsers fall back to plain TCP/TLS cleanly"
+			echo "	# when the UDP attempt just doesn't get a response, so blocking it"
+			echo "	# outright (rather than trying to redirect UDP into xray, which the"
+			echo "	# redirect inbound isn't set up to speak) is the safe fix -- same"
+			echo "	# ports as the TCP redirect, so it only touches traffic that would"
+			echo "	# otherwise have bypassed it."
+			echo "	iifname \"$LAN_DEVICE\" udp dport { $ports } counter drop"
+			echo "}"
+		fi
 	} > "$NFT_FILE"
 
 	if command -v fw4 >/dev/null 2>&1 && ! fw4 check >/dev/null 2>&1; then
@@ -163,13 +188,21 @@ rd_ipv6_protect() {
 	sr_log "IPv6 leak protection: ${1}"
 }
 
+rd_quic_protect() {
+	sr_ensure_dirs
+	case "${1:-}" in on) echo 1 > "$FLAG_QUIC" ;; off) echo 0 > "$FLAG_QUIC" ;; *) sr_die "usage: quic-protect on|off" ;; esac
+	rd_write
+	sr_log "QUIC/HTTP3 leak protection: ${1}"
+}
+
 rd_status() {
 	jq -n \
 		--argjson enabled "$(rd_flag "$FLAG_ENABLED" "0")" \
 		--argjson dns_protect "$(rd_flag "$FLAG_DNS" "0")" \
 		--argjson ipv6_protect "$(rd_flag "$FLAG_IPV6" "0")" \
+		--argjson quic_protect "$(rd_flag "$FLAG_QUIC" "0")" \
 		--arg ports "$(rd_flag "$FLAG_PORTS" "$DEFAULT_PORTS")" \
-		'{enabled: (($enabled|tostring)=="1"), dns_protect: (($dns_protect|tostring)=="1"), ipv6_protect: (($ipv6_protect|tostring)=="1"), ports: $ports}'
+		'{enabled: (($enabled|tostring)=="1"), dns_protect: (($dns_protect|tostring)=="1"), ipv6_protect: (($ipv6_protect|tostring)=="1"), quic_protect: (($quic_protect|tostring)=="1"), ports: $ports}'
 }
 
 case "${1:-}" in
@@ -178,6 +211,7 @@ case "${1:-}" in
 	set-ports) rd_set_ports "${2:-}" ;;
 	dns-protect) rd_dns_protect "${2:-}" ;;
 	ipv6-protect) rd_ipv6_protect "${2:-}" ;;
+	quic-protect) rd_quic_protect "${2:-}" ;;
 	status) rd_status ;;
-	*) echo "usage: $0 {enable|disable|set-ports <csv>|dns-protect on|off|ipv6-protect on|off|status}" >&2; exit 1 ;;
+	*) echo "usage: $0 {enable|disable|set-ports <csv>|dns-protect on|off|ipv6-protect on|off|quic-protect on|off|status}" >&2; exit 1 ;;
 esac
