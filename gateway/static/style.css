@@ -37,12 +37,17 @@ h1, h2, h3 { font-family: var(--display); font-weight: 700; }
 /* ---------------- login screen ---------------- */
 .sr-login-screen { position: relative; z-index: 1; min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px; }
 .sr-login-card {
-  width: 100%; max-width: 340px; background: var(--card); border: 1px solid var(--border);
-  border-radius: 20px; backdrop-filter: blur(16px); padding: 32px 28px; text-align: center;
+  width: 100%; max-width: 380px; background: var(--card); border: 1px solid var(--border);
+  border-radius: 20px; backdrop-filter: blur(16px); padding: 36px 32px; text-align: center;
+  display: flex; flex-direction: column; align-items: center; gap: 14px;
 }
-.sr-login-logo { width: 96px; height: 96px; object-fit: contain; margin-bottom: 8px; }
-.sr-login-card h1 { font-size: 1.2rem; margin: 0 0 18px; }
-.sr-error { color: var(--bad); font-size: 0.85rem; margin-top: 10px; }
+.sr-login-card h1 { font-size: 1.3rem; margin: 0; }
+.sr-login-logo { width: 220px; height: 220px; object-fit: contain; margin: 4px 0 6px; }
+.sr-login-card .sr-input,
+.sr-login-card button { width: 100%; }
+.sr-login-card .sr-input { padding: 10px 12px; font-size: 0.95rem; }
+.sr-login-card button { padding: 10px 14px; font-size: 0.9rem; }
+.sr-error { color: var(--bad); font-size: 0.85rem; margin: 0; }
 
 /* ---------------- shell / sidebar ---------------- */
 .sr-shell { position: relative; z-index: 1; min-height: 100vh; display: flex; }
