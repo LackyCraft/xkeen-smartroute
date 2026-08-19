@@ -296,7 +296,31 @@ sr_import() {
 		# own display name in fixes that (still stable across refreshes for
 		# the same node, as long as the provider doesn't rename it) without
 		# going back to a fragile sequential index.
-		tag="sr_${label_slug}_$(slugify "$host")_${port}_$(printf '%s' "$secret" | cut -c1-8)_$(slugify "$name" | cut -c1-12)"
+		#
+		# Several more real collision sources found live, all from this one
+		# subscription: (1) `slugify` maps every non-ASCII character to `_`
+		# and squeezes repeats, so a name that's entirely Cyrillic (common
+		# for a RU-market subscription -- half this one's node names are)
+		# can collapse down to just a trailing digit or nothing at all,
+		# silently merging distinctly-named nodes onto one tag whenever
+		# they happen to end the same way (e.g. both named "... 1"); (2)
+		# truncating the secret to its first 8 characters isn't enough
+		# either -- this subscription has multiple genuinely different
+		# UUIDs that only diverge after that point (e.g.
+		# "2d3fc8f5-a0ad-4935-..." vs "2d3fc8f5-a0ad-482b-..."); (3) some
+		# nodes share host+port+secret+name entirely and only differ in an
+		# XHTTP path/host/sni query param (multiple CDN edges fronting one
+		# backend, same display name). Together these took a 151-server
+		# subscription down to 140 imported. A short slug stays in the tag
+		# purely for human readability when skimming the generated config,
+		# but uniqueness itself now comes from hashing the *entire* raw
+		# line -- secret, host, port, and every query param -- so two tags
+		# can only collide if the source lines are truly byte-identical
+		# (nothing left to distinguish them by, one tag is correct). Still
+		# stable across refreshes: the same raw line always hashes the same.
+		name_slug="$(slugify "$name" | cut -c1-12)"
+		line_hash="$(printf '%s' "$line" | md5sum | cut -c1-10)"
+		tag="sr_${label_slug}_$(slugify "$host")_${port}_${name_slug}_${line_hash}"
 
 		ob="$(build_outbound "$proto" "$secret" "$host" "$port" "$query" "" "$tag")" || { skipped=$((skipped + 1)); continue; }
 		ob="$(printf '%s' "$ob" | jq --arg sub "$label" '. + {subscription:$sub}')"
