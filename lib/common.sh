@@ -52,6 +52,114 @@ sr_set_observatory_period_min() {
 	echo "$1" > "$SR_STATE_DIR/observatory_period_min"
 }
 
+# ---------------------------------------------------------------------------
+# Xray access/error logging -- off by default. Xray's top-level "loglevel"
+# is not a severity filter on top of always-on logging: setting it to "none"
+# (our shipped default, see 01_log.json below) makes Xray set BOTH
+# AccessLogType and ErrorLogType to LogType_None internally (confirmed
+# against app/log's real Build() switch in Xray-core's own source) -- no
+# access log line is ever produced, not even a suppressed/dropped one. This
+# is why the log viewer was empty everywhere (smartroute-gateway, xkeen-UI)
+# that tails those files: nothing was ever writing to them, permissions were
+# never the issue.
+#
+# Logs are written to tmpfs ($XRAY_LOG_DIR, /tmp) rather than /opt (flash)
+# specifically so leaving this on doesn't wear the flash -- the tradeoff is
+# that the file is capped in size (sr_get_log_cap_mb, enforced continuously
+# by smartroute-gateway's own log tailer, not just at input time) and
+# doesn't survive a reboot, both fine for a live-debugging viewer this is
+# meant to be, not an audit trail.
+XRAY_LOG_DIR="/tmp/xray-logs"
+DEFAULT_LOG_CAP_MB=10
+
+sr_get_log_enabled() {
+	[ -s "$SR_STATE_DIR/log_enabled" ] && cat "$SR_STATE_DIR/log_enabled" || echo "0"
+}
+
+sr_get_log_level() {
+	[ -s "$SR_STATE_DIR/log_level" ] && cat "$SR_STATE_DIR/log_level" || echo "warning"
+}
+
+sr_get_log_cap_mb() {
+	[ -s "$SR_STATE_DIR/log_cap_mb" ] && cat "$SR_STATE_DIR/log_cap_mb" || echo "$DEFAULT_LOG_CAP_MB"
+}
+
+# sr_log_free_mb: MemAvailable (kernel's own "safe to hand out" estimate,
+# not bare MemFree) from /proc/meminfo, in MB. Used both to validate a
+# requested cap and to report the ceiling back to the UI.
+sr_log_free_mb() {
+	avail_kb="$(awk '/MemAvailable:/{print $2; exit}' /proc/meminfo 2>/dev/null)"
+	case "$avail_kb" in '' | *[!0-9]*) echo 0; return ;; esac
+	echo $((avail_kb / 1024))
+}
+
+# sr_apply_log_config: (re)writes 01_log.json from the current enabled/level
+# state and restarts xray to pick it up (Xray has no hot-reload for its own
+# log config). Called after every toggle/level change, and should also run
+# once at install time so a fresh install's file matches this function's
+# idea of "off" byte-for-byte -- see install.sh.
+sr_apply_log_config() {
+	mkdir -p "$XRAY_LOG_DIR"
+	if [ "$(sr_get_log_enabled)" = "1" ]; then
+		level="$(sr_get_log_level)"
+	else
+		level="none"
+	fi
+	cat > "$XKEEN_CONFIGS_DIR/01_log.json" <<EOF
+{
+  "log": {
+    "access": "$XRAY_LOG_DIR/access.log",
+    "error": "$XRAY_LOG_DIR/error.log",
+    "loglevel": "$level",
+    "dnsLog": false
+  }
+}
+EOF
+	command -v xray >/dev/null 2>&1 && pgrep -x xray >/dev/null 2>&1 && sr_restart_xray
+}
+
+sr_set_log_enabled() {
+	sr_ensure_dirs
+	case "$1" in true|1) val=1 ;; false|0) val=0 ;; *) sr_die "expected true/false" ;; esac
+	echo "$val" > "$SR_STATE_DIR/log_enabled"
+	sr_apply_log_config
+}
+
+sr_set_log_level() {
+	case "$1" in debug|info|warning|error) : ;; *) sr_die "expected debug|info|warning|error" ;; esac
+	sr_ensure_dirs
+	echo "$1" > "$SR_STATE_DIR/log_level"
+	[ "$(sr_get_log_enabled)" = "1" ] && sr_apply_log_config
+	return 0
+}
+
+# sr_set_log_cap_mb: rejects a cap over half of currently-free memory --
+# this is a small home router (tens to low hundreds of MB free is typical),
+# not a log server, and the whole point of the cap is to survive an operator
+# leaving logging on and forgetting about it, not to promise the full free
+# amount is safe to commit to one tmpfs mount.
+sr_set_log_cap_mb() {
+	case "$1" in '' | *[!0-9]*) sr_die "cap must be a whole number of MB" ;; esac
+	[ "$1" -ge 1 ] || sr_die "cap must be at least 1 MB"
+	free_mb="$(sr_log_free_mb)"
+	max_allowed=$((free_mb / 2))
+	[ "$max_allowed" -ge 1 ] || max_allowed=1
+	if [ "$1" -gt "$max_allowed" ]; then
+		sr_die "cap ${1}MB exceeds half of currently free memory (${free_mb}MB free, max ${max_allowed}MB) -- pick a smaller value"
+	fi
+	sr_ensure_dirs
+	echo "$1" > "$SR_STATE_DIR/log_cap_mb"
+}
+
+# sr_clear_logs: truncate in place (not unlink) so Xray's already-open file
+# handle keeps writing to the same inode -- deleting the file instead would
+# leave Xray happily appending into a now-nameless inode, invisible to any
+# viewer re-opening the path, until the next restart.
+sr_clear_logs() {
+	: > "$XRAY_LOG_DIR/access.log" 2>/dev/null || true
+	: > "$XRAY_LOG_DIR/error.log" 2>/dev/null || true
+}
+
 sr_log() {
 	logger -t xkeen-smartroute "$*" 2>/dev/null
 	echo "[xkeen-smartroute] $*" >&2

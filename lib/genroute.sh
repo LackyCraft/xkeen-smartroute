@@ -497,5 +497,13 @@ case "${1:-}" in
 		;;
 	get-observatory-period) sr_get_observatory_period_min ;;
 	set-observatory-period) sr_set_observatory_period_min "${2:-}" ;;
-	*) echo "usage: $0 {save <profile.json>|delete <name>|regen|list|get-observatory-period|set-observatory-period <minutes>}" >&2; exit 1 ;;
+	get-log-enabled) sr_get_log_enabled ;;
+	set-log-enabled) sr_set_log_enabled "${2:-}" ;;
+	get-log-level) sr_get_log_level ;;
+	set-log-level) sr_set_log_level "${2:-}" ;;
+	get-log-cap-mb) sr_get_log_cap_mb ;;
+	set-log-cap-mb) sr_set_log_cap_mb "${2:-}" ;;
+	get-log-free-mb) sr_log_free_mb ;;
+	clear-logs) sr_clear_logs ;;
+	*) echo "usage: $0 {save <profile.json>|delete <name>|regen|list|get-observatory-period|set-observatory-period <minutes>|get-log-enabled|set-log-enabled <true|false>|get-log-level|set-log-level <debug|info|warning|error>|get-log-cap-mb|set-log-cap-mb <mb>|get-log-free-mb|clear-logs}" >&2; exit 1 ;;
 esac

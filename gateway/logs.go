@@ -5,6 +5,8 @@ import (
 	"context"
 	"net/http"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -12,9 +14,17 @@ import (
 // tails the actual files the same way `tail -f` would. Polling instead of
 // inotify: one process, two files, checked twice a second is plenty for a
 // log viewer and needs no extra dependency.
+//
+// Logging itself is off by default and, when on, writes to tmpfs rather
+// than flash -- see lib/common.sh's sr_apply_log_config (the single place
+// that decides the path/loglevel Xray actually uses; keep this constant in
+// sync with it). Path stays the same whether logging is on or off, only
+// loglevel changes, so this file never needs to know which state it's in.
 const (
-	accessLogPath = "/opt/var/log/xray/access.log"
-	errorLogPath  = "/opt/var/log/xray/error.log"
+	accessLogPath   = "/tmp/xray-logs/access.log"
+	errorLogPath    = "/tmp/xray-logs/error.log"
+	logCapMBFile    = "/etc/xkeen-smartroute/state/log_cap_mb"
+	defaultLogCapMB = 10
 )
 
 type logLine struct {
@@ -89,7 +99,9 @@ func tailFile(ctx context.Context, path, kind string, out chan<- logLine) {
 				continue
 			}
 			if fi.Size() < pos {
-				// truncated/rotated -- restart from the top of the new file
+				// truncated/rotated (either logging just got re-enabled, or
+				// the size-cap loop below or a manual "clear logs" reset
+				// it) -- restart from the top of the new file
 				pos = 0
 			}
 			if fi.Size() == pos {
@@ -110,4 +122,47 @@ func tailFile(ctx context.Context, path, kind string, out chan<- logLine) {
 			pos, _ = f.Seek(0, 1)
 		}
 	}
+}
+
+// startLogCapLoop enforces the configurable tmpfs size cap continuously,
+// independent of whether anyone currently has the log viewer open -- the
+// whole point is bounding RAM usage while logging is left on, not just
+// while being watched. Runs unconditionally (cheap: two stats a tick) since
+// checking "is logging even on" would just be one more file read of
+// similar cost, and this needs to catch growth promptly right after
+// someone flips the toggle on regardless.
+func startLogCapLoop() {
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			capBytes := readLogCapMB() * 1024 * 1024
+			enforceLogCap(accessLogPath, capBytes)
+			enforceLogCap(errorLogPath, capBytes)
+		}
+	}()
+}
+
+func readLogCapMB() int64 {
+	b, err := os.ReadFile(logCapMBFile)
+	if err != nil {
+		return defaultLogCapMB
+	}
+	n, err := strconv.ParseInt(strings.TrimSpace(string(b)), 10, 64)
+	if err != nil || n <= 0 {
+		return defaultLogCapMB
+	}
+	return n
+}
+
+func enforceLogCap(path string, capBytes int64) {
+	fi, err := os.Stat(path)
+	if err != nil || fi.Size() <= capBytes {
+		return
+	}
+	// Truncate in place (not remove) so Xray's already-open file handle
+	// keeps writing into the same inode -- see sr_clear_logs's identical
+	// reasoning in lib/common.sh, this is the same operation for the same
+	// reason, just triggered by size instead of a button.
+	_ = os.Truncate(path, 0)
 }

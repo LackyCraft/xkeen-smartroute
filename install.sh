@@ -240,6 +240,23 @@ else
 	log "xkeen уже установлен: $(xkeen -status 2>/dev/null | head -n1 || echo ok)"
 fi
 
+# Xray's own log directory lives on tmpfs (/tmp/xray-logs, see 01_log.json
+# below) so the on-demand logging toggle never wears the flash -- but tmpfs
+# is wiped every reboot, and xkeen's own S24xray boot script execs xray
+# directly (not through lib/common.sh), so this project's own restart
+# helpers aren't in the loop at boot time. A tiny init.d script numbered to
+# run just before S24xray is the one choke point that's actually guaranteed
+# to fire before Xray does, every boot, regardless of which of the several
+# things that can start Xray (boot, cron restart, a manual restart from any
+# UI) ends up doing it this time.
+mkdir -p /tmp/xray-logs /opt/etc/init.d
+cat > /opt/etc/init.d/S23xray-logdir <<'XRAY_LOGDIR_EOF'
+#!/bin/sh
+# Ensures Xray's tmpfs log directory exists before S24xray starts it.
+mkdir -p /tmp/xray-logs
+XRAY_LOGDIR_EOF
+chmod +x /opt/etc/init.d/S23xray-logdir
+
 # xkeen ships 01_log.json/03_inbounds.json/05_routing.json with `//` comments
 # (and, on some mirrors, non-UTF8 Cyrillic in those comments). Functionally
 # harmless to Xray itself, but xkeen-UI's GUI Mode (visual routing/log editor,
@@ -248,11 +265,22 @@ fi
 # which looks like the config doesn't exist at all. Overwritten unconditionally
 # on every run (not just fresh installs) so an existing install picks this up
 # too; functionally identical to xkeen's own templates, just comment-free.
+#
+# loglevel "none" is not a severity filter -- Xray's own log app sets BOTH
+# AccessLogType and ErrorLogType to "none" for this value, so nothing is
+# *ever* written, not even a suppressed/rotated-away line. This is the
+# deliberate default (access logging every request has a real cost, both in
+# flash wear were it pointed at /opt and in RAM if left on indefinitely on
+# tmpfs) -- SmartRoute UI/LuCI's own log toggle
+# (sr_set_log_enabled/sr_apply_log_config in lib/common.sh) flips loglevel
+# and restarts xray on demand. The path already points at tmpfs so toggling
+# logging on never needs to touch this file's path, only its loglevel --
+# keep this literal block in sync with sr_apply_log_config's "off" output.
 cat > /opt/etc/xray/configs/01_log.json <<'XRAY_LOG_EOF'
 {
   "log": {
-    "access": "/opt/var/log/xray/access.log",
-    "error": "/opt/var/log/xray/error.log",
+    "access": "/tmp/xray-logs/access.log",
+    "error": "/tmp/xray-logs/error.log",
     "loglevel": "none",
     "dnsLog": false
   }
@@ -468,8 +496,10 @@ else
 	rm -f /tmp/smartroute-gateway.gz
 
 	if [ -x "$SR_SHARE_DIR/gateway" ]; then
-		wget -O "$SR_SHARE_DIR/panel/index.html" "$REPO_RAW/gateway/static/index.html" \
-			|| die "не удалось скачать панель gateway/static/index.html"
+		for f in index.html style.css app.js status.js subscriptions.js profiles.js killswitch.js protection.js logo.png; do
+			wget -O "$SR_SHARE_DIR/panel/$f" "$REPO_RAW/gateway/static/$f" \
+				|| die "не удалось скачать панель gateway/static/$f"
+		done
 
 		cat > /opt/etc/init.d/S98smartroute-gateway <<GATEWAY_INIT_EOF
 #!/bin/sh
@@ -507,6 +537,39 @@ GATEWAY_INIT_EOF
 		sleep 1
 		/opt/etc/init.d/S98smartroute-gateway start
 		log "Панель: http://$(uci get network.lan.ipaddr 2>/dev/null || echo 192.168.1.1):$SR_GATEWAY_PORT/"
+
+		# The gateway panel now does more than show live traffic -- it can edit
+		# subscriptions/profiles/kill-switch too, the same as LuCI -- so it
+		# gets the same one-time password prompt xkeen-UI already has above,
+		# hitting its own /api/change-password instead. Skipped (not forced)
+		# if a password is already set, same reasoning as xkeen-UI's block:
+		# re-running install.sh must never silently reset a password someone
+		# already chose.
+		gw_pw_file="$SR_ETC_DIR/state/gateway_password_hash"
+		if [ -s "$gw_pw_file" ]; then
+			log "У панели SmartRoute уже задан пароль, пропускаю."
+		elif [ -r /dev/tty ] && command -v curl >/dev/null 2>&1; then
+			sleep 1
+			log "Задайте пароль для панели SmartRoute (порт $SR_GATEWAY_PORT) -- рекомендуется тот же, что и для входа на роутер. Пусто = без пароля (панель останется открытой всем в сети)."
+			printf "Пароль: "
+			stty -echo < /dev/tty 2>/dev/null
+			read -r gw_pw < /dev/tty
+			stty echo < /dev/tty 2>/dev/null
+			printf "\n"
+			if [ -n "$gw_pw" ]; then
+				gw_resp="$(curl -s -m 5 -X POST "http://127.0.0.1:$SR_GATEWAY_PORT/api/change-password" -H 'Content-Type: application/json' \
+					--data-binary "$(jq -n --arg pw "$gw_pw" '{current:"",new:$pw}')" 2>/dev/null)"
+				case "$gw_resp" in
+					*'"ok":true'*) log "Пароль для панели SmartRoute установлен." ;;
+					*) log "ПРЕДУПРЕЖДЕНИЕ: не удалось установить пароль панели SmartRoute ($gw_resp) -- панель осталась без пароля, задайте его вручную на вкладке Статус." ;;
+				esac
+			else
+				log "Пароль не введён, панель SmartRoute останется без авторизации -- задайте её вручную на вкладке Статус при желании."
+			fi
+			unset gw_pw
+		else
+			log "ПРЕДУПРЕЖДЕНИЕ: нет интерактивного терминала, пропускаю установку пароля панели SmartRoute -- задайте его вручную на вкладке Статус."
+		fi
 	fi
 fi
 

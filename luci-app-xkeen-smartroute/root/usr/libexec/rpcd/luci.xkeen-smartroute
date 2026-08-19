@@ -65,6 +65,11 @@ case "$1" in
 	"set_auto_refresh_enabled": {"enabled":"bool1"},
 	"get_observatory_period": {},
 	"set_observatory_period": {"minutes":"str1"},
+	"get_log_config": {},
+	"set_log_enabled": {"enabled":"bool1"},
+	"set_log_level": {"level":"str1"},
+	"set_log_cap_mb": {"mb":"str1"},
+	"clear_logs": {},
 	"refresh_now": {},
 	"redirect_status": {},
 	"redirect_set_enabled": {"enabled":"bool1"},
@@ -377,6 +382,39 @@ EOF
 				else
 					jq -n --arg log "$(cat /tmp/sr_observatory_period.log)" '{error:"invalid_minutes", detail:$log}'
 				fi
+				;;
+			get_log_config)
+				enabled="$(sh "$LIB_DIR/genroute.sh" get-log-enabled 2>/dev/null)"
+				level="$(sh "$LIB_DIR/genroute.sh" get-log-level 2>/dev/null)"
+				cap="$(sh "$LIB_DIR/genroute.sh" get-log-cap-mb 2>/dev/null)"
+				free="$(sh "$LIB_DIR/genroute.sh" get-log-free-mb 2>/dev/null)"
+				jq -n --arg e "${enabled:-0}" --arg l "${level:-warning}" --arg c "${cap:-10}" --arg f "${free:-0}" \
+					'{enabled: ($e == "1"), level: $l, cap_mb: ($c|tonumber), free_mb: ($f|tonumber)}'
+				;;
+			set_log_enabled)
+				enabled="$(echo "$args" | jq -r '.enabled // false')"
+				sh "$LIB_DIR/genroute.sh" set-log-enabled "$enabled" >/tmp/sr_log_enabled.log 2>&1
+				jq -n '{ok:true}'
+				;;
+			set_log_level)
+				level="$(echo "$args" | jq -r '.level // empty')"
+				if sh "$LIB_DIR/genroute.sh" set-log-level "$level" >/tmp/sr_log_level.log 2>&1; then
+					jq -n '{ok:true}'
+				else
+					jq -n --arg log "$(cat /tmp/sr_log_level.log)" '{error:"invalid_level", detail:$log}'
+				fi
+				;;
+			set_log_cap_mb)
+				mb="$(echo "$args" | jq -r '.mb // empty')"
+				if sh "$LIB_DIR/genroute.sh" set-log-cap-mb "$mb" >/tmp/sr_log_cap.log 2>&1; then
+					jq -n '{ok:true}'
+				else
+					jq -n --arg log "$(cat /tmp/sr_log_cap.log)" '{error:"cap_rejected", detail:$log}'
+				fi
+				;;
+			clear_logs)
+				sh "$LIB_DIR/genroute.sh" clear-logs >/tmp/sr_log_clear.log 2>&1
+				jq -n '{ok:true}'
 				;;
 			redirect_status)
 				out="$(sh "$LIB_DIR/redirect.sh" status 2>/dev/null)"

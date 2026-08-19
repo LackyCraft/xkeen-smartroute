@@ -27,6 +27,7 @@ func main() {
 	listenAddr := envOr("SR_GATEWAY_LISTEN", "0.0.0.0:9095")
 	xrayAddr := envOr("SR_GATEWAY_XRAY_API", "127.0.0.1:10085")
 	staticDir := envOr("SR_GATEWAY_STATIC_DIR", "")
+	rpcdScript := envOr("SR_GATEWAY_RPCD_SCRIPT", defaultRpcdScript)
 
 	xc, err := newXrayClient(xrayAddr)
 	if err != nil {
@@ -36,8 +37,17 @@ func main() {
 
 	startFailoverLoop(xc)
 	startActivityLoop(xc)
+	startLogCapLoop()
+
+	rpc := newRPCBridge(rpcdScript)
 
 	mux := http.NewServeMux()
+
+	mux.HandleFunc("GET /api/auth/status", handleAuthStatus)
+	mux.HandleFunc("POST /api/login", handleLogin)
+	mux.HandleFunc("POST /api/logout", handleLogout)
+	mux.HandleFunc("POST /api/change-password", handleChangePassword)
+	mux.HandleFunc("POST /api/call/{method}", handleRPC(rpc))
 
 	mux.HandleFunc("GET /version", handleVersion)
 	mux.HandleFunc("GET /proxies", handleProxies)
@@ -59,7 +69,7 @@ func main() {
 	mux.HandleFunc("GET /logs", logsWSHandler())
 	mux.HandleFunc("OPTIONS /", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, PUT, PATCH, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "*")
 	})
 
@@ -67,8 +77,8 @@ func main() {
 		mux.Handle("/", http.FileServer(http.Dir(staticDir)))
 	}
 
-	log.Printf("smartroute-gateway listening on %s (xray api %s, static %q)", listenAddr, xrayAddr, staticDir)
-	log.Fatal(http.ListenAndServe(listenAddr, corsWrap(mux)))
+	log.Printf("smartroute-gateway listening on %s (xray api %s, static %q, rpcd %q)", listenAddr, xrayAddr, staticDir, rpcdScript)
+	log.Fatal(http.ListenAndServe(listenAddr, corsWrap(requireAuth(mux))))
 }
 
 func envOr(key, def string) string {
