@@ -153,6 +153,9 @@ var callSetObservatoryPeriod = rpc.declare({
 	object: 'luci.xkeen-smartroute', method: 'set_observatory_period',
 	params: ['minutes']
 });
+var callGetHealthMetrics = rpc.declare({
+	object: 'luci.xkeen-smartroute', method: 'get_health_metrics'
+});
 var callRefreshNow = rpc.declare({
 	object: 'luci.xkeen-smartroute', method: 'refresh_now'
 });
@@ -374,8 +377,15 @@ var DICT = {
 	status_traffic_up: { ru: 'Отдача', en: 'Upload' },
 	status_traffic_down: { ru: 'Приём', en: 'Download' },
 	status_traffic_disconnected: { ru: 'нет соединения с панелью (порт 1001)', en: 'not connected to the panel (port 1001)' },
-	status_logs_title: { ru: 'Логи Xray (реальное время)', en: 'Xray logs (live)' },
-	status_logs_empty: { ru: 'Пока пусто — появится при новых соединениях.', en: 'Nothing yet — will fill in as new connections happen.' },
+	status_metrics_title: { ru: 'Здоровье серверов и Observatory', en: 'Server health and Observatory' },
+	status_metrics_alive: { ru: 'Живых серверов', en: 'Alive servers' },
+	status_metrics_dead: { ru: 'Мёртвых серверов', en: 'Dead servers' },
+	status_metrics_unknown: { ru: 'Ещё не проверено', en: 'Not checked yet' },
+	status_metrics_last_refresh: { ru: 'Последнее обновление подписки', en: 'Last subscription refresh' },
+	status_metrics_last_ping: { ru: 'Последний пересчёт пинга', en: 'Last ping sweep' },
+	status_metrics_last_observatory: { ru: 'Последняя проверка Observatory', en: 'Last Observatory check' },
+	status_metrics_queue: { ru: 'В очереди на проверку Observatory', en: 'Queued for Observatory check' },
+	status_metrics_never: { ru: 'ещё ни разу', en: 'never yet' },
 
 	ks_intro: { ru: 'Жёсткий kill-switch: если процесс xray упадёт (или его правила перехвата трафика пропадут), домены профиля будут заблокированы файрволом полностью — вместо риска уйти в интернет напрямую в обход VPN. Правило включается сразу и постоянно, без опроса раз в минуту — зазора по времени нет. Работает для geosite- и custom-профилей; для geosite-категорий покрытие неполное — учитываются только записи domain:/full: из исходного списка geosite, а keyword:/regexp: (их нет как буквальных доменов) не переносятся.',
 	           en: "Hard kill-switch: if the xray process dies (or its traffic-capture rules disappear), the profile's domains get fully blocked by the firewall instead of risking a direct route around the VPN. The rule is armed immediately and stays on — no once-a-minute polling, so there's no time gap. Works for both geosite and custom profiles; geosite coverage is partial — only the domain:/full: entries from the category's source list translate to a literal block, keyword:/regexp: entries have no literal-domain equivalent and aren't covered." },
@@ -578,6 +588,7 @@ return L.Class.extend({
 		setRefreshHours: callSetRefreshHours,
 		getObservatoryPeriod: callGetObservatoryPeriod,
 		setObservatoryPeriod: callSetObservatoryPeriod,
+		getHealthMetrics: callGetHealthMetrics,
 		refreshNow: callRefreshNow,
 		listKillswitchEnabled: callListKillswitchEnabled,
 		redirectStatus: callRedirectStatus,

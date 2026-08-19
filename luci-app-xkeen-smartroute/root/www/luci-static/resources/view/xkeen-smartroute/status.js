@@ -6,14 +6,15 @@
 var GATEWAY_PORT = 1001;
 var XKEENUI_PORT = 1000;
 var TRAFFIC_HISTORY_LEN = 60;
-var LOG_MAX_LINES = 200;
+var METRICS_POLL_MS = 15000;
 
 return view.extend({
 	load: function () {
 		return Promise.all([
 			sr.rpc.getStatus(),
 			sr.rpc.serviceStatus(),
-			sr.rpc.listSubscriptions()
+			sr.rpc.listSubscriptions(),
+			sr.rpc.getHealthMetrics()
 		]);
 	},
 
@@ -100,6 +101,51 @@ return view.extend({
 		]);
 	},
 
+	// relTime: epoch seconds (server counters) or an ISO8601 string
+	// (health.json's checked_at) -> "Xм назад"/"Xh ago", or "ещё ни разу"
+	// for 0/null/missing (nothing has ever run yet).
+	relTime: function (v) {
+		if (!v) return sr.T('status_metrics_never');
+		var ms = typeof v === 'number' ? v * 1000 : Date.parse(v);
+		if (!ms || isNaN(ms)) return sr.T('status_metrics_never');
+		var sec = Math.max(0, Math.floor((Date.now() - ms) / 1000));
+		if (sec < 60) return sec + (sr.lang() === 'en' ? 's ago' : 'с назад');
+		var min = Math.floor(sec / 60);
+		if (min < 60) return min + (sr.lang() === 'en' ? 'm ago' : 'м назад');
+		var hr = Math.floor(min / 60);
+		return hr + (sr.lang() === 'en' ? 'h ago' : 'ч назад');
+	},
+
+	renderMetrics: function () {
+		var box = document.getElementById('sr-status-metrics');
+		if (!box) return;
+		var m = this.metrics || {};
+		box.innerHTML = '';
+		box.appendChild(E('ul', {}, [
+			E('li', {}, [E('span', { 'style': 'color:#2ecc71' }, '● '), sr.T('status_metrics_alive') + ': ' + (m.alive || 0)]),
+			E('li', {}, [E('span', { 'style': 'color:#e74c3c' }, '● '), sr.T('status_metrics_dead') + ': ' + (m.dead || 0)]),
+			E('li', {}, [E('span', { 'style': 'color:#999' }, '● '), sr.T('status_metrics_unknown') + ': ' + (m.unknown || 0)]),
+			E('li', {}, sr.T('status_metrics_last_refresh') + ': ' + this.relTime(m.last_subscription_refresh)),
+			E('li', {}, sr.T('status_metrics_last_ping') + ': ' + this.relTime(m.last_ping_run)),
+			E('li', {}, sr.T('status_metrics_last_observatory') + ': ' + this.relTime(m.last_observatory_check)),
+			E('li', {}, sr.T('status_metrics_queue') + ': ' + (m.observatory_queue_size != null ? m.observatory_queue_size : '—'))
+		]));
+	},
+
+	pollMetrics: function () {
+		var view = this;
+		if (view.isGone()) return;
+		sr.rpc.getHealthMetrics().then(function (m) {
+			if (view.isGone()) return;
+			view.metrics = m || {};
+			view.renderMetrics();
+			setTimeout(function () { view.pollMetrics(); }, METRICS_POLL_MS);
+		}, function () {
+			if (view.isGone()) return;
+			setTimeout(function () { view.pollMetrics(); }, METRICS_POLL_MS);
+		});
+	},
+
 	fmtBytes: function (n) {
 		n = n || 0;
 		if (n < 1024) return n + ' Б/с';
@@ -174,41 +220,12 @@ return view.extend({
 		};
 	},
 
-	connectLogs: function () {
-		var view = this;
-		if (view.isGone()) return;
-		var ws;
-		try { ws = new WebSocket(view.wsURL('/logs')); } catch (e) {
-			setTimeout(function () { view.connectLogs(); }, 3000);
-			return;
-		}
-		view.logsWs = ws;
-		ws.onclose = function () {
-			if (view.isGone()) return;
-			setTimeout(function () { view.connectLogs(); }, 3000);
-		};
-		ws.onerror = function () { ws.close(); };
-		ws.onmessage = function (ev) {
-			if (view.isGone()) { ws.close(); return; }
-			var box = document.getElementById('sr-logs-box');
-			if (!box) return;
-			try {
-				var d = JSON.parse(ev.data);
-				var empty = document.getElementById('sr-logs-empty');
-				if (empty) empty.remove();
-				var line = E('div', { 'style': d.type === 'error' ? 'color:#e74c3c' : '' }, d.payload);
-				box.appendChild(line);
-				while (box.childNodes.length > LOG_MAX_LINES) box.removeChild(box.firstChild);
-				box.scrollTop = box.scrollHeight;
-			} catch (e) {}
-		};
-	},
-
 	render: function (data) {
 		var view = this;
 		var getStatusResult = data[0] || {};
 		view.serviceState = data[1] || {};
 		var subs = data[2] || [];
+		view.metrics = data[3] || {};
 
 		var servicesBox = E('div', { 'id': 'sr-status-services' });
 		var linksBox = E('div', { 'style': 'display:flex;gap:1em;flex-wrap:wrap;margin:.5em 0' }, [
@@ -236,6 +253,11 @@ return view.extend({
 			]),
 
 			E('div', { 'class': 'cbi-section' }, [
+				E('h3', {}, sr.T('status_metrics_title')),
+				E('div', { 'id': 'sr-status-metrics' })
+			]),
+
+			E('div', { 'class': 'cbi-section' }, [
 				E('h3', {}, sr.T('status_traffic_title')),
 				E('p', { 'id': 'sr-traffic-conn', 'class': 'cbi-value-description', 'style': 'color:#e74c3c' }, sr.T('status_traffic_disconnected')),
 				E('div', { 'style': 'display:flex;gap:2em;margin:.25em 0' }, [
@@ -243,23 +265,14 @@ return view.extend({
 					E('div', {}, [E('span', { 'style': 'display:inline-block;width:.7em;height:.7em;background:#3498db;margin-right:.4em' }), sr.T('status_traffic_down') + ': ', E('span', { 'id': 'sr-traffic-down' }, '0 Б/с')])
 				]),
 				E('canvas', { 'id': 'sr-traffic-canvas', 'width': '640', 'height': '80', 'style': 'width:100%;max-width:640px;height:80px;border:1px solid #8884' })
-			]),
-
-			E('div', { 'class': 'cbi-section' }, [
-				E('h3', {}, sr.T('status_logs_title')),
-				E('div', {
-					'id': 'sr-logs-box',
-					'style': 'font-family:monospace;font-size:.85em;max-height:16em;overflow-y:auto;background:rgba(128,128,128,.08);border:1px solid #8884;border-radius:4px;padding:.5em'
-				}, [
-					E('div', { 'id': 'sr-logs-empty', 'class': 'cbi-value-description' }, sr.T('status_logs_empty'))
-				])
 			])
 		]);
 
 		requestAnimationFrame(function () {
 			view.renderServices();
+			view.renderMetrics();
 			view.connectTraffic();
-			view.connectLogs();
+			setTimeout(function () { view.pollMetrics(); }, METRICS_POLL_MS);
 		});
 
 		return root;
