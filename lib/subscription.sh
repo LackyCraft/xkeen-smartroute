@@ -163,7 +163,18 @@ build_outbound() {
 	# breaks". That's a better trade than silently breaking every node
 	# whose provider genuinely requires this to connect at all.
 	extra_raw="$(urldecode "$(qval "$query" extra)")"
-	extra_json="$(printf '%s' "$extra_raw" | jq -c . 2>/dev/null || echo 'null')"
+	# `jq -c .` on completely empty input (the common case -- most nodes,
+	# e.g. every REALITY one, have no "extra" param at all) exits 0 with no
+	# output at all, not an error -- so `|| echo 'null'` never triggered and
+	# extra_json ended up as an empty string. --argjson then rejects that
+	# outright ("invalid JSON text"), which fails build_outbound's own jq
+	# call entirely and silently drops the whole node. Confirmed live: this
+	# dropped a 130-server subscription down to 26 -- every node without an
+	# explicit "extra" param vanished. Checking the actual output for
+	# emptiness (not just the exit code) catches both the "no input" and
+	# the "malformed input" cases the same way.
+	extra_json="$(printf '%s' "$extra_raw" | jq -c . 2>/dev/null)"
+	[ -n "$extra_json" ] || extra_json='null'
 
 	jq -n \
 		--arg tag "$tag" --arg proto "$proto" --arg address "$host" --argjson port "$port" \
@@ -202,6 +213,34 @@ sr_import() {
 	os_ov="${4:-}"; locale_ov="${5:-}"; model_ov="${6:-}"; ver_ov="${7:-}"; hwid_ov="${8:-}"
 	sr_require curl; sr_require jq
 	sr_ensure_dirs
+
+	# Concurrent imports raced on the same tmp_outbounds/tmp_servers files
+	# for real: an SSH client-side timeout left a refresh-one running on the
+	# router well past when the caller gave up and retried, and the two
+	# interleaved writes corrupted the result down from 130 servers to 26.
+	# mkdir is atomic on every filesystem this project runs on (same
+	# technique genroute.sh's regen lock already uses). Unlike that lock,
+	# this one *waits* instead of skipping on contention -- an explicit
+	# "refresh now" click racing the hourly cron should still actually
+	# import, not silently no-op just because something else got there
+	# first.
+	lock_dir="$SR_STATE_DIR/.import.lock"
+	waited=0
+	while ! mkdir "$lock_dir" 2>/dev/null; do
+		lock_age=999999
+		if [ -d "$lock_dir" ]; then
+			lock_age=$(( $(date +%s) - $(date -r "$lock_dir" +%s 2>/dev/null || echo 0) ))
+		fi
+		if [ "$lock_age" -ge 300 ]; then
+			sr_log "reclaiming stale import lock (${lock_age}s old)"
+			rm -rf "$lock_dir"
+			continue
+		fi
+		[ "$waited" -lt 120 ] || sr_die "another subscription import is already running and didn't finish within 120s"
+		sleep 2
+		waited=$((waited + 2))
+	done
+	trap 'rm -rf "$lock_dir"' EXIT INT TERM
 
 	raw="$(sr_fetch_sub "$client" "$url" "$os_ov" "$locale_ov" "$model_ov" "$ver_ov" "$hwid_ov")" || sr_die "failed to fetch subscription: $url"
 	decoded="$(printf '%s' "$raw" | base64 -d 2>/dev/null || true)"
