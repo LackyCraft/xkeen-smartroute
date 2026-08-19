@@ -2,7 +2,7 @@ name: Build smartroute-gateway
 
 on:
   push:
-    branches: [main]
+    branches: [master]
     paths:
       - "gateway/**"
       - ".github/workflows/build-gateway.yml"
@@ -58,7 +58,7 @@ jobs:
             Автоматическая сборка smartroute-gateway при каждом изменении в `gateway/`.
             Ставится через install.sh -- не для ручной установки.
 
-            Auto-built from `gateway/` on every push to main. Installed by install.sh --
+            Auto-built from `gateway/` on every push to master. Installed by install.sh --
             not meant for manual download.
           prerelease: true
           files: ${{ env.ASSET }}

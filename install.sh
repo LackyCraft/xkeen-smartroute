@@ -1,7 +1,7 @@
 #!/bin/sh
 # XKeen SmartRoute — one-shot installer for OpenWrt.
 #
-#   sh <(wget -O - https://raw.githubusercontent.com/LackyCraft/xkeen-smartroute/main/install.sh)
+#   sh <(wget -O - https://raw.githubusercontent.com/LackyCraft/xkeen-smartroute/master/install.sh)
 #
 # What it does, in order:
 #   1. Sanity-checks this is OpenWrt, checks free space on /overlay.
@@ -15,7 +15,7 @@
 
 set -eu
 
-REPO_RAW="https://raw.githubusercontent.com/LackyCraft/xkeen-smartroute/main"
+REPO_RAW="https://raw.githubusercontent.com/LackyCraft/xkeen-smartroute/master"
 GATEWAY_RELEASE_BASE="https://github.com/LackyCraft/xkeen-smartroute/releases/download/gateway-latest"
 XKEEN_INSTALL_URL="https://raw.githubusercontent.com/Skrill0/XKeen/main/install.sh"
 XKEEN_UI_REPO="zxc-rv/XKeen-UI"

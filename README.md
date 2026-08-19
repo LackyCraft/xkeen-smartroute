@@ -211,7 +211,7 @@ SmartRoute (наш LuCI-модуль + отдельная панель, см. [�
 Через SSH на роутере:
 
 ```sh
-sh <(wget -O - https://raw.githubusercontent.com/LackyCraft/xkeen-smartroute/main/install.sh)
+sh <(wget -O - https://raw.githubusercontent.com/LackyCraft/xkeen-smartroute/master/install.sh)
 ```
 
 Скрипт идемпотентен — его можно перезапускать сколько угодно раз, уже установленные компоненты он пропустит. По шагам он:
@@ -277,7 +277,7 @@ Xray-core использует базу **geosite** ([v2fly/domain-list-communit
 sh check.sh
 ```
 
-(или скачайте и запустите: `sh <(wget -O - https://raw.githubusercontent.com/LackyCraft/xkeen-smartroute/main/check.sh)`)
+(или скачайте и запустите: `sh <(wget -O - https://raw.githubusercontent.com/LackyCraft/xkeen-smartroute/master/check.sh)`)
 
 Скрипт проверяет: OpenWrt/Entware/xkeen/процесс xray/xkeen-UI/валидность сгенерированных конфигов/наличие ubus-бэкенда и LuCI-страниц/количество серверов и профилей — и отмечает `[OK]`/`[FAIL]`/`[--]` по каждому пункту.
 
@@ -297,9 +297,9 @@ sh check.sh
 Удаление:
 
 ```sh
-sh <(wget -O - https://raw.githubusercontent.com/LackyCraft/xkeen-smartroute/main/uninstall.sh)
+sh <(wget -O - https://raw.githubusercontent.com/LackyCraft/xkeen-smartroute/master/uninstall.sh)
 # добавьте --purge, если нужно удалить и все профили/списки:
-sh <(wget -O - https://raw.githubusercontent.com/LackyCraft/xkeen-smartroute/main/uninstall.sh) --purge
+sh <(wget -O - https://raw.githubusercontent.com/LackyCraft/xkeen-smartroute/master/uninstall.sh) --purge
 ```
 
 `xkeen`, `xkeen-UI` и Entware при этом не трогаются — это отдельные проекты, удаляйте их своими средствами при необходимости.

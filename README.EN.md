@@ -211,7 +211,7 @@ The first version of the panel was built on **metacubexd** (a ready-made open-so
 Over SSH on the router:
 
 ```sh
-sh <(wget -O - https://raw.githubusercontent.com/LackyCraft/xkeen-smartroute/main/install.sh)
+sh <(wget -O - https://raw.githubusercontent.com/LackyCraft/xkeen-smartroute/master/install.sh)
 ```
 
 The script is idempotent — safe to re-run any number of times; already-installed pieces get skipped. Step by step, it:
@@ -277,7 +277,7 @@ Want to add a list for your own service? Two ways:
 sh check.sh
 ```
 
-(or fetch and run: `sh <(wget -O - https://raw.githubusercontent.com/LackyCraft/xkeen-smartroute/main/check.sh)`)
+(or fetch and run: `sh <(wget -O - https://raw.githubusercontent.com/LackyCraft/xkeen-smartroute/master/check.sh)`)
 
 The script checks: OpenWrt/Entware/xkeen/the xray process/xkeen-UI/generated-config validity/presence of the ubus backend and LuCI pages/server and profile counts — and flags each as `[OK]`/`[FAIL]`/`[--]`.
 
@@ -297,9 +297,9 @@ Updating is just re-running `install.sh` (re-pulls our files; `xkeen`/`xkeen-UI`
 Uninstalling:
 
 ```sh
-sh <(wget -O - https://raw.githubusercontent.com/LackyCraft/xkeen-smartroute/main/uninstall.sh)
+sh <(wget -O - https://raw.githubusercontent.com/LackyCraft/xkeen-smartroute/master/uninstall.sh)
 # add --purge to also remove all profiles/lists:
-sh <(wget -O - https://raw.githubusercontent.com/LackyCraft/xkeen-smartroute/main/uninstall.sh) --purge
+sh <(wget -O - https://raw.githubusercontent.com/LackyCraft/xkeen-smartroute/master/uninstall.sh) --purge
 ```
 
 `xkeen`, `xkeen-UI` and Entware are left untouched — they're separate projects, remove them with their own tooling if needed.
