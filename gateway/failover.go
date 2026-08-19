@@ -160,5 +160,19 @@ func persistHealth(health map[string]outboundHealth) {
 	if err != nil {
 		return
 	}
-	_ = os.WriteFile(healthStateFile, b, 0o644)
+	// A power cut mid-write (this fires every 20s, all day) can leave a
+	// direct os.WriteFile truncated or corrupt; the read above then
+	// silently treats that as "no old data" (its own error is ignored too)
+	// and overwrites with just the current tick's sparse data, discarding
+	// everything Xray hadn't re-probed yet since its last restart -- which
+	// is most of a large subscription, most of the time. Write to a temp
+	// file in the same directory and rename over the target instead:
+	// rename is atomic on the same filesystem, so the file on disk is
+	// always either the complete old version or the complete new one,
+	// never a partial write.
+	tmp := healthStateFile + ".tmp"
+	if err := os.WriteFile(tmp, b, 0o644); err != nil {
+		return
+	}
+	_ = os.Rename(tmp, healthStateFile)
 }

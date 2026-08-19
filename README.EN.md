@@ -166,11 +166,13 @@ Final ranking of candidates, best first:
 
 It would seem safest to check the group's servers the instant a site is opened. In practice that would mean a delay on **every new domain** the browser touches (dozens per page load — CDNs, analytics, fonts), and for large groups (a pool of 50-60 servers) that delay would be noticeable. Instead, the pick is recomputed on a schedule (every 3 minutes via `cron`) from already-fresh data — the specific group's servers still get pinged again on every recompute, it just doesn't block the page the user is trying to open.
 
-### Keeping observatory's data across restarts
+### Keeping observatory's data across restarts, and checking what matters first
 
-Xray's own `observatory` only keeps results in memory — every Xray restart (a profile change, the nightly scheduled restart, etc.) resets its progress to zero, and re-sweeping a ~150-160-server subscription from scratch takes roughly an hour. `smartroute-gateway` now **persists** what it already knows across those resets (the `health.json` file is merged into, not overwritten wholesale), and every entry carries a timestamp for when it was last actually checked — so already-collected data doesn't just get thrown away while Xray re-sweeps the subscription.
+Xray's own `observatory` only keeps results in memory — every Xray restart (a profile's top pick changing, the nightly scheduled restart, etc.) resets its progress to zero. `smartroute-gateway` **persists** what it already knows across those resets (the `health.json` file is merged into, not overwritten wholesale, atomically — survives even a power cut mid-write), and every entry carries a timestamp for when it was last actually checked.
 
-Each server's observatory status (alive / dead / not checked yet, with when it was last checked) is shown right in the server list on the Subscriptions tab.
+The list of servers Xray is actively probing right now (`subjectSelector`) isn't static either: every time routing is recomputed, it narrows down to whatever's actually stale (not checked within the configurable period) — servers used by current profiles first, and only once none of those are stale does it fall back to the rest of the subscription. Profile servers always get checked first this way, and a restart never throws away all accumulated progress, at most the one probe that was in flight. For the full mechanics, the real algorithm, and a live example, see [docs/balancer.md](docs/balancer.md) (Russian).
+
+Each server's observatory status (alive / dead / not checked yet, with when it was last checked) is shown right in the server list on the Subscriptions tab, where the check period (`time_period_observatory`, 20 minutes by default) is also configurable.
 
 ## The SmartRoute panel, and why not Mihomo
 

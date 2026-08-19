@@ -31,6 +31,27 @@ SR_PING_FILE="$SR_STATE_DIR/ping.json"
 SR_HEALTH_FILE="$SR_STATE_DIR/health.json"
 SR_CURRENT_FILE="$SR_STATE_DIR/current.json"
 
+# How stale a health.json entry has to be (minutes since its checked_at)
+# before genroute.sh's observatory subjectSelector considers it due for a
+# re-probe -- see sr_stale_tags/sr_regen in genroute.sh. Configurable from
+# the Subscriptions page. 20 minutes: short enough that a server's real
+# status doesn't drift far from reality, long enough that a full pass over
+# a few hundred servers (confirmed live: ~1s avg per probe once
+# probeInterval isn't the bottleneck) comfortably finishes within one
+# period even when regens interrupt it.
+DEFAULT_OBSERVATORY_PERIOD_MIN=20
+
+sr_get_observatory_period_min() {
+	[ -s "$SR_STATE_DIR/observatory_period_min" ] && cat "$SR_STATE_DIR/observatory_period_min" || echo "$DEFAULT_OBSERVATORY_PERIOD_MIN"
+}
+
+sr_set_observatory_period_min() {
+	sr_ensure_dirs
+	case "$1" in *[!0-9]*|'') sr_die "observatory period must be a whole number of minutes" ;; esac
+	[ "$1" -ge 1 ] || sr_die "observatory period must be at least 1 minute"
+	echo "$1" > "$SR_STATE_DIR/observatory_period_min"
+}
+
 sr_log() {
 	logger -t xkeen-smartroute "$*" 2>/dev/null
 	echo "[xkeen-smartroute] $*" >&2

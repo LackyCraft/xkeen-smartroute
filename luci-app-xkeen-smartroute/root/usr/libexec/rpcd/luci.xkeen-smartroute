@@ -60,6 +60,8 @@ case "$1" in
 	"get_activity": {},
 	"get_refresh_hours": {},
 	"set_refresh_hours": {"hours":"str1"},
+	"get_observatory_period": {},
+	"set_observatory_period": {"minutes":"str1"},
 	"refresh_now": {},
 	"redirect_status": {},
 	"redirect_set_enabled": {"enabled":"bool1"},
@@ -322,6 +324,18 @@ EOF
 			refresh_now)
 				sh "$LIB_DIR/subscription.sh" refresh-now >/tmp/sr_refresh_now.log 2>&1 &
 				jq -n '{ok:true, note:"started in background"}'
+				;;
+			get_observatory_period)
+				m="$(sh "$LIB_DIR/genroute.sh" get-observatory-period 2>/dev/null)"
+				jq -n --arg m "${m:-20}" '{minutes: ($m|tonumber)}'
+				;;
+			set_observatory_period)
+				minutes="$(echo "$args" | jq -r '.minutes // empty')"
+				if sh "$LIB_DIR/genroute.sh" set-observatory-period "$minutes" >/tmp/sr_observatory_period.log 2>&1; then
+					jq -n '{ok:true}'
+				else
+					jq -n --arg log "$(cat /tmp/sr_observatory_period.log)" '{error:"invalid_minutes", detail:$log}'
+				fi
 				;;
 			redirect_status)
 				out="$(sh "$LIB_DIR/redirect.sh" status 2>/dev/null)"

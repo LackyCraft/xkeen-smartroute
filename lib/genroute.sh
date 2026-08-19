@@ -251,6 +251,7 @@ sr_regen() {
 
 	rules="[]"
 	current="{}"
+	profile_tags="[]"
 
 	for pf in "$SR_PROFILES_DIR"/*.json; do
 		[ -e "$pf" ] || continue
@@ -271,6 +272,11 @@ sr_regen() {
 		new_rules="$(echo "$field_list" | jq --arg tag "$target_tag" 'map(. + {type:"field", outboundTag:$tag})')"
 		rules="$(echo "$rules" | jq --argjson r "$new_rules" '. + $r')"
 		current="$(echo "$current" | jq --arg name "$name" --arg tag "$target_tag" '. + {($name): $tag}')"
+		# The whole candidate pool (not just target_tag, the one currently
+		# picked) -- sr_observatory_selector below needs every server this
+		# profile *could* switch to ranked and fresh, not only today's winner.
+		pool="$(jq -c '(.servers // []) + [.fixed_server // empty] | map(select(length > 0))' "$pf")"
+		profile_tags="$(echo "$profile_tags" | jq -c --argjson p "$pool" '(. + $p) | unique')"
 	done
 
 	# current.json (profile name -> the tag actually picked this regen) is
@@ -318,32 +324,98 @@ sr_regen() {
 	# Xray fails to start ("not all dependencies are resolved") if
 	# ObservatoryService is enabled in the API but no observatory block
 	# exists at all, so this has to be written unconditionally now, not only
-	# "while a balancer needs it" like before. Static content -- nothing
-	# here ever changes between regens, so it plays no part in the
-	# unchanged-skip check below.
-	jq -n '{observatory:{subjectSelector:["sr_"], probeUrl:"https://www.gstatic.com/generate_204", probeInterval:"30s"}}' >"$SR_OBSERVATORY_FILE"
+	# "while a balancer needs it" like before.
+	#
+	# subjectSelector used to be a blanket ["sr_"] -- every server in the
+	# subscription. That doesn't work in practice: this project restarts
+	# Xray whenever a balancer profile's top pick changes (routing.json
+	# content changed, which can happen every few minutes as fresh pings
+	# come in close to tied), and *any* Xray restart resets Observatory's
+	# in-memory probe progress back to zero -- confirmed live: health.json
+	# coverage got stuck around 60-80 of 130 servers, never converging,
+	# because each restart made it start over from the alphabetically-first
+	# tag again. Xray's own engine has no concept of "priority" or "resume
+	# where I left off" either -- background() in observer.go just marches
+	# through subjectSelector alphabetically, every time, from scratch.
+	#
+	# Instead of asking Xray to cover everything every time, subjectSelector
+	# is recomputed on every regen to hold only what's actually *stale*
+	# right now (missing from health.json, or older than the configurable
+	# observatory_period_min -- see sr_get_observatory_period_min in
+	# common.sh) -- and if any profile-referenced server is stale, *only*
+	# those, so profile servers always win the priority Xray itself can't be
+	# told to give them. Once every profile tag is fresh, the selector falls
+	# back to whatever else in the subscription is stale, so the rest still
+	# eventually gets covered, just never at the expense of what's actually
+	# routing traffic right now. If nothing anywhere is stale, the selector
+	# is empty and Observer.Start() simply doesn't spawn its background loop
+	# at all until the next regen finds something due again.
+	#
+	# This also makes "don't start a new full pass until the last one
+	# finished" automatic rather than a separate flag to track: health.json's
+	# own checked_at timestamps (merged across restarts, never wholesale
+	# overwritten -- see gateway/failover.go's persistHealth) are the single
+	# source of truth for what still needs doing. A tag drops out of the
+	# selector the moment it's freshly reprobed and stays out until it goes
+	# stale again, so a restart can never cause redundant rework -- at worst
+	# it loses whatever single probe was in flight at that exact moment
+	# (up to smartroute-gateway's own 20s poll granularity), never a whole
+	# pass's worth of progress.
+	period_min="$(sr_get_observatory_period_min)"
+	period_sec=$((period_min * 60))
+	[ -s "$SR_HEALTH_FILE" ] || echo '{}' >"$SR_HEALTH_FILE"
+	[ -s "$SR_SERVERS_FILE" ] || echo '[]' >"$SR_SERVERS_FILE"
+	all_tags="$(jq -c '[.[].tag]' "$SR_SERVERS_FILE")"
+	profile_tags_known="$(jq -cn --argjson all "$all_tags" --argjson p "$profile_tags" '$all - ($all - $p)')"
+	other_tags="$(jq -cn --argjson all "$all_tags" --argjson p "$profile_tags" '$all - $p')"
+	stale_of() {
+		# candidate tag array (arg) -> jq array of the stale subset per
+		# health.json's checked_at + the configured period. probeInterval
+		# is the pause AFTER each probe, not a rate limit on concurrency
+		# (that's enableConcurrency, deliberately left off -- see AGENTS.md
+		# on why concurrent probing OOMs this hardware); a real "0s" can't
+		# be used to remove it though -- observer.go checks `!= 0` to
+		# decide whether a value was configured at all, so a literal zero
+		# silently falls back to Xray's own 10s default. "1ms" is the
+		# practical zero.
+		jq -cn --argjson tags "$1" --slurpfile health "$SR_HEALTH_FILE" --argjson period_sec "$period_sec" '
+			($health[0] // {}) as $h |
+			(now) as $n |
+			[$tags[] | select(
+				($h[.] == null) or
+				( (($h[.].checked_at // "1970-01-01T00:00:00Z") | rtrimstr("Z") | split(".")[0] + "Z" | fromdateiso8601) as $c |
+					($n - $c) > $period_sec )
+			)]
+		'
+	}
+	stale_profile="$(stale_of "$profile_tags_known")"
+	if [ "$(echo "$stale_profile" | jq 'length')" -gt 0 ]; then
+		selector="$stale_profile"
+	else
+		selector="$(stale_of "$other_tags")"
+	fi
+	new_observatory="$(jq -n --argjson sel "$selector" '{observatory:{subjectSelector:$sel, probeUrl:"https://www.gstatic.com/generate_204", probeInterval:"1ms"}}')"
 
-	# Restarting Xray resets observatory's in-memory probe progress back to
-	# zero -- confirmed live: health.json (smartroute-gateway's persisted
-	# copy of the same data) dropped from dozens of known outbounds to a
-	# single one immediately after a restart. sr_pick_top1's own top-1
-	# choice rarely changes between one regen and the next (same servers,
-	# same health data most of the time), so restarting Xray on every single
-	# regen -- which the 3-minute cron now calls far more often than the old
-	# 30-minute one -- would keep observatory permanently stuck re-probing
-	# from scratch, never accumulating enough coverage for sr_pick_top1 to
-	# actually use it. Only restart when the rules content genuinely
-	# changed; comparing to what's already on disk (not some remembered
-	# in-script state) means a manual edit or an interrupted previous run
-	# still gets picked up correctly on the next regen either way.
-	if [ -s "$SR_ROUTING_FILE" ] && [ "$(cat "$SR_ROUTING_FILE")" = "$new_routing" ]; then
+	# Restarting Xray is the only way to apply either a new routing pick or
+	# a new observatory selector -- so a restart is needed whenever *either*
+	# genuinely changed, not just routing. Comparing to what's already on
+	# disk (not some remembered in-script state) means a manual edit or an
+	# interrupted previous run still gets picked up correctly either way.
+	routing_changed=1
+	[ -s "$SR_ROUTING_FILE" ] && [ "$(cat "$SR_ROUTING_FILE")" = "$new_routing" ] && routing_changed=0
+	observatory_changed=1
+	[ -s "$SR_OBSERVATORY_FILE" ] && [ "$(cat "$SR_OBSERVATORY_FILE")" = "$new_observatory" ] && observatory_changed=0
+
+	printf '%s' "$new_routing" >"$SR_ROUTING_FILE"
+	printf '%s' "$new_observatory" >"$SR_OBSERVATORY_FILE"
+
+	if [ "$routing_changed" -eq 0 ] && [ "$observatory_changed" -eq 0 ]; then
 		sr_log "regenerated routing ($(echo "$rules" | jq 'length') rule(s)), unchanged -- skipping restart"
 		return 0
 	fi
-	printf '%s' "$new_routing" >"$SR_ROUTING_FILE"
 
 	sr_restart_xray
-	sr_log "regenerated routing ($(echo "$rules" | jq 'length') rule(s))"
+	sr_log "regenerated routing ($(echo "$rules" | jq 'length') rule(s)), observatory watching $(echo "$selector" | jq 'length') stale tag(s)"
 }
 
 case "${1:-}" in
@@ -405,5 +477,7 @@ case "${1:-}" in
 			echo '[]'
 		fi
 		;;
-	*) echo "usage: $0 {save <profile.json>|delete <name>|regen|list}" >&2; exit 1 ;;
+	get-observatory-period) sr_get_observatory_period_min ;;
+	set-observatory-period) sr_set_observatory_period_min "${2:-}" ;;
+	*) echo "usage: $0 {save <profile.json>|delete <name>|regen|list|get-observatory-period|set-observatory-period <minutes>}" >&2; exit 1 ;;
 esac

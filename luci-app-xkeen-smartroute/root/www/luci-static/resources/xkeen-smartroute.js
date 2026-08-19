@@ -143,6 +143,16 @@ var callSetRefreshHours = rpc.declare({
 	object: 'luci.xkeen-smartroute', method: 'set_refresh_hours',
 	params: ['hours']
 });
+var _callGetObservatoryPeriod = rpc.declare({
+	object: 'luci.xkeen-smartroute', method: 'get_observatory_period'
+});
+function callGetObservatoryPeriod() {
+	return _callGetObservatoryPeriod().then(function (r) { return (r && r.minutes) || 20; });
+}
+var callSetObservatoryPeriod = rpc.declare({
+	object: 'luci.xkeen-smartroute', method: 'set_observatory_period',
+	params: ['minutes']
+});
 var callRefreshNow = rpc.declare({
 	object: 'luci.xkeen-smartroute', method: 'refresh_now'
 });
@@ -253,6 +263,11 @@ var DICT = {
 	refresh_now_btn: { ru: 'Обновить все подписки сейчас', en: 'Refresh all subscriptions now' },
 	refresh_now_started: { ru: 'Обновление запущено в фоне — обновите список серверов через несколько секунд', en: 'Refresh started in the background — reload the server list in a few seconds' },
 	refresh_saved_ok: { ru: 'Интервал сохранён', en: 'Interval saved' },
+	observatory_period_title: { ru: 'Период проверки живости серверов (Observatory)', en: 'Server liveness check period (Observatory)' },
+	observatory_period_label: { ru: 'Перепроверять сервер не чаще чем раз в (минут)', en: 'Recheck a server no more often than every (minutes)' },
+	observatory_period_intro: { ru: 'Xray сам проверяет, жив ли каждый сервер (реальное подключение + запрос, не просто пинг) — этот период задаёт, насколько свежие данные нужны. Сервера, задействованные в текущих профилях, проверяются в первую очередь, остальная часть подписки — во вторую, без остановки одного обхода на середине.',
+	                        en: "Xray itself checks whether each server is actually alive (a real connection + request, not just a ping) — this period sets how fresh that data needs to be. Servers used by your current profiles are rechecked first, the rest of the subscription second, without ever restarting a sweep partway through." },
+	observatory_period_saved_ok: { ru: 'Период сохранён', en: 'Period saved' },
 	sub_add_title: { ru: 'Добавить подписку', en: 'Add a subscription' },
 	sub_subscriptions_title: { ru: 'Ваши подписки', en: 'Your subscriptions' },
 	sub_servers_word: { ru: 'серверов', en: 'servers' },
@@ -537,6 +552,8 @@ return L.Class.extend({
 		getActivity: callGetActivity,
 		getRefreshHours: callGetRefreshHours,
 		setRefreshHours: callSetRefreshHours,
+		getObservatoryPeriod: callGetObservatoryPeriod,
+		setObservatoryPeriod: callSetObservatoryPeriod,
 		refreshNow: callRefreshNow,
 		listKillswitchEnabled: callListKillswitchEnabled,
 		redirectStatus: callRedirectStatus,

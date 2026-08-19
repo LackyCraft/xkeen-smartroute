@@ -10,7 +10,8 @@ return view.extend({
 			sr.rpc.listServers(),
 			sr.rpc.getPings(),
 			sr.rpc.getRefreshHours(),
-			sr.rpc.getHealth()
+			sr.rpc.getHealth(),
+			sr.rpc.getObservatoryPeriod()
 		]);
 	},
 
@@ -79,6 +80,21 @@ return view.extend({
 				return;
 			}
 			ui.addNotification(null, E('p', {}, sr.T('refresh_saved_ok')), 'info');
+		});
+	},
+
+	handleSaveObservatoryPeriod: function (ev) {
+		var input = document.getElementById('sr-observatory-period');
+		var minutes = input.value.trim();
+		var btn = ev.target;
+		btn.disabled = true;
+		return sr.rpc.setObservatoryPeriod(minutes).then(function (res) {
+			btn.disabled = false;
+			if (res && res.error) {
+				ui.addNotification(null, E('p', {}, res.detail || res.error), 'error');
+				return;
+			}
+			ui.addNotification(null, E('p', {}, sr.T('observatory_period_saved_ok')), 'info');
 		});
 	},
 
@@ -326,6 +342,7 @@ return view.extend({
 		this.pings = data[2] || {};
 		var refreshHours = data[3] || 12;
 		this.health = data[4] || {};
+		var observatoryPeriod = data[5] || 20;
 		this.expanded = {};
 
 		var clientSelect = E('select', { 'id': 'sr-sub-client', 'class': 'cbi-input-select', 'style': 'display:block;max-width:320px;margin:.25em 0' },
@@ -409,12 +426,23 @@ return view.extend({
 			E('button', { 'class': 'cbi-button', 'click': ui.createHandlerFn(view, 'handleRefreshAllNow') }, sr.T('refresh_now_btn'))
 		]);
 
+		var observatoryBox = E('div', { 'class': 'cbi-section' }, [
+			E('h3', {}, sr.T('observatory_period_title')),
+			E('p', { 'class': 'cbi-value-description', 'style': 'margin:.25em 0' }, sr.T('observatory_period_intro')),
+			E('label', {}, sr.T('observatory_period_label')),
+			E('div', { 'style': 'display:flex;gap:.5em;max-width:320px;margin:.25em 0 .75em' }, [
+				E('input', { 'type': 'number', 'id': 'sr-observatory-period', 'class': 'cbi-input-text', 'min': '1', 'style': 'flex:1', 'value': String(observatoryPeriod) }),
+				E('button', { 'class': 'cbi-button', 'click': ui.createHandlerFn(view, 'handleSaveObservatoryPeriod') }, sr.T('refresh_save_btn'))
+			])
+		]);
+
 		var root = E('div', {}, [
 			sr.langSwitchButton(),
 			E('h2', {}, sr.T('app_name') + ' — ' + sr.T('nav_subscriptions')),
 
 			addBox,
 			refreshBox,
+			observatoryBox,
 
 			E('div', { 'style': 'display:flex;align-items:center;gap:1em;margin-top:1em' }, [
 				E('h3', { 'style': 'margin:0' }, sr.T('sub_subscriptions_title')),
