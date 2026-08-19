@@ -132,21 +132,45 @@ build_outbound() {
 	mode="$(qval "$query" mode)"; mode="${mode:-auto}"
 	flow="$(qval "$query" flow)"
 	svcname="$(urldecode "$(qval "$query" serviceName)")"
-	# The subscription's own "extra" query param (raw XHTTP tuning fields
-	# some providers attach: session/seq placement, padding obfuscation,
-	# etc.) is deliberately not merged in below. One provider's node was
-	# observed sending a field combination this Xray build's config
-	# validator hard-rejects at startup ("SeqPlacement must be path when
-	# SessionPlacement is path"), which blocks every future restart until
-	# someone notices -- and no imported server has ever needed any of
-	# these fields just to connect, so it's not worth the risk.
+	# The subscription's own "extra" query param -- raw XHTTP tuning fields
+	# some providers attach: padding obfuscation (xPaddingBytes/Key/Header/
+	# Placement/Method), connection reuse (xmux), upload chunking
+	# (scMaxEachPostBytes/scMinPostsIntervalMs), etc. This isn't a made-up
+	# convention -- it's Xray's own real xhttpSettings schema
+	# (infra/conf/transport_method.go's SplitHTTPConfig has a matching
+	# `Extra json.RawMessage` field, unmarshalled straight into the same
+	# struct), so passing it through verbatim is exactly what a "real"
+	# client (v2rayNG, Happ, ...) does too.
+	#
+	# Confirmed for real why this actually matters, not just theoretical
+	# completeness: two nodes reported as "dead" by both Observatory and a
+	# direct manual probe (same GET, same outbound, bypassing Observatory's
+	# cache entirely) turned out to work fine through Happ on the same
+	# network/subscription -- the only difference was this exact field.
+	# xPaddingObfsMode:true means the provider's edge expects that specific
+	# padding scheme just to recognize the request as real client traffic;
+	# without it the TLS layer completes but the XHTTP request never gets a
+	# response (observed live: "SSL - The connection indicated an EOF"
+	# right after a successful TCP connect).
+	#
+	# This field used to be dropped on purpose: one provider's node once
+	# sent an `extra` combination this Xray build's config validator
+	# hard-rejects at startup. That's a real risk, but not an unsafe one --
+	# _sr_xray_validate() already refuses to restart on any config that
+	# fails `xray run -test`, old (working) config keeps running either
+	# way -- so the actual failure mode is "this one regen's changes don't
+	# take effect until the bad node is fixed/removed", not "internet
+	# breaks". That's a better trade than silently breaking every node
+	# whose provider genuinely requires this to connect at all.
+	extra_raw="$(urldecode "$(qval "$query" extra)")"
+	extra_json="$(printf '%s' "$extra_raw" | jq -c . 2>/dev/null || echo 'null')"
 
 	jq -n \
 		--arg tag "$tag" --arg proto "$proto" --arg address "$host" --argjson port "$port" \
 		--arg id "$secret" --arg net "$net" --arg security "$security" --arg sni "$sni" \
 		--arg fp "$fp" --arg pbk "$pbk" --arg sid "$sid" --arg spx "$spx" --arg alpn "$alpn" \
 		--arg path "$path" --arg hosthdr "$hosthdr" --arg mode "$mode" --arg flow "$flow" \
-		--arg svcname "$svcname" '
+		--arg svcname "$svcname" --argjson extra "$extra_json" '
 		def alpnArr: if $alpn=="" then null else ($alpn|split(",")) end;
 		{
 			tag: $tag,
@@ -167,7 +191,7 @@ build_outbound() {
 				else {security:"none"} end)
 				+ (if $net=="ws" then {wsSettings: ({path:$path} + (if $hosthdr!="" then {headers:{Host:$hosthdr}} else {} end))}
 				elif $net=="grpc" then {grpcSettings: {serviceName:$svcname}}
-				elif $net=="xhttp" or $net=="splithttp" then {xhttpSettings: {path:$path, host:$hosthdr, mode:$mode}}
+				elif $net=="xhttp" or $net=="splithttp" then {xhttpSettings: ({path:$path, host:$hosthdr, mode:$mode} + (if $extra != null then {extra:$extra} else {} end))}
 				else {} end)
 			)
 		}'

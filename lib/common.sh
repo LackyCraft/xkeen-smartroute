@@ -75,21 +75,41 @@ XRAY_RUN_USER="xkeen"
 
 # _sr_xray_validate: config must pass `xray run -test` before we touch the
 # running process either way (start or restart). A single malformed outbound
-# (e.g. a subscription node whose provider sent an XHTTP field combination
-# this Xray build rejects, or a leastPing balancer with no matching
-# observatory) would otherwise take down the whole proxy -- and since
-# refreshes run unattended from cron, nobody would be watching when it
-# happens. Better to log it loudly and leave whatever was already running
-# (or leave Xray stopped, for a start) than silently brick internet access.
-# The assignment is the `if` condition itself, not a separate statement:
-# under `set -e`, a failing command substitution used as a plain statement
-# aborts the script right there, before a later `if [ $? ]` ever gets a
-# chance to check it and log why. Conditions of if/while are exempt from
-# errexit.
+# (e.g. a leastPing balancer with no matching observatory) would otherwise
+# take down the whole proxy -- and since refreshes run unattended from cron,
+# nobody would be watching when it happens. Better to log it loudly and leave
+# whatever was already running (or leave Xray stopped, for a start) than
+# silently brick internet access.
+#
+# One specific, recurring failure gets a real fix instead of just being
+# refused: a subscription node whose provider's XHTTP "extra" field (padding/
+# obfuscation/session tuning -- see build_outbound in subscription.sh for why
+# this is included at all now, it's not optional decoration, some nodes only
+# actually connect with it) combines two sub-fields Xray's own config
+# validator hard-rejects, e.g. "SeqPlacement must be path when
+# SessionPlacement is path" -- confirmed live. Without handling it, that one
+# bad node's extra field would block *every* future regen (routing changes,
+# profile saves, cron, all of it) until a human noticed and fixed it by
+# hand, since the same broken node stays in outbounds.json until the next
+# subscription refresh. Instead: on a validation failure that names a
+# specific outbound tag, strip just that one outbound's `extra` field (not
+# the whole node, not the whole subscription) and retry -- bounded so a truly
+# broken confdir still fails loudly rather than looping forever.
 _sr_xray_validate() {
-	if test_out="$(XRAY_LOCATION_ASSET="$XRAY_ASSET_DIR" xray run -test -confdir "$XKEEN_CONFIGS_DIR" 2>&1)"; then
-		return 0
-	fi
+	attempts=0
+	while [ "$attempts" -lt 20 ]; do
+		if test_out="$(XRAY_LOCATION_ASSET="$XRAY_ASSET_DIR" xray run -test -confdir "$XKEEN_CONFIGS_DIR" 2>&1)"; then
+			return 0
+		fi
+		bad_tag="$(printf '%s' "$test_out" | sed -n 's/.*failed to build outbound config with tag \([^ ]*\).*/\1/p' | head -n1)"
+		if [ -z "$bad_tag" ] || [ ! -s "$SR_OUTBOUNDS_FILE" ] || ! grep -q "\"$bad_tag\"" "$SR_OUTBOUNDS_FILE" 2>/dev/null; then
+			break
+		fi
+		sr_log "WARNING: outbound '$bad_tag' has an XHTTP 'extra' field combination Xray's validator rejects -- dropping just that field for this one node so it doesn't block every other server: $(printf '%s' "$test_out" | tail -1)"
+		jq --arg tag "$bad_tag" '(.outbounds[] | select(.tag==$tag) | .streamSettings.xhttpSettings) |= (if . then del(.extra) else . end)' \
+			"$SR_OUTBOUNDS_FILE" > "$SR_OUTBOUNDS_FILE.tmp" && mv "$SR_OUTBOUNDS_FILE.tmp" "$SR_OUTBOUNDS_FILE"
+		attempts=$((attempts + 1))
+	done
 	sr_log "ERROR: refusing to $1 xray, the merged config failed validation: $(printf '%s' "$test_out" | tail -1)"
 	return 1
 }
