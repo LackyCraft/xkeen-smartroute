@@ -51,6 +51,7 @@ case "$1" in
 	"delete_profile": {"name":"str1"},
 	"add_custom_domain": {"list_name":"str1","domains":"str1"},
 	"get_status": {},
+	"get_health_metrics": {},
 	"killswitch_set": {"name":"str1","enabled":"bool1"},
 	"list_killswitch_enabled": {},
 	"ping_servers": {},
@@ -240,6 +241,35 @@ EOF
 				n_profiles="$(sh "$LIB_DIR/genroute.sh" list 2>/dev/null | jq 'length' 2>/dev/null || echo 0)"
 				jq -n --argjson running "$running" --argjson servers "$n_servers" --argjson profiles "$n_profiles" \
 					'{xray_running:($running==1), server_count:$servers, profile_count:$profiles}'
+				;;
+			get_health_metrics)
+				# Read-only aggregation over already-existing state files --
+				# doesn't touch ping/Observatory/subscription-refresh logic
+				# itself, just reports on what those already produced.
+				servers_file="$SR_ETC_DIR/state/servers.json"
+				health_file="$SR_ETC_DIR/state/health.json"
+				ping_file="$SR_ETC_DIR/state/ping.json"
+				refresh_file="$SR_ETC_DIR/state/refresh.json"
+				obs_file="/opt/etc/xray/configs/07_observatory.smartroute.json"
+				[ -s "$servers_file" ] || echo '[]' >"$servers_file"
+				[ -s "$health_file" ] || echo '{}' >"$health_file"
+				counts="$(jq -n --slurpfile s "$servers_file" --slurpfile h "$health_file" '
+					($h[0] // {}) as $health |
+					($s[0] // []) as $servers |
+					{
+						alive: ([$servers[] | select($health[.tag].alive == true)] | length),
+						dead: ([$servers[] | select($health[.tag].alive == false)] | length),
+						unknown: ([$servers[] | select($health[.tag] == null)] | length),
+						total: ($servers | length),
+						last_observatory_check: ([$health[] | .checked_at] | max // null)
+					}
+				' 2>/dev/null)"
+				[ -n "$counts" ] || counts='{"alive":0,"dead":0,"unknown":0,"total":0,"last_observatory_check":null}'
+				last_refresh="$(jq -r '.last // 0' "$refresh_file" 2>/dev/null)"; [ -n "$last_refresh" ] || last_refresh=0
+				last_ping_run="0"; [ -s "$ping_file" ] && last_ping_run="$(date -r "$ping_file" +%s 2>/dev/null || echo 0)"
+				observatory_queue="$(jq '.observatory.subjectSelector | length' "$obs_file" 2>/dev/null)"; [ -n "$observatory_queue" ] || observatory_queue=0
+				jq -n --argjson c "$counts" --argjson lr "$last_refresh" --argjson lp "$last_ping_run" --argjson oq "$observatory_queue" \
+					'$c + {last_subscription_refresh: $lr, last_ping_run: $lp, observatory_queue_size: $oq}'
 				;;
 			killswitch_set)
 				name="$(echo "$args" | jq -r '.name // empty')"

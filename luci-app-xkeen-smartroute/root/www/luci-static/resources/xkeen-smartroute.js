@@ -163,6 +163,9 @@ var callSetAutoRefreshEnabled = rpc.declare({
 	object: 'luci.xkeen-smartroute', method: 'set_auto_refresh_enabled',
 	params: ['enabled']
 });
+var callGetHealthMetrics = rpc.declare({
+	object: 'luci.xkeen-smartroute', method: 'get_health_metrics'
+});
 var callRefreshNow = rpc.declare({
 	object: 'luci.xkeen-smartroute', method: 'refresh_now'
 });
@@ -384,8 +387,15 @@ var DICT = {
 	status_traffic_up: { ru: 'Отдача', en: 'Upload' },
 	status_traffic_down: { ru: 'Приём', en: 'Download' },
 	status_traffic_disconnected: { ru: 'нет соединения с панелью (порт 1001)', en: 'not connected to the panel (port 1001)' },
-	status_logs_title: { ru: 'Логи Xray (реальное время)', en: 'Xray logs (live)' },
-	status_logs_empty: { ru: 'Пока пусто — появится при новых соединениях.', en: 'Nothing yet — will fill in as new connections happen.' },
+	status_metrics_title: { ru: 'Здоровье серверов и Observatory', en: 'Server health and Observatory' },
+	status_metrics_alive: { ru: 'Живых серверов', en: 'Alive servers' },
+	status_metrics_dead: { ru: 'Мёртвых серверов', en: 'Dead servers' },
+	status_metrics_unknown: { ru: 'Ещё не проверено', en: 'Not checked yet' },
+	status_metrics_last_refresh: { ru: 'Последнее обновление подписки', en: 'Last subscription refresh' },
+	status_metrics_last_ping: { ru: 'Последний пересчёт пинга', en: 'Last ping sweep' },
+	status_metrics_last_observatory: { ru: 'Последняя проверка Observatory', en: 'Last Observatory check' },
+	status_metrics_queue: { ru: 'В очереди на проверку Observatory', en: 'Queued for Observatory check' },
+	status_metrics_never: { ru: 'ещё ни разу', en: 'never yet' },
 
 	auto_refresh_toggle_label: { ru: 'Автообновление подписок', en: 'Subscription auto-refresh' },
 	auto_refresh_warning: { ru: '⚠️ Если состав подписки изменится, серверы профилей сверяются автоматически (тот же узел под новым адресом/параметрами — переносится), но если провайдер реально удалит сервер — он пропадёт и из профиля, где был выбран.',
@@ -595,6 +605,7 @@ return L.Class.extend({
 		setObservatoryPeriod: callSetObservatoryPeriod,
 		getAutoRefreshEnabled: callGetAutoRefreshEnabled,
 		setAutoRefreshEnabled: callSetAutoRefreshEnabled,
+		getHealthMetrics: callGetHealthMetrics,
 		refreshNow: callRefreshNow,
 		listKillswitchEnabled: callListKillswitchEnabled,
 		redirectStatus: callRedirectStatus,
