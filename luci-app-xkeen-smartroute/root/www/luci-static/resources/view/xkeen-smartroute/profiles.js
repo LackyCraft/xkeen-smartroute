@@ -510,6 +510,19 @@ return view.extend({
 					}, sr.T('delete_btn'))
 				])
 			]));
+
+			// Left behind by sr_remap_profile_tags (lib/subscription.sh) when a
+			// subscription refresh genuinely removed a server this profile had
+			// selected -- cleared automatically the next time this profile is
+			// saved through the UI (a normal save always writes a fresh
+			// .servers list with no removed_servers field).
+			var removed = p.removed_servers || [];
+			if (removed.length) {
+				table.appendChild(E('tr', { 'class': 'tr' }, [
+					E('td', { 'class': 'td', 'colspan': '4', 'style': 'color:#e74c3c;font-size:.9em' },
+						'⚠ ' + removed.map(function (r) { return sr.renderName(r.name || r.tag); }).join(', ') + ' — ' + sr.T('profile_removed_servers_label'))
+				]));
+			}
 		});
 
 		container.appendChild(table);

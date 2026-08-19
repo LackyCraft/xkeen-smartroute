@@ -208,6 +208,76 @@ build_outbound() {
 		}'
 }
 
+# sr_remap_profile_tags: given a subscription label's server list from just
+# before and just after a refresh, re-associate every profile that
+# referenced a tag that disappeared -- to whatever new tag shares its
+# match_key if one exists (the same logical node, provider just tweaked a
+# query param), or moves it into that profile's .removed_servers if not
+# (the node is genuinely gone). Never called with the *new* label's own
+# list restricted to what changed -- it diffs old vs new itself, so
+# passing the same list twice is always a safe no-op. See
+# docs/subscription-update.md for the full design.
+sr_remap_profile_tags() {
+	old_servers="$1"
+	new_servers="$2"
+
+	# Entries imported before match_key existed at all (any install that
+	# refreshed between this feature landing and its predecessor) have no
+	# .match_key field -- accessing a missing key gives jq's `null`, and
+	# `$obj[null]` is itself a hard error ("Cannot index object with
+	# null"), not just a harmless miss. Confirmed live upgrading this exact
+	# router's own pre-match_key servers.json. Filtering match_key-less
+	# entries out of $by_key up front, and guarding the lookup on the old
+	# side, means such an entry is simply never remapped (falls through to
+	# "removed", same as a real miss) instead of crashing the whole import.
+	remap="$(jq -cn --argjson old "$old_servers" --argjson new "$new_servers" '
+		($new | map(.tag)) as $new_tags |
+		($new | map(select(.match_key != null)) | map({key: .match_key, value: .tag}) | from_entries) as $by_key |
+		[ $old[] | select(.tag as $t | ($new_tags | index($t)) | not) |
+			{ old: .tag, name: .name, new: (if .match_key == null then null else ($by_key[.match_key] // null) end) }
+		]
+	')"
+	remap_count="$(echo "$remap" | jq 'length')"
+	[ "$remap_count" -gt 0 ] || return 0
+
+	remapped_count="$(echo "$remap" | jq '[.[] | select(.new != null)] | length')"
+	removed_count="$(echo "$remap" | jq '[.[] | select(.new == null)] | length')"
+	sr_log "subscription refresh: $remapped_count tag(s) remapped to their new identity, $removed_count server(s) genuinely gone"
+
+	for pf in "$SR_PROFILES_DIR"/*.json; do
+		[ -e "$pf" ] || continue
+		jq --argjson remap "$remap" '
+			(reduce $remap[] as $r ({}; . + {($r.old): $r})) as $rmap |
+			(.servers // []) as $orig |
+			(.fixed_server // null) as $orig_fixed |
+			(.removed_servers // []) as $existing_removed |
+			(now | todate) as $now |
+			(
+				[range(0; ($orig | length)) as $i |
+					($orig[$i]) as $t |
+					($rmap[$t]) as $r |
+					if $r == null then {kind: "keep", tag: $t}
+					elif $r.new != null then {kind: "keep", tag: $r.new}
+					else {kind: "removed", tag: $t, name: $r.name}
+					end
+				]
+			) as $decisions |
+			($decisions | map(select(.kind == "keep")) | map(.tag)) as $new_servers_list |
+			($decisions | map(select(.kind == "removed")) | map({tag: .tag, name: .name, removed_at: $now})) as $removed_from_servers |
+			(
+				if $orig_fixed == null then {fixed: null, removed: []}
+				elif $rmap[$orig_fixed] == null then {fixed: $orig_fixed, removed: []}
+				elif $rmap[$orig_fixed].new != null then {fixed: $rmap[$orig_fixed].new, removed: []}
+				else {fixed: $orig_fixed, removed: [{tag: $orig_fixed, name: $rmap[$orig_fixed].name, removed_at: $now}]}
+				end
+			) as $fixed_res |
+			.servers = $new_servers_list
+			| .fixed_server = $fixed_res.fixed
+			| .removed_servers = ($existing_removed + $removed_from_servers + $fixed_res.removed)
+		' "$pf" > "$pf.tmp" && mv "$pf.tmp" "$pf"
+	done
+}
+
 sr_import() {
 	url="$1"; label="${2:-sub}"; client="${3:-smartroute}"
 	os_ov="${4:-}"; locale_ov="${5:-}"; model_ov="${6:-}"; ver_ov="${7:-}"; hwid_ov="${8:-}"
@@ -322,11 +392,27 @@ sr_import() {
 		line_hash="$(printf '%s' "$line" | md5sum | cut -c1-10)"
 		tag="sr_${label_slug}_$(slugify "$host")_${port}_${name_slug}_${line_hash}"
 
+		# match_key: a coarser, more change-tolerant identity than the tag
+		# itself -- used only to re-associate a node across a refresh where
+		# its tag changed (see sr_remap_tags below), never for anything
+		# that needs the tag's own full uniqueness. host+port+secret+the
+		# camouflage domain (sni, falling back to host like build_outbound's
+		# own default) is the combination that actually identifies "the
+		# same logical node" to a provider -- confirmed live against this
+		# project's own subscription: two nodes can share host+port+secret
+		# and only differ in this domain (genuinely different edges), so
+		# leaving it out would wrongly merge them; everything else (path,
+		# padding/xmux tuning, alpn order, fp, display name) is the kind of
+		# thing a provider tweaks on the *same* node without meaning to
+		# replace it, so none of that belongs in the key.
+		match_sni="$(urldecode "$(qval "$query" sni)")"; [ -n "$match_sni" ] || match_sni="$host"
+		match_key="$(printf '%s|%s|%s|%s' "$host" "$port" "$secret" "$match_sni" | md5sum | cut -c1-16)"
+
 		ob="$(build_outbound "$proto" "$secret" "$host" "$port" "$query" "" "$tag")" || { skipped=$((skipped + 1)); continue; }
 		ob="$(printf '%s' "$ob" | jq --arg sub "$label" '. + {subscription:$sub}')"
 		jq --argjson ob "$ob" '. + [$ob]' "$tmp_outbounds" >"$tmp_outbounds.new" && mv "$tmp_outbounds.new" "$tmp_outbounds"
-		jq -n --arg tag "$tag" --arg name "$name" --arg address "$host" --argjson port "$port" --arg proto "$proto" --arg sub "$label" \
-			'{tag:$tag, name:$name, address:$address, port:$port, protocol:$proto, subscription:$sub}' \
+		jq -n --arg tag "$tag" --arg name "$name" --arg address "$host" --argjson port "$port" --arg proto "$proto" --arg sub "$label" --arg mkey "$match_key" \
+			'{tag:$tag, name:$name, address:$address, port:$port, protocol:$proto, subscription:$sub, match_key:$mkey}' \
 			>"$tmp_servers.one"
 		jq --argjson s "$(cat "$tmp_servers.one")" '. + [$s]' "$tmp_servers" >"$tmp_servers.new" && mv "$tmp_servers.new" "$tmp_servers"
 	done
@@ -343,6 +429,13 @@ sr_import() {
 		rm -f "$tmp_outbounds" "$tmp_servers" "$tmp_servers.one" "$tmp_outbounds.new" "$tmp_servers.new" 2>/dev/null || true
 		return 1
 	fi
+
+	# Snapshot this label's servers as they were *before* this refresh --
+	# sr_remap_profile_tags (called after the replace below) needs to know
+	# which old tags disappeared and what each one's match_key was, and
+	# that information is gone the moment SR_SERVERS_FILE gets overwritten.
+	[ -s "$SR_SERVERS_FILE" ] || echo '[]' >"$SR_SERVERS_FILE"
+	old_label_servers="$(jq --arg lbl "$label" '[.[] | select(.subscription == $lbl)]' "$SR_SERVERS_FILE")"
 
 	# Replace (not accumulate) this label's own servers/outbounds, then merge
 	# with whatever other subscriptions already contributed. Two bugs this
@@ -378,6 +471,15 @@ sr_import() {
 		($first | sort_by(.key) | map(.value))
 	' "$SR_SERVERS_FILE.new" "$tmp_servers" >"$SR_SERVERS_FILE"
 	rm -f "$SR_SERVERS_FILE.new"
+
+	# See docs/subscription-update.md for the full design and why this
+	# exists: tags are derived from each raw subscription line's own
+	# content (sr_import's tag= above), so any refresh where the provider
+	# tweaks so much as one query param produces a *different* tag for what
+	# is, to the provider, still the same node -- every profile that had
+	# that server checked would otherwise silently lose it, with no
+	# indication anything happened.
+	sr_remap_profile_tags "$old_label_servers" "$(cat "$tmp_servers")"
 
 	# Same full replace-by-label semantics as servers.json above, not a
 	# keep-if-tag-still-present filter: a node that roams to a new IP
@@ -447,11 +549,26 @@ sr_set_refresh_hours() {
 	echo "$1" > "$SR_STATE_DIR/refresh_interval_hours"
 }
 
+# Auto-refresh is on by default (existing installs keep their current
+# behavior). Gates only the *scheduled* path (sr_refresh_due, called from
+# cron) -- an explicit "refresh now" click (sr_force_refresh) always runs
+# regardless, since that's a deliberate action, not the automatic one this
+# toggle is about.
+sr_get_auto_refresh_enabled() {
+	[ -s "$SR_STATE_DIR/auto_refresh_enabled" ] && cat "$SR_STATE_DIR/auto_refresh_enabled" || echo "1"
+}
+
+sr_set_auto_refresh_enabled() {
+	sr_ensure_dirs
+	case "$1" in true|1) echo 1 > "$SR_STATE_DIR/auto_refresh_enabled" ;; false|0) echo 0 > "$SR_STATE_DIR/auto_refresh_enabled" ;; *) sr_die "expected true/false" ;; esac
+}
+
 # Called hourly from cron; only actually refetches once the configured
 # interval has elapsed, and only for subscriptions we've successfully
 # imported at least once before (nothing to do on a fresh install).
 sr_refresh_due() {
 	sr_ensure_dirs
+	[ "$(sr_get_auto_refresh_enabled)" = "1" ] || { sr_log "refresh: auto-refresh disabled, skipping"; return 0; }
 	[ -s "$SR_SUBS_META_FILE" ] || { sr_log "refresh: no saved subscriptions yet"; return 0; }
 	hours="$(sr_get_refresh_hours)"
 	last=0
@@ -714,8 +831,10 @@ case "${1:-}" in
 	refresh-one) sr_refresh_one "${2:-}" ;;
 	get-refresh-hours) sr_get_refresh_hours ;;
 	set-refresh-hours) sr_set_refresh_hours "${2:-}" ;;
+	get-auto-refresh-enabled) sr_get_auto_refresh_enabled ;;
+	set-auto-refresh-enabled) sr_set_auto_refresh_enabled "${2:-}" ;;
 	ping) sr_ping_all ;;
 	ping-subscription) sr_ping_subscription "${2:-}" ;;
 	ping-tags) sr_ping_tags ;;
-	*) echo "usage: $0 {import <url> [label] [client] [os] [locale] [model] [ver] [hwid]|list|list-subscriptions|delete-subscription <label>|refresh|refresh-now|refresh-one <label>|get-refresh-hours|set-refresh-hours <n>|ping|ping-subscription <label>|ping-tags (tags on stdin)}" >&2; exit 1 ;;
+	*) echo "usage: $0 {import <url> [label] [client] [os] [locale] [model] [ver] [hwid]|list|list-subscriptions|delete-subscription <label>|refresh|refresh-now|refresh-one <label>|get-refresh-hours|set-refresh-hours <n>|get-auto-refresh-enabled|set-auto-refresh-enabled <true|false>|ping|ping-subscription <label>|ping-tags (tags on stdin)}" >&2; exit 1 ;;
 esac

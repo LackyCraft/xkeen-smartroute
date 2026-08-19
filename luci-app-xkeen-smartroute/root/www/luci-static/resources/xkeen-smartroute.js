@@ -153,6 +153,16 @@ var callSetObservatoryPeriod = rpc.declare({
 	object: 'luci.xkeen-smartroute', method: 'set_observatory_period',
 	params: ['minutes']
 });
+var _callGetAutoRefreshEnabled = rpc.declare({
+	object: 'luci.xkeen-smartroute', method: 'get_auto_refresh_enabled'
+});
+function callGetAutoRefreshEnabled() {
+	return _callGetAutoRefreshEnabled().then(function (r) { return !r || r.enabled !== false; });
+}
+var callSetAutoRefreshEnabled = rpc.declare({
+	object: 'luci.xkeen-smartroute', method: 'set_auto_refresh_enabled',
+	params: ['enabled']
+});
 var callRefreshNow = rpc.declare({
 	object: 'luci.xkeen-smartroute', method: 'refresh_now'
 });
@@ -377,6 +387,11 @@ var DICT = {
 	status_logs_title: { ru: 'Логи Xray (реальное время)', en: 'Xray logs (live)' },
 	status_logs_empty: { ru: 'Пока пусто — появится при новых соединениях.', en: 'Nothing yet — will fill in as new connections happen.' },
 
+	auto_refresh_toggle_label: { ru: 'Автообновление подписок', en: 'Subscription auto-refresh' },
+	auto_refresh_warning: { ru: '⚠️ Если состав подписки изменится, серверы профилей сверяются автоматически (тот же узел под новым адресом/параметрами — переносится), но если провайдер реально удалит сервер — он пропадёт и из профиля, где был выбран.',
+	                       en: "⚠️ If the subscription's server list changes, profile selections are reconciled automatically (the same node under a new address/params carries over) — but if the provider genuinely removes a server, it disappears from any profile that had it selected too." },
+	profile_removed_servers_label: { ru: 'пропали при обновлении подписки', en: 'removed by a subscription refresh' },
+
 	ks_intro: { ru: 'Жёсткий kill-switch: если процесс xray упадёт (или его правила перехвата трафика пропадут), домены профиля будут заблокированы файрволом полностью — вместо риска уйти в интернет напрямую в обход VPN. Правило включается сразу и постоянно, без опроса раз в минуту — зазора по времени нет. Работает для geosite- и custom-профилей; для geosite-категорий покрытие неполное — учитываются только записи domain:/full: из исходного списка geosite, а keyword:/regexp: (их нет как буквальных доменов) не переносятся.',
 	           en: "Hard kill-switch: if the xray process dies (or its traffic-capture rules disappear), the profile's domains get fully blocked by the firewall instead of risking a direct route around the VPN. The rule is armed immediately and stays on — no once-a-minute polling, so there's no time gap. Works for both geosite and custom profiles; geosite coverage is partial — only the domain:/full: entries from the category's source list translate to a literal block, keyword:/regexp: entries have no literal-domain equivalent and aren't covered." },
 	ks_enabled: { ru: 'Включено', en: 'Enabled' },
@@ -578,6 +593,8 @@ return L.Class.extend({
 		setRefreshHours: callSetRefreshHours,
 		getObservatoryPeriod: callGetObservatoryPeriod,
 		setObservatoryPeriod: callSetObservatoryPeriod,
+		getAutoRefreshEnabled: callGetAutoRefreshEnabled,
+		setAutoRefreshEnabled: callSetAutoRefreshEnabled,
 		refreshNow: callRefreshNow,
 		listKillswitchEnabled: callListKillswitchEnabled,
 		redirectStatus: callRedirectStatus,

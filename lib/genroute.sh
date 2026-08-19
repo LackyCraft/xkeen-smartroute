@@ -261,6 +261,24 @@ sr_regen() {
 
 		if [ "$mode" = "fixed" ]; then
 			target_tag="$(jq -r '.fixed_server' "$pf")"
+			# sr_pick_top1 already filters a balancer profile's pool down to
+			# tags that still exist in servers.json (a subscription refresh
+			# can rename/remove a tag out from under a saved profile -- see
+			# docs/subscription-update.md); a fixed profile's single tag
+			# never went through that check at all. Emitting a rule with a
+			# nonexistent outboundTag doesn't just break this one profile --
+			# Xray's config validator rejects the *entire* merged routing
+			# file over it, which _sr_xray_validate() then correctly refuses
+			# to apply, silently freezing every profile's routing updates
+			# (not just this one) until a human notices and fixes it by
+			# hand. Confirmed reachable for real: sr_remap_profile_tags
+			# deliberately leaves a removed fixed_server's stale tag in
+			# place (for the UI to show what disappeared) rather than
+			# nulling it out.
+			if [ -n "$target_tag" ] && [ "$target_tag" != "null" ] && ! jq -e --arg t "$target_tag" '.[] | select(.tag == $t)' "$SR_SERVERS_FILE" >/dev/null 2>&1; then
+				sr_log "profile '$name' has fixed_server '$target_tag' which no longer exists (removed by a subscription refresh?), skipping"
+				target_tag=""
+			fi
 		else
 			target_tag="$(sr_pick_top1 "$pf" "$skip_fresh_ping")"
 		fi

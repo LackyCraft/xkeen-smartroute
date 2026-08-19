@@ -60,6 +60,8 @@ case "$1" in
 	"get_activity": {},
 	"get_refresh_hours": {},
 	"set_refresh_hours": {"hours":"str1"},
+	"get_auto_refresh_enabled": {},
+	"set_auto_refresh_enabled": {"enabled":"bool1"},
 	"get_observatory_period": {},
 	"set_observatory_period": {"minutes":"str1"},
 	"refresh_now": {},
@@ -324,6 +326,15 @@ EOF
 			refresh_now)
 				sh "$LIB_DIR/subscription.sh" refresh-now >/tmp/sr_refresh_now.log 2>&1 &
 				jq -n '{ok:true, note:"started in background"}'
+				;;
+			get_auto_refresh_enabled)
+				e="$(sh "$LIB_DIR/subscription.sh" get-auto-refresh-enabled 2>/dev/null)"
+				jq -n --arg e "${e:-1}" '{enabled: ($e == "1")}'
+				;;
+			set_auto_refresh_enabled)
+				enabled="$(echo "$args" | jq -r '.enabled // false')"
+				sh "$LIB_DIR/subscription.sh" set-auto-refresh-enabled "$enabled" >/tmp/sr_autorefresh.log 2>&1
+				jq -n '{ok:true}'
 				;;
 			get_observatory_period)
 				m="$(sh "$LIB_DIR/genroute.sh" get-observatory-period 2>/dev/null)"

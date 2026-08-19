@@ -11,8 +11,15 @@ return view.extend({
 			sr.rpc.getPings(),
 			sr.rpc.getRefreshHours(),
 			sr.rpc.getHealth(),
-			sr.rpc.getObservatoryPeriod()
+			sr.rpc.getObservatoryPeriod(),
+			sr.rpc.getAutoRefreshEnabled()
 		]);
+	},
+
+	handleToggleAutoRefresh: function (ev) {
+		return sr.rpc.setAutoRefreshEnabled(ev.target.checked).then(function (res) {
+			if (res && res.error) ui.addNotification(null, E('p', {}, res.detail || res.error), 'error');
+		});
 	},
 
 	handleGenerateHwid: function (ev) {
@@ -343,6 +350,7 @@ return view.extend({
 		var refreshHours = data[3] || 12;
 		this.health = data[4] || {};
 		var observatoryPeriod = data[5] || 20;
+		var autoRefreshEnabled = data[6] !== false;
 		this.expanded = {};
 
 		var clientSelect = E('select', { 'id': 'sr-sub-client', 'class': 'cbi-input-select', 'style': 'display:block;max-width:320px;margin:.25em 0' },
@@ -418,6 +426,14 @@ return view.extend({
 
 		var refreshBox = E('div', { 'class': 'cbi-section' }, [
 			E('h3', {}, sr.T('refresh_settings_title')),
+			E('label', { 'style': 'display:flex;align-items:center;gap:.5em;font-weight:bold' }, [
+				E('input', {
+					'type': 'checkbox', 'id': 'sr-auto-refresh-toggle', 'checked': autoRefreshEnabled ? '' : null,
+					'change': ui.createHandlerFn(view, 'handleToggleAutoRefresh')
+				}),
+				sr.T('auto_refresh_toggle_label')
+			]),
+			E('p', { 'class': 'cbi-value-description', 'style': 'margin:.25em 0 .75em' }, sr.T('auto_refresh_warning')),
 			E('label', {}, sr.T('refresh_interval_label')),
 			E('div', { 'style': 'display:flex;gap:.5em;max-width:320px;margin:.25em 0 .75em' }, [
 				E('input', { 'type': 'number', 'id': 'sr-refresh-hours', 'class': 'cbi-input-text', 'min': '1', 'style': 'flex:1', 'value': String(refreshHours) }),
