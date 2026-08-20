@@ -1,0 +1,302 @@
+# От профиля к конфигу Xray: `genroute.sh`
+
+Источник: [`lib/genroute.sh`](../../lib/genroute.sh). Про сам алгоритм
+выбора топ-1 сервера и приоритетный Observatory-scheduler — отдельно, в
+[balancer.md](balancer.md); здесь — то, что вокруг него: как профиль
+превращается в правила маршрутизации, и жизненный цикл `sr_regen()`.
+
+## Содержание
+
+- [Профиль как объект](#профиль-как-объект)
+- [Домены vs устройства vs IP-диапазоны: почему это разные правила](#домены-vs-устройства-vs-ip-диапазоны-почему-это-разные-правила)
+- [Реальный баг: `select(A) and (B)` — не то же самое, что "A и B"](#реальный-баг-selecta-and-b--не-то-же-самое-что-a-и-b)
+- [sr_regen: цикл по профилям](#sr_regen-цикл-по-профилям)
+- [Защита fixed-режима от протухшего тега](#защита-fixed-режима-от-протухшего-тега)
+- [Catch-all и почему он больше не должен "побеждать по порядку"](#catch-all-и-почему-он-больше-не-должен-побеждать-по-порядку)
+- [Лock и "не перезапускать, если ничего не изменилось"](#lock-и-не-перезапускать-если-ничего-не-изменилось)
+- [Валидация при сохранении профиля](#валидация-при-сохранении-профиля)
+- [skip_fresh_ping: почему интерактивный Save не может ждать пинг](#skip_fresh_ping-почему-интерактивный-save-не-может-ждать-пинг)
+
+## Профиль как объект
+
+Профиль — JSON-файл в `$SR_PROFILES_DIR/<name>.json`
+(`/etc/xkeen-smartroute/profiles/`), примерно:
+
+```json
+{
+  "name": "youtube",
+  "domain_source": {"type": "geosite", "value": "youtube"},
+  "mode": "balancer",
+  "servers": ["sr_main_1_2_3_4_443_...", "sr_main_5_6_7_8_443_..."],
+  "devices": ["192.168.1.50"],
+  "ip_ranges": []
+}
+```
+
+`domain_source.type` — `"any"` / `"geosite"` / `"custom"`. `mode` —
+`"fixed"` (один конкретный сервер, `fixed_server`) или `"balancer"`
+(пул `servers`, выбор лучшего — см. [balancer.md](balancer.md)).
+`devices` и `ip_ranges` — опциональные, независимые от домена
+ограничения (Policy-Based Routing по устройству и по IP-диапазону
+соответственно).
+
+## Домены vs устройства vs IP-диапазоны: почему это разные правила
+
+`build_rule_list()` — центральная функция, превращающая один профиль в
+**один или два** объекта Xray routing-правила:
+
+```sh
+build_rule_list() {
+	domains="$(domain_match_array "$1")"
+	devices="$(device_match_array "$1")"
+	ips="$(ip_match_array "$1")"
+	jq -n --argjson d "$domains" --argjson s "$devices" --argjson i "$ips" '
+		[
+			(if ($d|length) > 0 or ($i|length) == 0 then
+				{} + (if ($d|length) > 0 then {domain:$d} else {} end) + (if ($s|length) > 0 then {source:$s} else {} end)
+			else empty end),
+			(if ($i|length) > 0 then
+				{ip:$i} + (if ($s|length) > 0 then {source:$s} else {} end)
+			else empty end)
+		]
+	'
+}
+```
+
+([`lib/genroute.sh:95-109`](../../lib/genroute.sh#L95-L109))
+
+Почему не один объект `{domain:[...], ip:[...], source:[...]}`? Xray
+**AND**-ит все поля одного правила вместе — `{domain:[...], ip:[...]}`
+означало бы "домен из списка **И** IP назначения из диапазона" (не
+матчит почти ничего), а профилю нужно "домен из списка **ИЛИ** это
+IP-приложение" (Telegram — типичный кейс: веб-версия матчится по
+домену через `geosite:telegram`, а нативные приложения ходят по MTProto
+напрямую на IP дата-центров без SNI/DNS вообще — `geosite:telegram`
+их физически не видит). Два отдельных объекта правила, оба указывающих
+на один и тот же `outboundTag`, дают OR бесплатно — за счёт того, что
+Xray берёт первое совпавшее правило по порядку массива.
+
+`device_match_array()`/`ip_match_array()` тривиальны — просто читают
+`.devices`/`.ip_ranges` из профиля как есть (это уже IP/CIDR-строки,
+провалидированные при save, см. ниже). Реальная работа — в
+`domain_match_array()`:
+
+```sh
+domain_match_array() {
+	src_type="$(jq -r '.domain_source.type // "any"' "$1")"
+	if [ "$src_type" = "any" ]; then
+		jq -n '[]'
+	elif [ "$src_type" = "geosite" ]; then
+		val="$(jq -r '.domain_source.value' "$1")"
+		jq -n --arg v "geosite:$val" '[$v]'
+	else
+		file="$SR_LISTS_DIR/$(jq -r '.domain_source.file' "$1")"
+		...
+	fi
+}
+```
+
+([`lib/genroute.sh:17-53`](../../lib/genroute.sh#L17-L53))
+
+`"any"` даёт пустой массив — и `build_rule_list` **опускает** ключ
+`domain` из объекта правила целиком (`{"domain":[]}` матчил бы "ничего",
+противоположность желаемому "не ограничивать по домену" — эта разница
+между "ключ отсутствует" и "ключ — пустой массив" была осознанным
+решением, не оплошностью).
+
+## Реальный баг: `select(A) and (B)` — не то же самое, что "A и B"
+
+Найден и исправлен вживую, стоит держать в памяти как пример того, как
+легко ошибиться в `jq`:
+
+```sh
+jq -R -s 'split("\n") | map(select((length>0) and (startswith("#")|not)))' "$file"
+```
+
+`select(A) and (B)` — **не** "оставить строки, где A и B" — `select()`
+пропускает через себя свой **вход** (реальный текст домена) или
+отбрасывает его целиком, а внешний `and` потом сворачивает то, что
+`select` пропустил (истинную непустую строку), **плюс** булево B — в
+голое `true`/`false`, подменяя исходный текст домена булевым значением
+в выводе. Каждый профиль на custom-списке доменов тихо генерировал
+`{"domain":[true]}` вместо `{"domain":["example.com"]}` — Xray никогда
+не матчит реальные Host/SNI против JSON-булевого значения, так что
+трафик любого профиля на custom-списке проваливался прямиком в
+следующее правило, никем не замеченный (потому что все реально
+использовавшиеся на тот момент профили были geosite-based — эта ветка
+кода вообще не исполнялась). Оба условия должны быть **внутри одного**
+`select()`, чтобы он вычислил единственное булево значение и, при
+успехе, пропустил исходную строку без изменений — именно так, как
+сейчас в коде выше.
+
+## sr_regen: цикл по профилям
+
+`sr_regen()` перебирает каждый файл в `$SR_PROFILES_DIR`, для
+`mode:"fixed"` берёт `.fixed_server` напрямую, для `mode:"balancer"`
+вызывает `sr_pick_top1()` ([balancer.md](balancer.md)), затем
+превращает результат в правила через `build_rule_list` +
+`outboundTag`:
+
+```sh
+new_rules="$(echo "$field_list" | jq --arg tag "$target_tag" 'map(. + {type:"field", outboundTag:$tag})')"
+rules="$(echo "$rules" | jq --argjson r "$new_rules" '. + $r')"
+current="$(echo "$current" | jq --arg name "$name" --arg tag "$target_tag" '. + {($name): $tag}')"
+```
+
+([`lib/genroute.sh:290-292`](../../lib/genroute.sh#L290-L292))
+
+`current.json` (`$SR_CURRENT_FILE`) — отдельный побочный эффект: тег,
+реально выбранный **на этом regen**, для каждого профиля по имени. Это
+то, что позволяет UI показывать настоящее имя сервера для
+`balancer`-профиля вместо "N серверов", и то, с чем сверяется
+`GET /activity` гейтвея (см. [gateway-telemetry.md](gateway-telemetry.md))
+для точки "online now".
+
+## Защита fixed-режима от протухшего тега
+
+`sr_pick_top1()` уже фильтрует пул `balancer`-профиля до тегов, которые
+всё ещё существуют в `servers.json` (подписка могла переименовать/
+удалить тег между сохранением профиля и текущим regen — см.
+[subscription-update.md](subscription-update.md)). У `fixed`-режима
+своего единственного тега такой проверки не было вообще:
+
+```sh
+if [ -n "$target_tag" ] && [ "$target_tag" != "null" ] && ! jq -e --arg t "$target_tag" '.[] | select(.tag == $t)' "$SR_SERVERS_FILE" >/dev/null 2>&1; then
+	sr_log "profile '$name' has fixed_server '$target_tag' which no longer exists (removed by a subscription refresh?), skipping"
+	target_tag=""
+fi
+```
+
+([`lib/genroute.sh:278-281`](../../lib/genroute.sh#L278-L281))
+
+Почему это важно сильнее, чем кажется: правило с несуществующим
+`outboundTag` не просто ломает один профиль — Xray-валидатор конфига
+отвергает **весь** смёрженный routing-файл целиком, а
+`_sr_xray_validate()` (см. [gateway-architecture.md](gateway-architecture.md))
+корректно отказывается его применять — замораживая обновления
+маршрутизации **у всех профилей разом**, пока кто-то не заметит и не
+починит руками. Достижимо на практике: `sr_remap_profile_tags`
+([subscription-update.md](subscription-update.md)) намеренно оставляет
+протухший тег удалённого `fixed_server` в профиле (чтобы UI показал,
+что именно пропало), а не обнуляет его — так что этот случай не
+гипотетический.
+
+## Catch-all и почему он больше не должен "побеждать по порядку"
+
+```sh
+catchall='{"type":"field","inboundTag":["redirect","tproxy"],"outboundTag":"direct"}'
+rules="$(echo "$rules" | jq --argjson r "$catchall" '. + [$r]')"
+```
+
+([`lib/genroute.sh:327-328`](../../lib/genroute.sh#L327-L328))
+
+Раньше это ещё обосновывалось тем, что этот catch-all "как бы становится
+последним словом", в предположении, что confdir-merge Xray всегда
+оценивает правила этого файла раньше, чем правила `05_routing.json`
+самого xkeen. Предположение оказалось неверным — подтверждено реальной
+утечкой, где собственное правило xkeen "домены `.ru` → direct"
+(`05_routing.json`) побеждало явное правило профиля SmartRoute для того
+же домена. `install.sh` теперь вырезает это доменно-специфичное правило
+из `05_routing.json` целиком, вместо того чтобы полагаться на порядок
+загрузки файлов — так что catch-all больше не обязан никого "обгонять",
+это просто обычный fallback для доменов, не покрытых ни одним
+профилем.
+
+## Lock и "не перезапускать, если ничего не изменилось"
+
+`sr_regen()` запускается раз в 3 минуты из cron (см.
+[install-and-process-management.md](install-and-process-management.md))
+плюс по требованию (Save/Delete профиля). Без блокировки медленный
+запуск (реальный сетевой пинг на несколько балансер-профилей) мог бы
+пересечься со следующим тиком — два процесса гонялись бы за одни и те же
+файлы:
+
+```sh
+lock_dir="$SR_STATE_DIR/.regen.lock"
+if ! mkdir "$lock_dir" 2>/dev/null; then
+	lock_age=999999
+	[ -d "$lock_dir" ] && lock_age=$(( $(date +%s) - $(date -r "$lock_dir" +%s 2>/dev/null || echo 0) ))
+	if [ "$lock_age" -lt 300 ]; then
+		sr_log "regen already in progress, skipping this run"
+		return 0
+	fi
+	sr_log "reclaiming stale regen lock (${lock_age}s old)"
+	rm -rf "$lock_dir"
+	mkdir "$lock_dir" 2>/dev/null || return 0
+fi
+```
+
+([`lib/genroute.sh:236-249`](../../lib/genroute.sh#L236-L249))
+
+В отличие от `sr_import()`'s import-lock (который **ждёт**, см.
+[subscription-import.md](subscription-import.md#атомарность-импорта-блокировка-и-пустой-ответ)),
+этот лок **пропускает** повторный запуск — regen безобиден пропустить
+(следующий тик через 3 минуты всё равно случится), а вот повторный
+импорт подписки — нет (явное "обновить сейчас" должно реально
+обновить, а не молча ничего не сделать).
+
+После построения новых `routing.smartroute.json` и
+`07_observatory.smartroute.json`, оба сравниваются побайтово с уже
+лежащими на диске версиями:
+
+```sh
+routing_changed=1
+[ -s "$SR_ROUTING_FILE" ] && [ "$(cat "$SR_ROUTING_FILE")" = "$new_routing" ] && routing_changed=0
+observatory_changed=1
+[ -s "$SR_OBSERVATORY_FILE" ] && [ "$(cat "$SR_OBSERVATORY_FILE")" = "$new_observatory" ] && observatory_changed=0
+...
+if [ "$routing_changed" -eq 0 ] && [ "$observatory_changed" -eq 0 ]; then
+	sr_log "regenerated routing (...), unchanged -- skipping restart"
+	return 0
+fi
+sr_restart_xray
+```
+
+([`lib/genroute.sh:422-435`](../../lib/genroute.sh#L422-L435))
+
+Рестарт Xray — единственный способ применить новый выбор балансера или
+новый Observatory-selector, но **каждый** рестарт сбрасывает прогресс
+Observatory в памяти Xray до нуля (см. [balancer.md](balancer.md)) —
+поэтому регены, которые ничего реально не поменяли (частый случай — cron
+тикает каждые 3 минуты, а топ-1 сервер не меняется большую часть тиков),
+обязаны **не** трогать Xray вообще.
+
+## Валидация при сохранении профиля
+
+`save` в CLI-диспетчере (низ файла) — не просто `cp` + `sr_regen`.
+Профиль, не ограничивающий трафик ничем (ни домен, ни устройство, ни
+IP-диапазон), перехватил бы **весь** трафик со всех устройств,
+молча затмив все остальные профили (порядок правил = порядок массива,
+первое совпадение побеждает) — отклоняется явно, с понятной причиной:
+
+```sh
+if [ "$src_type" = "any" ] && [ "$n_devices" -eq 0 ] && [ "$n_ip_ranges" -eq 0 ]; then
+	sr_die "profile must match by domain, device, or IP range -- got none"
+fi
+```
+
+Плюс посимвольная проверка каждой записи `devices`/`ip_ranges` на
+валидный IPv4/CIDR (`devices`) или IPv4/IPv6/CIDR (`ip_ranges`) —
+Xray-шный `source`/`ip` фильтр в routing-правиле не принимает ничего
+другого, а без этой проверки ошибка всплыла бы гораздо позже, невнятным
+провалом валидации конфига в `sr_restart_xray`, далеко от места реальной
+опечатки ([`lib/genroute.sh:459-475`](../../lib/genroute.sh#L459-L475)).
+
+## skip_fresh_ping: почему интерактивный Save не может ждать пинг
+
+`sr_pick_top1()` при обычном вызове гоняет реальный сетевой пинг по
+всему пулу профиля (`subscription.sh ping-tags`) — приемлемо для
+фонового regen по cron, но не для интерактивного нажатия "Сохранить" в
+UI: замерено 71 секунда для пула всего из 3 профилей на этом железе,
+дольше, чем таймаут ubus/rpcd и XHR браузера. Подтверждено вживую:
+сохранение фактически проходило (файл профиля и routing реально
+записывались), но UI никогда не получал ответ — кнопка зависала на
+"Сохраняю..." до ручной перезагрузки страницы.
+
+`save`/`delete` в CLI-диспетчере поэтому вызывают `sr_regen 1` — второй
+аргумент, `skip_fresh_ping`, долетающий до `sr_pick_top1` и
+отключающий именно этот сетевой пробник, оставляя ранжирование чисто на
+уже имеющихся `ping.json`/`health.json` (не старше нескольких минут —
+их поддерживает свежими сам cron-regen и периодический пинг-свип
+`subscription.sh`). Следующий фоновый regen (≤3 минуты) досчитает то,
+что реально новое.

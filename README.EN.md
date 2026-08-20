@@ -170,7 +170,7 @@ It would seem safest to check the group's servers the instant a site is opened. 
 
 Xray's own `observatory` only keeps results in memory — every Xray restart (a profile's top pick changing, the nightly scheduled restart, etc.) resets its progress to zero. `smartroute-gateway` **persists** what it already knows across those resets (the `health.json` file is merged into, not overwritten wholesale, atomically — survives even a power cut mid-write), and every entry carries a timestamp for when it was last actually checked.
 
-The list of servers Xray is actively probing right now (`subjectSelector`) isn't static either: every time routing is recomputed, it narrows down to whatever's actually stale (not checked within the configurable period) — servers used by current profiles first, and only once none of those are stale does it fall back to the rest of the subscription. Profile servers always get checked first this way, and a restart never throws away all accumulated progress, at most the one probe that was in flight. For the full mechanics, the real algorithm, and a live example, see [docs/balancer.md](docs/balancer.md) (Russian).
+The list of servers Xray is actively probing right now (`subjectSelector`) isn't static either: every time routing is recomputed, it narrows down to whatever's actually stale (not checked within the configurable period) — servers used by current profiles first, and only once none of those are stale does it fall back to the rest of the subscription. Profile servers always get checked first this way, and a restart never throws away all accumulated progress, at most the one probe that was in flight. For the full mechanics, the real algorithm, and a live example, see [docs/functionality_doc/balancer.md](docs/functionality_doc/balancer.md) (Russian).
 
 Each server's observatory status (alive / dead / not checked yet, with when it was last checked) is shown right in the server list on the Subscriptions tab, where the check period (`time_period_observatory`, 20 minutes by default) is also configurable.
 
@@ -345,6 +345,13 @@ Language switch (RU/EN) — a button in the top-right corner of every page in th
 
 ![SmartRoute panel](docs/screenshots/panel.png)
 **The SmartRoute panel** (`http://<router-ip>:1001/`) — a standalone live dashboard: servers with ping, real-time server switching within a profile, a traffic graph, Xray's log. Details — [above](#the-smartroute-panel-and-why-not-mihomo).
+
+## Documentation
+
+This README is a user-facing overview. Deeper documentation lives here:
+
+- [docs/UI_functionality/](docs/UI_functionality/) — every UI tab in detail: what's on it, non-obvious nuances, what the indicators actually mean.
+- [docs/functionality_doc/](docs/functionality_doc/) — how the code actually works internally: why a given decision was made, what real bug it closes, with direct links to source files and line ranges (Russian).
 
 ## Credits
 

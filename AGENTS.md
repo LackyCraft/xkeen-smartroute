@@ -5,6 +5,14 @@ OpenWrt router. It is deliberately terse and imperative — for the human-facing
 explanation of what this project is, read [README.md](README.md) /
 [README.EN.md](README.EN.md) first; this file only covers *how to operate it*.
 
+Before changing any of the mechanisms below (balancer, subscription import,
+kill-switch, leak protection, the gateway panel, logging, auth), read the
+matching document in [docs/functionality_doc/](docs/functionality_doc/) --
+it explains *why* the code is shaped the way it is, with direct links to the
+lines involved, and cites the real bug each design choice closes. The
+"Common failure modes" table below is a fast index into things already found
+broken; the functionality_doc/ files are the fuller story behind each one.
+
 ## Before doing anything
 
 Collect these from the user — do not guess or invent them:

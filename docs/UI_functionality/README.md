@@ -10,7 +10,7 @@
 - [Kill-Switch](kill-switch.md)
 - [Защита от утечек / Leak protection](leak-protection.md)
 
-Про саму логику выбора сервера в группе — [docs/balancer.md](../balancer.md).
+Про саму логику выбора сервера в группе — [docs/balancer.md](../functionality_doc/balancer.md).
 Про обновление подписки и маппинг тегов профилей при изменении подписки —
-[docs/subscription-update.md](../subscription-update.md).
+[docs/subscription-update.md](../functionality_doc/subscription-update.md).
 Про схему веток и релизов проекта — [docs/release-process.md](../release-process.md).
