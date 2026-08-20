@@ -264,6 +264,9 @@ var DICT = {
 	dv_saved_ok: { ru: 'Сохранено, применится при следующей перегенерации маршрутов (до 3 минут)', en: 'Saved, will apply on the next routing regen (up to 3 minutes)' },
 	dv_toggle_saved_ok: { ru: 'Применено', en: 'Applied' },
 	dv_need_pool_warning: { ru: 'Включено, но группа пуста — добавьте хотя бы один сервер ниже.', en: 'Enabled, but the pool is empty -- pick at least one server below.' },
+	dv_pool_members_title: { ru: 'Сейчас участвуют в Double VPN', en: 'Currently in the Double VPN pool' },
+	dv_pool_members_empty: { ru: 'Группа пуста.', en: 'The pool is empty.' },
+	dv_gateway_badge: { ru: 'текущий шлюз', en: 'current gateway' },
 
 	sub_intro: { ru: 'Вставьте ссылку-подписку VLESS/Trojan (та же, что в V2rayNG/V2Box) — сервера из неё появятся ниже и станут доступны для выбора в профилях.',
 	             en: 'Paste a VLESS/Trojan subscription link (the same one you use in V2rayNG/V2Box) — its servers will show up below and become selectable in profiles.' },

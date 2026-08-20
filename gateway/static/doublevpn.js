@@ -1,7 +1,10 @@
 'use strict';
 (function () {
 	var E = SR.E, T = SR.T, api = SR.api;
-	var st = { servers: [], pings: {}, current: { enabled: false, servers: [], current: {} }, picked: {}, serverGroupExpanded: {} };
+	var st = {
+		servers: [], pings: {}, current: { enabled: false, servers: [], current: {} }, picked: {},
+		serverGroupExpanded: {}, activeTags: {}
+	};
 
 	function pingLabel(tag) {
 		var ms = st.pings[tag];
@@ -12,6 +15,11 @@
 
 	function serverForTag(tag) {
 		return st.servers.filter(function (x) { return x.tag === tag; })[0] || { tag: tag, name: tag };
+	}
+
+	function activityDot(tag) {
+		var active = !!(tag && st.activeTags[tag]);
+		return E('span', { title: T(active ? 'activity_online' : 'activity_idle'), class: 'sr-dot ' + (active ? 'sr-dot-ok' : '') });
 	}
 
 	function groupServersBySubscription(servers) {
@@ -63,15 +71,56 @@
 		}
 		box.appendChild(E('div', {}, [
 			E('strong', {}, T('dv_current_gateway') + ': '),
-			cur.gateway ? SR.renderName(serverForTag(cur.gateway).name) : document.createTextNode(T('dv_current_none'))
+			cur.gateway ? E('span', {}, [activityDot(cur.gateway), SR.renderName(serverForTag(cur.gateway).name)]) : document.createTextNode(T('dv_current_none'))
 		]));
 		box.appendChild(E('div', { style: 'margin-top:4px;color:var(--text-dim)' }, (cur.pool_size || 0) + ' ' + T('dv_pool_size')));
+	}
+
+	// "Участники группы": every server currently saved in the pool (not just
+	// the checkboxes in the editor above -- this reflects what's actually
+	// saved/active, same "existing X" pattern as the Profiles tab's table),
+	// with the currently-picked gateway badged and its live activity dot.
+	function renderMembers() {
+		var box = document.getElementById('sr-dv-members');
+		if (!box) return;
+		box.innerHTML = '';
+		var poolTags = (st.current && st.current.servers) || [];
+		if (!poolTags.length) {
+			box.appendChild(E('p', { class: 'sr-desc' }, T('dv_pool_members_empty')));
+			return;
+		}
+		var gateway = st.current.current && st.current.current.gateway;
+
+		var table = E('table', { class: 'sr-table' }, [E('tr', {}, [
+			E('th', {}, T('col_server')), E('th', {}, T('col_address')), E('th', {}, T('col_ping')), E('th', {}, '')
+		])]);
+		poolTags.forEach(function (tag) {
+			var s = serverForTag(tag);
+			var isGateway = tag === gateway;
+			table.appendChild(E('tr', {}, [
+				E('td', {}, [isGateway ? activityDot(tag) : E('span', { class: 'sr-dot' }), SR.renderName(s.name)]),
+				E('td', {}, s.address ? (s.address + ':' + s.port) : '—'),
+				E('td', {}, pingLabel(tag)),
+				E('td', {}, isGateway ? E('span', { class: 'sr-badge' }, T('dv_gateway_badge')) : '')
+			]));
+		});
+		box.appendChild(table);
+	}
+
+	function pollActivity() {
+		return api.getActivity().then(function (active) {
+			st.activeTags = {};
+			(active || []).forEach(function (t) { st.activeTags[t] = true; });
+			renderCurrent();
+			renderMembers();
+		});
 	}
 
 	function reload() {
 		return api.getDoublevpnConfig().then(function (cfg) {
 			st.current = cfg || { enabled: false, servers: [], current: {} };
 			renderCurrent();
+			renderMembers();
 		});
 	}
 
@@ -86,7 +135,13 @@
 	}
 
 	function handleSavePool(ev) {
-		var chosen = Array.prototype.slice.call(document.querySelectorAll('input[name="sr-dv-server-choice"]:checked')).map(function (i) { return i.value; });
+		// Read from st.picked, not the DOM -- the picker only renders
+		// checkboxes for currently-expanded subscription groups, so
+		// querying document for ":checked" silently drops every selection
+		// made in a group the user has since collapsed. st.picked is kept
+		// in sync with every checkbox's own change event regardless of
+		// which groups are open, so it's the only complete source of truth.
+		var chosen = Object.keys(st.picked);
 		var enabled = document.getElementById('sr-dv-enabled').checked;
 		if (enabled && !chosen.length) SR.toast(T('dv_need_pool_warning'), 'error');
 
@@ -120,12 +175,19 @@
 			E('button', { class: 'sr-btn sr-btn-primary', click: handleSavePool }, T('dv_save_btn'))
 		]);
 
-		container.appendChild(box);
+		var membersBox = E('div', { class: 'sr-card' }, [
+			E('h3', {}, T('dv_pool_members_title')),
+			E('div', { id: 'sr-dv-members' })
+		]);
 
-		Promise.all([api.listServers(), api.getPings(), api.getDoublevpnConfig()]).then(function (data) {
+		container.appendChild(E('div', {}, [box, membersBox]));
+
+		Promise.all([api.listServers(), api.getPings(), api.getDoublevpnConfig(), api.getActivity()]).then(function (data) {
 			st.servers = data[0] || [];
 			st.pings = data[1] || {};
 			st.current = data[2] || { enabled: false, servers: [], current: {} };
+			st.activeTags = {};
+			(data[3] || []).forEach(function (t) { st.activeTags[t] = true; });
 			(st.current.servers || []).forEach(function (t) { st.picked[t] = true; });
 			(st.current.servers || []).forEach(function (t) {
 				var s = serverForTag(t);
@@ -134,6 +196,11 @@
 			document.getElementById('sr-dv-enabled').checked = !!st.current.enabled;
 			renderServerPicker();
 			renderCurrent();
+			renderMembers();
+
+			(function pollLoop() {
+				pollActivity().then(function () { setTimeout(pollLoop, 3000); }, function () { setTimeout(pollLoop, 3000); });
+			})();
 		});
 	}
 

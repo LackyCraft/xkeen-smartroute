@@ -141,6 +141,11 @@ table.sr-table { width: 100%; border-collapse: collapse; }
 .sr-dot-ok { background: var(--accent-2); box-shadow: 0 0 4px var(--accent-2); }
 .sr-dot-bad { background: var(--bad); }
 
+.sr-badge {
+  display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 0.72rem; font-weight: 600;
+  background: rgba(79,140,255,0.16); color: var(--accent);
+}
+
 .sr-spinner {
   display: inline-block; width: .9em; height: .9em; border: 2px solid var(--border);
   border-top-color: var(--accent); border-radius: 50%; animation: sr-spin .7s linear infinite; vertical-align: -0.15em;
