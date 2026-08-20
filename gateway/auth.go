@@ -161,6 +161,24 @@ func isAuthed(r *http.Request) bool {
 	return sessions.valid(c.Value)
 }
 
+// isLoopback: deliberately reads r.RemoteAddr only, never X-Forwarded-For
+// (client-supplied, spoofable) -- RemoteAddr is the actual TCP peer address
+// Go's own listener recorded, nothing upstream rewrites it since this
+// gateway has no reverse proxy in front of it. A request that genuinely
+// originates on the router itself already has root-equivalent access (this
+// is exactly how the rpcd script's own internal `curl 127.0.0.1:1001/...`
+// calls reach the gateway, e.g. get_activity in the rpcd script) -- the
+// password protects the LAN-facing surface, not the router talking to
+// itself.
+func isLoopback(r *http.Request) bool {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
 func setSessionCookie(w http.ResponseWriter, token string) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookieName,
@@ -275,7 +293,7 @@ func requireAuth(next http.Handler) http.Handler {
 		// CORS preflight never carries credentials/cookies -- gating it
 		// would just break the preflight itself, not add any protection;
 		// the actual GET/POST that follows still goes through this check.
-		if r.Method == http.MethodOptions || isPublicPath(r.URL.Path) || isAuthed(r) {
+		if r.Method == http.MethodOptions || isPublicPath(r.URL.Path) || isLoopback(r) || isAuthed(r) {
 			next.ServeHTTP(w, r)
 			return
 		}
