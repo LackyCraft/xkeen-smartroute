@@ -64,75 +64,95 @@ func runFailoverTick(xc *xrayClient) {
 	}
 	persistHealth(health)
 
-	profiles, err := loadProfiles()
-	if err != nil {
-		log.Printf("failover: loadProfiles: %v", err)
-		return
-	}
-
-	for _, p := range profiles {
-		if p.Mode != "balancer" || len(p.Servers) == 0 {
-			continue
-		}
-		reconcileBalancer(ctx, xc, "bal_"+p.Name, p.Servers, health)
-	}
+	// reconcileBalancer (below, commented out) is currently dead: it patches
+	// a gap in Xray's native `leastPing` balancer, but genroute.sh stopped
+	// emitting `balancerTag` routing rules at all after finding that any
+	// such rule breaks *every* routing rule's matching, not just the
+	// balancer's own (XTLS/Xray-core#6642 -- see docs/functionality_doc/
+	// balancer.md and gateway-telemetry.md for the full story). With no
+	// `bal_<profile>` tag ever existing in Xray's live config anymore,
+	// every call below would fail at its first line (GetBalancerInfo:
+	// "app/router: cannot find tag") and return immediately having done
+	// nothing -- confirmed live, this was pure log noise before being
+	// disabled here. Left in place, commented, rather than deleted: if
+	// #6642 is ever fixed upstream and balancerTag rules come back, this
+	// reconciliation logic (and xray.go's getBalancerInfo/overrideBalancer,
+	// which only this calls) is ready to re-enable as-is, no rewrite
+	// needed -- just uncomment this block and reconcileBalancer below it.
+	//
+	// profiles, err := loadProfiles()
+	// if err != nil {
+	// 	log.Printf("failover: loadProfiles: %v", err)
+	// 	return
+	// }
+	// for _, p := range profiles {
+	// 	if p.Mode != "balancer" || len(p.Servers) == 0 {
+	// 		continue
+	// 	}
+	// 	reconcileBalancer(ctx, xc, "bal_"+p.Name, p.Servers, health)
+	// }
 }
 
-func reconcileBalancer(ctx context.Context, xc *xrayClient, balancerTag string, candidates []string, health map[string]outboundHealth) {
-	info, err := xc.getBalancerInfo(ctx, balancerTag)
-	if err != nil {
-		log.Printf("failover: getBalancerInfo(%s): %v", balancerTag, err)
-		return
-	}
-
-	effective := info.Override
-	if effective == "" {
-		effective = info.PrincipleTarget
-	}
-	if effective != "" {
-		h, known := health[effective]
-		switch {
-		case known && h.Alive:
-			// Whichever mechanism is currently in charge (native leastPing
-			// or our own earlier override) is pointed at a genuinely
-			// healthy outbound -- leave it alone.
-			return
-		case !known:
-			// Not probed yet -- right after a restart, before observatory's
-			// first probe cycle, forcing a switch on no evidence would be
-			// worse than waiting one tick.
-			return
-		}
-		// known && !h.Alive: effective pick is confirmed dead, fall through
-		// and take over.
-	}
-
-	best, bestDelay := "", int64(-1)
-	for _, tag := range candidates {
-		h, known := health[tag]
-		if !known || !h.Alive {
-			continue
-		}
-		if best == "" || h.DelayMs < bestDelay {
-			best, bestDelay = tag, h.DelayMs
-		}
-	}
-
-	switch {
-	case best != "" && best != info.Override:
-		if err := xc.overrideBalancer(ctx, balancerTag, best); err == nil {
-			log.Printf("failover: %s -> %s (%dms) [was %q]", balancerTag, best, bestDelay, effective)
-		}
-	case best == "" && info.Override != "":
-		// Nothing in the candidate list is currently alive per observatory.
-		// Don't keep pinning to a target we already know is bad -- hand
-		// back to leastPing, which is no worse off and will pick back up
-		// automatically the moment observatory sees anything recover.
-		if err := xc.overrideBalancer(ctx, balancerTag, ""); err == nil {
-			log.Printf("failover: %s -> (cleared, nothing alive)", balancerTag)
-		}
-	}
-}
+// reconcileBalancer -- DISABLED, see the comment in runFailoverTick above.
+// Kept intact (not deleted) so it can be turned back on with a one-line
+// change if XTLS/Xray-core#6642 is ever fixed upstream and genroute.sh
+// starts emitting balancerTag rules again.
+//
+// func reconcileBalancer(ctx context.Context, xc *xrayClient, balancerTag string, candidates []string, health map[string]outboundHealth) {
+// 	info, err := xc.getBalancerInfo(ctx, balancerTag)
+// 	if err != nil {
+// 		log.Printf("failover: getBalancerInfo(%s): %v", balancerTag, err)
+// 		return
+// 	}
+//
+// 	effective := info.Override
+// 	if effective == "" {
+// 		effective = info.PrincipleTarget
+// 	}
+// 	if effective != "" {
+// 		h, known := health[effective]
+// 		switch {
+// 		case known && h.Alive:
+// 			// Whichever mechanism is currently in charge (native leastPing
+// 			// or our own earlier override) is pointed at a genuinely
+// 			// healthy outbound -- leave it alone.
+// 			return
+// 		case !known:
+// 			// Not probed yet -- right after a restart, before observatory's
+// 			// first probe cycle, forcing a switch on no evidence would be
+// 			// worse than waiting one tick.
+// 			return
+// 		}
+// 		// known && !h.Alive: effective pick is confirmed dead, fall through
+// 		// and take over.
+// 	}
+//
+// 	best, bestDelay := "", int64(-1)
+// 	for _, tag := range candidates {
+// 		h, known := health[tag]
+// 		if !known || !h.Alive {
+// 			continue
+// 		}
+// 		if best == "" || h.DelayMs < bestDelay {
+// 			best, bestDelay = tag, h.DelayMs
+// 		}
+// 	}
+//
+// 	switch {
+// 	case best != "" && best != info.Override:
+// 		if err := xc.overrideBalancer(ctx, balancerTag, best); err == nil {
+// 			log.Printf("failover: %s -> %s (%dms) [was %q]", balancerTag, best, bestDelay, effective)
+// 		}
+// 	case best == "" && info.Override != "":
+// 		// Nothing in the candidate list is currently alive per observatory.
+// 		// Don't keep pinning to a target we already know is bad -- hand
+// 		// back to leastPing, which is no worse off and will pick back up
+// 		// automatically the moment observatory sees anything recover.
+// 		if err := xc.overrideBalancer(ctx, balancerTag, ""); err == nil {
+// 			log.Printf("failover: %s -> (cleared, nothing alive)", balancerTag)
+// 		}
+// 	}
+// }
 
 // persistHealth merges this tick's observatory data into health.json rather
 // than overwriting it outright. Xray's own in-process observatory state

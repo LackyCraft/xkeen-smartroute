@@ -61,7 +61,7 @@ SmartRoute; единственный путь записи (`PUT /proxies/{name}
 | [`smartroute.go`](../../gateway/smartroute.go) | Чтение `servers.json`/`profiles/*.json`/`ping.json`/`current.json` |
 | [`handlers.go`](../../gateway/handlers.go) | Clash-API-совместимые `/proxies`, `/rules`, `/connections`, `/configs` |
 | [`xray.go`](../../gateway/xray.go) | gRPC-клиент к самому Xray (`StatsService`/`ObservatoryService`/`RoutingService`) |
-| [`failover.go`](../../gateway/failover.go) | Автоматический failover балансера — **см. предостережение в [gateway-telemetry.md](gateway-telemetry.md#failover-go-теперь-мёртвый-код)** |
+| [`failover.go`](../../gateway/failover.go) | `health.json`-polling (живое) + балансер-reconciliation (сейчас закомментирована) — см. [gateway-telemetry.md](gateway-telemetry.md#failover-go-балансер-reconciliation-отключена) |
 | [`activity.go`](../../gateway/activity.go) | In-memory "кто сейчас реально гонит трафик" для точки "online now" |
 | [`traffic_by_profile.go`](../../gateway/traffic_by_profile.go) | Кумулятивный трафик по профилю для дашборда Home |
 | [`logs.go`](../../gateway/logs.go) | Живой вьюер логов Xray — [logging.md](logging.md) |

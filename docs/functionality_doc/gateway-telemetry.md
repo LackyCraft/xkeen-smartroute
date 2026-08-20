@@ -8,7 +8,7 @@
 ## Содержание
 
 - [gRPC-клиент: три сервиса Xray](#grpc-клиент-три-сервиса-xray)
-- [failover.go теперь мёртвый код](#failover-go-теперь-мёртвый-код)
+- [failover.go: балансер-reconciliation отключена](#failover-go-балансер-reconciliation-отключена)
 - [health.json: устойчивость данных между рестартами](#healthjson-устойчивость-данных-между-рестартами)
 - [Точка "online now": activity.go](#точка-online-now-activityго)
 - [Трафик по профилю: агрегация без отдельного цикла](#трафик-по-профилю-агрегация-без-отдельного-цикла)
@@ -39,10 +39,11 @@ type xrayClient struct {
   REALITY-узел с битой камуфляжной сертификацией отвечает на TCP
   мгновенно, но реальный proxy-запрос через него стабильно падает).
 - **`RoutingService.GetBalancerInfo`/`OverrideBalancerTarget`** — API
-  для управления Xray-балансером. Формально всё ещё используется
-  `failover.go` — но см. ниже, почему это сейчас никогда не срабатывает.
+  для управления Xray-балансером. Обёрнуты в `xray.go` (`getBalancerInfo`/
+  `overrideBalancer`), но их единственный вызывающий код сейчас
+  закомментирован — см. ниже.
 
-## failover.go теперь мёртвый код
+## failover.go: балансер-reconciliation отключена
 
 **Важно для точности документации**: `failover.go` был написан, чтобы
 патчить дыру в собственном `leastPing`-балансере Xray (не демотирует
@@ -77,7 +78,8 @@ func reconcileBalancer(ctx context.Context, xc *xrayClient, balancerTag string, 
 `app/router: cannot find tag`, и функция сразу возвращается, ничего не
 сделав.
 
-Это подтверждено вживую — реальный, постоянный лог с боевого роутера:
+Это было подтверждено вживую — реальный, постоянный лог с боевого
+роутера, пока цикл ещё был активен:
 
 ```
 failover: getBalancerInfo(bal_Claude): rpc error: code = Unknown desc = app/router: cannot find tag
@@ -89,18 +91,30 @@ failover: getBalancerInfo(bal_Telegram): rpc error: code = Unknown desc = app/ro
 каждые 20 секунд вызывает `queryOutboundHealth()` и
 `persistHealth()` — **это** часть полностью рабочая и критически
 важная (`health.json` — прямая зависимость `sr_pick_top1`, см.
-[balancer.md](balancer.md)). Мёртв конкретно цикл `for _, p := range
-profiles { ... reconcileBalancer(...) }` внутри `runFailoverTick()`
-([`gateway/failover.go:73-78`](../../gateway/failover.go#L73-L78)) — он
-запускается, честно логирует неудачу и ничего не меняет, каждые 20
-секунд, для каждого `balancer`-режим профиля. Безвредно (просто шум в
-логе), но не выполняет то, что описано в комментарии наверху файла —
-эта документация фиксирует расхождение явно, а не молчит о нём.
+[balancer.md](balancer.md)). Цикл `for _, p := range profiles { ...
+reconcileBalancer(...) }` внутри `runFailoverTick()`, который просто
+логировал неудачу и ничего не менял каждые 20 секунд для каждого
+`balancer`-режим профиля, **закомментирован** — не удалён, а именно
+закомментирован, вместе с самой функцией `reconcileBalancer()`
+([`gateway/failover.go:67-155`](../../gateway/failover.go#L67-L155)):
 
-Не убрано специально: если апстрим когда-нибудь починит
-`XTLS/Xray-core#6642` и `balancerTag`-правила снова станут безопасны,
-эта логика немедленно снова заработает как задумано без единой правки
-кода — она уже правильно реагирует на "тега нет" через `err != nil`.
+```go
+// reconcileBalancer (below, commented out) is currently dead: ...
+// #6642 is ever fixed upstream and balancerTag rules come back, this
+// reconciliation logic (and xray.go's getBalancerInfo/overrideBalancer,
+// which only this calls) is ready to re-enable as-is, no rewrite
+// needed -- just uncomment this block and reconcileBalancer below it.
+//
+// profiles, err := loadProfiles()
+// ...
+```
+
+Осознанное решение "закомментировать, не удалить": если апстрим
+когда-нибудь починит `XTLS/Xray-core#6642` и `balancerTag`-правила
+снова станут безопасны, весь код реконсиляции (включая
+`getBalancerInfo`/`overrideBalancer` в `xray.go`, которые только этот
+код и вызывал) уже на месте, синтаксически корректен и снят одним
+раскомментированием — без переписывания заново.
 
 ## health.json: устойчивость данных между рестартами
 
