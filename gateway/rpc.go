@@ -13,6 +13,19 @@
 // script; a method the script doesn't know about is rejected before exec
 // ever runs, the same protection an allow-list would give without a second
 // copy of the method names to maintain.
+//
+// "At startup" alone isn't enough, though -- confirmed live: this gateway
+// runs as a long-lived process, entirely separate from the rpcd script it
+// execs (a plain file on disk, redeployed independently -- see
+// docs/functionality_doc/rpc-bridge.md). Adding a new method to the script
+// without restarting this process left the new method permanently
+// "unknown_method" here even though the script itself already handled it
+// correctly, because the cached allow-list from process start never saw it.
+// allowed() below self-heals instead: a miss triggers one re-read of the
+// script's `list` output (rate-limited so a client hammering a genuinely
+// bogus method name can't turn into a exec() flood) before actually
+// rejecting, so a script redeploy takes effect without needing this
+// process restarted too.
 package main
 
 import (
@@ -23,14 +36,23 @@ import (
 	"log"
 	"net/http"
 	"os/exec"
+	"sync"
 	"time"
 )
 
 const defaultRpcdScript = "/usr/libexec/rpcd/luci.xkeen-smartroute"
 
+// refreshCooldown bounds how often a cache-miss in allowed() can trigger a
+// re-exec of the script's own `list` -- a genuinely unknown/typo'd method
+// would otherwise re-trigger a fresh exec on every single request.
+const refreshCooldown = 5 * time.Second
+
 type rpcBridge struct {
-	script  string
-	methods map[string]struct{}
+	script string
+
+	mu          sync.RWMutex
+	methods     map[string]struct{}
+	lastRefresh time.Time
 }
 
 func newRPCBridge(script string) *rpcBridge {
@@ -54,12 +76,25 @@ func (b *rpcBridge) refreshMethods() {
 	for name := range schema {
 		methods[name] = struct{}{}
 	}
+	b.mu.Lock()
 	b.methods = methods
+	b.lastRefresh = time.Now()
+	b.mu.Unlock()
 	log.Printf("rpc bridge: %d methods available via %s", len(methods), b.script)
 }
 
 func (b *rpcBridge) allowed(method string) bool {
+	b.mu.RLock()
 	_, ok := b.methods[method]
+	stale := time.Since(b.lastRefresh) > refreshCooldown
+	b.mu.RUnlock()
+	if ok || !stale {
+		return ok
+	}
+	b.refreshMethods()
+	b.mu.RLock()
+	_, ok = b.methods[method]
+	b.mu.RUnlock()
 	return ok
 }
 
