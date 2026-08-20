@@ -3,6 +3,12 @@
 Четыре независимых переключателя, от базового механизма перехвата до
 защиты от конкретных путей обхода VPN.
 
+LuCI:
+![Защита от утечек — LuCI](../screenshots/OpenWRTUI/ProtectionPage.png)
+
+Панель SmartRoute:
+![Защита от утечек — панель SmartRoute](../screenshots/SmartRouteUI/ProtectionPage.png)
+
 ## Перехват LAN-трафика
 
 Включено/выключено + список перехватываемых портов (по умолчанию

@@ -330,27 +330,33 @@ sh <(wget -O - https://raw.githubusercontent.com/LackyCraft/xkeen-smartroute/mas
 
 ## Интерфейс
 
-Скриншоты ниже — заглушки: положите PNG с соответствующим именем в `docs/screenshots/` (см. [docs/screenshots/README.md](docs/screenshots/README.md)), и они появятся сами.
+Реальные скриншоты — панели SmartRoute (порт 1001) ниже; полный набор для
+обеих реализаций (LuCI-модуль **и** панель) — [docs/screenshots/README.md](docs/screenshots/README.md).
 
-![Подписки](docs/screenshots/subscriptions.png)
+![Подписки](docs/screenshots/SmartRouteUI/SubscriptionsPage.png)
 **Подписки** — вставляете ссылку на подписку, видите список серверов, которые из неё получены.
 
-![Профили](docs/screenshots/profiles.png)
+![Профили](docs/screenshots/SmartRouteUI/ProfilesPage.png)
 **Профили** — сердце модуля: список доменов слева, сервер(а) справа, режим (конкретный / авто-выбор быстрого) посередине. Ниже — таблица уже настроенных профилей с кнопками редактирования и удаления. В панели SmartRoute добавление/редактирование профиля открывается всплывающим окном, а управление списками собственных доменов вынесено в отдельную вкладку «Домены».
 
-![Статус](docs/screenshots/status.png)
-**Статус** — в LuCI: жив ли Xray, сколько серверов и профилей известно роутеру прямо сейчас. В панели SmartRoute (порт 1001) это ещё и домашняя страница — с живым графиком трафика, метриками здоровья серверов и реальными логами Xray по требованию.
+![Домены](docs/screenshots/SmartRouteUI/DomainsPage.png)
+**Домены** — собственные списки доменов (не путать со списками geosite Xray): создание, просмотр, добавление/удаление отдельного домена, удаление списка целиком. В LuCI это встроено прямо во вкладку «Профили», а не вынесено отдельно.
 
-![Kill-Switch](docs/screenshots/killswitch.png)
+![Double VPN](docs/screenshots/SmartRouteUI/DoubleVPNPage.png)
+**Double VPN** — выбираете группу серверов-«шлюзов», SmartRoute сам постоянно выбирает из неё самый быстрый живой и релеит через него весь остальной трафик (и обычный, и собственные проверки живости других серверов) — см. [выше](#что-добавляет-smartroute) и [docs/functionality_doc/doublevpn.md](docs/functionality_doc/doublevpn.md).
+
+![Статус](docs/screenshots/SmartRouteUI/StatusPage1.png)
+**Статус** — в LuCI: жив ли Xray, сколько серверов и профилей известно роутеру прямо сейчас. В панели SmartRoute (порт 1001) это ещё и домашняя страница — с живым графиком трафика, трафиком по профилям, метриками здоровья серверов и реальными логами Xray по требованию.
+
+![Kill-Switch](docs/screenshots/SmartRouteUI/KillswitchPage.png)
 **Kill-Switch** — список профилей с переключателем; работает без зазора по времени для любого профиля, и на geosite-категориях, и на собственных списках доменов.
 
-![Защита от утечек](docs/screenshots/protection.png)
+![Защита от утечек](docs/screenshots/SmartRouteUI/ProtectionPage.png)
 **Защита от утечек** — переключатели DNS-, IPv6- и QUIC-защиты, плюс список TCP-портов, которые перехватывает SmartRoute (по умолчанию 80/443).
 
 Переключатель языка (RU/EN) — кнопка в правом верхнем углу каждой страницы модуля.
 
-![Панель SmartRoute](docs/screenshots/panel.png)
-**Панель SmartRoute** (`http://<IP-роутера>:1001/`) — отдельная админка на всех тех же данных: сайдбар с теми же 5 вкладками, что и в LuCI, домашняя страница со статусом/графиком/метриками/логами. Подробнее — [выше](#панель-smartroute-и-почему-не-mihomo).
+**Панель SmartRoute** (`http://<IP-роутера>:1001/`) — отдельная админка на всех тех же данных: сайдбар с теми же вкладками, что и в LuCI, домашняя страница со статусом/графиком/метриками/логами. Полный вид домашней страницы — [docs/screenshots/SmartRouteUI/StatusPage2.png](docs/screenshots/SmartRouteUI/StatusPage2.png). Подробнее — [выше](#панель-smartroute-и-почему-не-mihomo).
 
 ## Документация
 
@@ -366,6 +372,8 @@ sh <(wget -O - https://raw.githubusercontent.com/LackyCraft/xkeen-smartroute/mas
 | [README.md](docs/UI_functionality/README.md) | Индекс раздела |
 | [subscriptions.md](docs/UI_functionality/subscriptions.md) | Вкладка «Подписки»: импорт, автообновление, пинг, статус observatory в таблице серверов |
 | [profiles.md](docs/UI_functionality/profiles.md) | Вкладка «Профили»: создание/редактирование, устройства, IP-диапазоны, точка «online now» — что она реально означает |
+| [doublevpn.md](docs/UI_functionality/doublevpn.md) | Вкладка «Double VPN»: группа серверов-шлюзов, автовыбор самого быстрого, блок текущего состояния |
+| [domains.md](docs/UI_functionality/domains.md) | Вкладка «Домены»: свои списки доменов — отдельная вкладка в панели, часть «Профили» в LuCI |
 | [status.md](docs/UI_functionality/status.md) | Вкладка «Статус»: сервисы, обзор, метрики здоровья, график трафика, логи Xray (и почему они видны только в панели SmartRoute, не в LuCI) |
 | [kill-switch.md](docs/UI_functionality/kill-switch.md) | Вкладка «Kill-Switch»: как устроена защита, почему geosite не даёт 100% покрытия, инструкция по тестированию на реальном устройстве |
 | [leak-protection.md](docs/UI_functionality/leak-protection.md) | Вкладка «Защита от утечек»: перехват трафика, DNS/IPv6/QUIC защита |

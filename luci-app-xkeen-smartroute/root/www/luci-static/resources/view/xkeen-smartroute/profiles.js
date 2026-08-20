@@ -518,9 +518,22 @@ return view.extend({
 			// .servers list with no removed_servers field).
 			var removed = p.removed_servers || [];
 			if (removed.length) {
+				// sr.renderName() returns a DOM node (a <span> when the name
+				// has a flag emoji, a plain text node otherwise) -- joining
+				// an array of those with .join(', ') stringifies each node
+				// via its own toString(), which for a real Node is literally
+				// "[object HTMLSpanElement]"/"[object Text]", never its text
+				// content. Build the <td>'s children as a real mixed
+				// array of nodes/strings instead, exactly like every other
+				// multi-node cell in this file already does.
+				var removedChildren = ['⚠ '];
+				removed.forEach(function (r, i) {
+					if (i > 0) removedChildren.push(', ');
+					removedChildren.push(sr.renderName(r.name || r.tag));
+				});
+				removedChildren.push(' — ' + sr.T('profile_removed_servers_label'));
 				table.appendChild(E('tr', { 'class': 'tr' }, [
-					E('td', { 'class': 'td', 'colspan': '4', 'style': 'color:#e74c3c;font-size:.9em' },
-						'⚠ ' + removed.map(function (r) { return sr.renderName(r.name || r.tag); }).join(', ') + ' — ' + sr.T('profile_removed_servers_label'))
+					E('td', { 'class': 'td', 'colspan': '4', 'style': 'color:#e74c3c;font-size:.9em' }, removedChildren)
 				]));
 			}
 		});

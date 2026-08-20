@@ -6,9 +6,14 @@
 
 - [Подписки / Subscriptions](subscriptions.md)
 - [Профили / Profiles](profiles.md)
+- [Double VPN](doublevpn.md)
+- [Домены / Domains](domains.md)
 - [Статус / Status](status.md)
 - [Kill-Switch](kill-switch.md)
 - [Защита от утечек / Leak protection](leak-protection.md)
+
+Скриншоты обеих реализаций интерфейса (LuCI-модуль и отдельная панель) —
+[docs/screenshots/README.md](../screenshots/README.md).
 
 Про саму логику выбора сервера в группе — [docs/balancer.md](../functionality_doc/balancer.md).
 Про обновление подписки и маппинг тегов профилей при изменении подписки —

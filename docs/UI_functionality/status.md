@@ -3,6 +3,13 @@
 Живое состояние всего стека: сервисы, ссылки, обзор, метрики здоровья,
 график трафика.
 
+LuCI:
+![Статус — LuCI](../screenshots/OpenWRTUI/StatusPage.png)
+
+Панель SmartRoute — домашняя страница, полностью:
+![Статус — панель SmartRoute, верх](../screenshots/SmartRouteUI/StatusPage1.png)
+![Статус — панель SmartRoute, низ](../screenshots/SmartRouteUI/StatusPage2.png)
+
 ## Сервисы
 
 Три карточки — Xray, панель SmartRoute (`smartroute-gateway`), xkeen-UI.

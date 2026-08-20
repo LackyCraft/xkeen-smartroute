@@ -330,27 +330,33 @@ If the project ever ships a "real" release (v1.0 and so on), it'll be a separate
 
 ## Interface
 
-The screenshots below are placeholders: drop a matching PNG into `docs/screenshots/` (see [docs/screenshots/README.md](docs/screenshots/README.md)) and they'll show up automatically.
+Real screenshots — the SmartRoute panel (port 1001) below; the full set for
+both interfaces (LuCI module **and** the panel) — [docs/screenshots/README.md](docs/screenshots/README.md).
 
-![Subscriptions](docs/screenshots/subscriptions.png)
+![Subscriptions](docs/screenshots/SmartRouteUI/SubscriptionsPage.png)
 **Subscriptions** — paste a subscription link, see the server list it produced.
 
-![Profiles](docs/screenshots/profiles.png)
+![Profiles](docs/screenshots/SmartRouteUI/ProfilesPage.png)
 **Profiles** — the module's core: domain list on the left, server(s) on the right, mode (fixed / auto-pick-fastest) in the middle. Below — a table of configured profiles with edit and delete buttons. In the SmartRoute panel, adding/editing a profile opens in a modal, and custom domain-list management lives in its own "Domains" tab.
 
-![Status](docs/screenshots/status.png)
-**Status** — in LuCI: whether Xray is alive, how many servers and profiles the router currently knows about. In the SmartRoute panel (port 1001) this is also the home page — with a live traffic graph, server health metrics, and real Xray logs on demand.
+![Domains](docs/screenshots/SmartRouteUI/DomainsPage.png)
+**Domains** — your own domain lists (not the built-in Xray geosite categories): create, view, add/remove a single domain, delete a whole list. In LuCI this is built into the "Profiles" tab instead of its own tab.
 
-![Kill-Switch](docs/screenshots/killswitch.png)
+![Double VPN](docs/screenshots/SmartRouteUI/DoubleVPNPage.png)
+**Double VPN** — pick a pool of candidate "gateway" servers, SmartRoute keeps picking the fastest alive one out of it and relays every other outbound's traffic through it (both regular connections and its own liveness checks) — see [above](#what-smartroute-adds) and [docs/functionality_doc/doublevpn.md](docs/functionality_doc/doublevpn.md) (Russian).
+
+![Status](docs/screenshots/SmartRouteUI/StatusPage1.png)
+**Status** — in LuCI: whether Xray is alive, how many servers and profiles the router currently knows about. In the SmartRoute panel (port 1001) this is also the home page — with a live traffic graph, traffic by profile, server health metrics, and real Xray logs on demand.
+
+![Kill-Switch](docs/screenshots/SmartRouteUI/KillswitchPage.png)
 **Kill-Switch** — a profile list with a toggle; works with zero time gap for any profile, on both geosite categories and custom domain lists.
 
-![Leak protection](docs/screenshots/protection.png)
+![Leak protection](docs/screenshots/SmartRouteUI/ProtectionPage.png)
 **Leak protection** — DNS, IPv6, and QUIC protection toggles, plus the list of TCP ports SmartRoute captures (80/443 by default).
 
 Language switch (RU/EN) — a button in the top-right corner of every page in the module.
 
-![SmartRoute panel](docs/screenshots/panel.png)
-**The SmartRoute panel** (`http://<router-ip>:1001/`) — a separate admin UI on the same data: a sidebar with the same 5 tabs as LuCI, a home page with status/graph/metrics/logs. Details — [above](#the-smartroute-panel-and-why-not-mihomo).
+**The SmartRoute panel** (`http://<router-ip>:1001/`) — a separate admin UI on the same data: a sidebar with the same tabs as LuCI, a home page with status/graph/metrics/logs. Full home page view — [docs/screenshots/SmartRouteUI/StatusPage2.png](docs/screenshots/SmartRouteUI/StatusPage2.png). Details — [above](#the-smartroute-panel-and-why-not-mihomo).
 
 ## Documentation
 
@@ -366,6 +372,8 @@ This README is a user-facing overview — for whoever's installing and configuri
 | [README.md](docs/UI_functionality/README.md) | Section index |
 | [subscriptions.md](docs/UI_functionality/subscriptions.md) | The Subscriptions tab: import, auto-refresh, ping, observatory status in the server table |
 | [profiles.md](docs/UI_functionality/profiles.md) | The Profiles tab: creating/editing, devices, IP ranges, what the "online now" dot actually means |
+| [doublevpn.md](docs/UI_functionality/doublevpn.md) | The Double VPN tab: the gateway server pool, auto-picking the fastest one, the current-state block |
+| [domains.md](docs/UI_functionality/domains.md) | The Domains tab: your own domain lists — a dedicated tab in the panel, part of "Profiles" in LuCI |
 | [status.md](docs/UI_functionality/status.md) | The Status tab: services, overview, health metrics, traffic graph, Xray logs (and why they're only visible in the SmartRoute panel, not LuCI) |
 | [kill-switch.md](docs/UI_functionality/kill-switch.md) | The Kill-Switch tab: how the protection works, why geosite doesn't give 100% coverage, a real-device testing procedure |
 | [leak-protection.md](docs/UI_functionality/leak-protection.md) | The Leak protection tab: traffic capture, DNS/IPv6/QUIC protection |

@@ -3,6 +3,12 @@
 Жёсткая блокировка трафика профиля при падении Xray — вместо риска уйти в
 интернет напрямую в обход VPN.
 
+LuCI:
+![Kill-Switch — LuCI](../screenshots/OpenWRTUI/KillswitchPage.png)
+
+Панель SmartRoute:
+![Kill-Switch — панель SmartRoute](../screenshots/SmartRouteUI/KillswitchPage.png)
+
 ## Как это устроено на самом деле (два уровня)
 
 1. **Мягкий (всегда включён, бесплатно)**: трафик профиля перенаправляется

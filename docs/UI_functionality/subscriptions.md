@@ -3,6 +3,12 @@
 Импорт VLESS/Trojan-подписок, список серверов, пинг, статус Observatory,
 настройки автообновления.
 
+LuCI:
+![Подписки — LuCI](../screenshots/OpenWRTUI/SubscriptionsPage.png)
+
+Панель SmartRoute:
+![Подписки — панель SmartRoute](../screenshots/SmartRouteUI/SubscriptionsPage.png)
+
 ## Добавление подписки
 
 - **Ссылка** — обычная подписка (base64-блок `vless://`/`trojan://`
