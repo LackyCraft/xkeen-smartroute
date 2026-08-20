@@ -30,6 +30,39 @@ SR_OUTBOUNDS_STATE_FILE="$SR_STATE_DIR/outbounds.json"
 SR_PING_FILE="$SR_STATE_DIR/ping.json"
 SR_HEALTH_FILE="$SR_STATE_DIR/health.json"
 SR_CURRENT_FILE="$SR_STATE_DIR/current.json"
+SR_DOUBLEVPN_FILE="$SR_STATE_DIR/doublevpn.json"
+SR_DOUBLEVPN_CURRENT_FILE="$SR_STATE_DIR/doublevpn_current.json"
+
+# ---------------------------------------------------------------------------
+# Double VPN: an optional extra hop in front of every profile's own outbound.
+# The idea (see docs/functionality_doc/doublevpn.md): an ISP frequently
+# blocks individual destination servers directly while leaving at least one
+# other server in the subscription reachable -- so instead of dialing every
+# server straight from the router, everything (real traffic *and*
+# Observatory's own health probes) gets relayed through one chosen "gateway"
+# server first. The gateway itself is picked the exact same way a
+# balancer-mode profile picks its target (sr_pick_top1, see genroute.sh) from
+# a user-chosen pool of candidate servers -- doublevpn.json just stores that
+# pool plus the on/off switch; sr_apply_doublevpn (genroute.sh) is what
+# actually wires the chosen gateway into every other outbound on each regen.
+sr_get_doublevpn() {
+	[ -s "$SR_DOUBLEVPN_FILE" ] && cat "$SR_DOUBLEVPN_FILE" || echo '{"enabled":false,"servers":[]}'
+}
+
+sr_set_doublevpn_enabled() {
+	sr_ensure_dirs
+	case "$1" in true|1) val=true ;; false|0) val=false ;; *) sr_die "expected true/false" ;; esac
+	new="$(sr_get_doublevpn | jq --argjson e "$val" '.enabled = $e')"
+	printf '%s' "$new" >"$SR_DOUBLEVPN_FILE"
+}
+
+sr_set_doublevpn_servers() {
+	# $1 = JSON array of server tags (the candidate gateway pool)
+	sr_ensure_dirs
+	echo "$1" | jq -e 'type == "array"' >/dev/null 2>&1 || sr_die "servers must be a JSON array of tags"
+	new="$(sr_get_doublevpn | jq --argjson s "$1" '.servers = $s')"
+	printf '%s' "$new" >"$SR_DOUBLEVPN_FILE"
+}
 
 # How stale a health.json entry has to be (minutes since its checked_at)
 # before genroute.sh's observatory subjectSelector considers it due for a
