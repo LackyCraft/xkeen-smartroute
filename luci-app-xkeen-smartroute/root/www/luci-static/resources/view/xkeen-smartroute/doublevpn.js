@@ -91,25 +91,6 @@ return view.extend({
 		});
 	},
 
-	renderCurrent: function () {
-		var box = document.getElementById('sr-dv-current');
-		if (!box) return;
-		box.innerHTML = '';
-		var cur = this.current || {};
-		var lines = [];
-		if (!cur.enabled) {
-			lines.push(E('div', {}, sr.T('dv_current_off')));
-		} else {
-			lines.push(E('div', {}, [
-				E('strong', {}, sr.T('dv_current_gateway') + ': '),
-				cur.gateway ? E('span', {}, [this.activityDot(cur.gateway), sr.renderName(this.serverForTag(cur.gateway).name)]) : document.createTextNode(sr.T('dv_current_none'))
-			]));
-			lines.push(E('div', { 'style': 'margin-top:.25em;color:var(--color-text-secondary,#888)' },
-				(cur.pool_size || 0) + ' ' + sr.T('dv_pool_size')));
-		}
-		box.appendChild(E('div', {}, lines));
-	},
-
 	// "Участники группы": every server actually saved in the pool (not the
 	// editor's checkboxes above -- this reflects saved/active state, same
 	// pattern as the Profiles page's "existing profiles" table), with the
@@ -164,7 +145,6 @@ return view.extend({
 		var view = this;
 		return sr.rpc.getDoublevpnConfig().then(function (cfg) {
 			view.current = cfg || { enabled: false, servers: [], current: {} };
-			view.renderCurrent();
 			view.renderMembers();
 		});
 	},
@@ -174,7 +154,6 @@ return view.extend({
 		return sr.rpc.getActivity().then(function (active) {
 			view.activeTags = {};
 			(active || []).forEach(function (t) { view.activeTags[t] = true; });
-			view.renderCurrent();
 			view.renderMembers();
 		});
 	},
@@ -229,8 +208,6 @@ return view.extend({
 				enabledToggle, sr.T('dv_enabled_label')
 			]),
 
-			E('div', { 'id': 'sr-dv-current', 'style': 'margin:0 0 1em;padding:.75em;background:var(--background-color-medium,#f5f5f5);border-radius:4px' }),
-
 			E('label', {}, sr.T('dv_pool_label')),
 			E('p', { 'class': 'cbi-value-description', 'style': 'margin:.25em 0' }, sr.T('dv_pool_intro')),
 			E('div', { 'id': 'sr-dv-server-picker', 'style': 'margin:.25em 0 1em' }),
@@ -250,7 +227,6 @@ return view.extend({
 
 		requestAnimationFrame(function () {
 			view.renderServerPicker();
-			view.renderCurrent();
 			view.renderMembers();
 		});
 

@@ -60,22 +60,6 @@
 		});
 	}
 
-	function renderCurrent() {
-		var box = document.getElementById('sr-dv-current');
-		if (!box) return;
-		box.innerHTML = '';
-		var cur = st.current || {};
-		if (!cur.enabled) {
-			box.appendChild(E('div', {}, T('dv_current_off')));
-			return;
-		}
-		box.appendChild(E('div', {}, [
-			E('strong', {}, T('dv_current_gateway') + ': '),
-			cur.gateway ? E('span', {}, [activityDot(cur.gateway), SR.renderName(serverForTag(cur.gateway).name)]) : document.createTextNode(T('dv_current_none'))
-		]));
-		box.appendChild(E('div', { style: 'margin-top:4px;color:var(--text-dim)' }, (cur.pool_size || 0) + ' ' + T('dv_pool_size')));
-	}
-
 	// "Участники группы": every server currently saved in the pool (not just
 	// the checkboxes in the editor above -- this reflects what's actually
 	// saved/active, same "existing X" pattern as the Profiles tab's table),
@@ -111,7 +95,6 @@
 		return api.getActivity().then(function (active) {
 			st.activeTags = {};
 			(active || []).forEach(function (t) { st.activeTags[t] = true; });
-			renderCurrent();
 			renderMembers();
 		});
 	}
@@ -119,7 +102,6 @@
 	function reload() {
 		return api.getDoublevpnConfig().then(function (cfg) {
 			st.current = cfg || { enabled: false, servers: [], current: {} };
-			renderCurrent();
 			renderMembers();
 		});
 	}
@@ -166,8 +148,6 @@
 
 			E('label', { class: 'sr-row', style: 'font-weight:700;gap:8px;margin:16px 0' }, [enabledToggle, T('dv_enabled_label')]),
 
-			E('div', { id: 'sr-dv-current', class: 'sr-stat' }),
-
 			E('label', { class: 'sr-label' }, T('dv_pool_label')),
 			E('p', { class: 'sr-desc' }, T('dv_pool_intro')),
 			E('div', { id: 'sr-dv-server-picker' }),
@@ -195,7 +175,6 @@
 			});
 			document.getElementById('sr-dv-enabled').checked = !!st.current.enabled;
 			renderServerPicker();
-			renderCurrent();
 			renderMembers();
 
 			(function pollLoop() {
