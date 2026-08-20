@@ -168,6 +168,17 @@ table.sr-table { width: 100%; border-collapse: collapse; }
 
 canvas#sr-traffic-canvas { width: 100%; max-width: 640px; height: 90px; border: 1px solid var(--border); border-radius: 8px; background: rgba(255,255,255,0.02); }
 
+/* ---------------- traffic-by-profile bar chart ---------------- */
+.sr-trafbar-legend { display: flex; gap: 18px; margin-bottom: 12px; font-size: 0.8rem; color: var(--text-dim); }
+.sr-trafbar-legend .sr-swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+.sr-trafbar-row { display: grid; grid-template-columns: 140px 1fr 150px; align-items: center; gap: 10px; padding: 6px 0; }
+.sr-trafbar-label { font-size: 0.85rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sr-trafbar-track { position: relative; height: 10px; background: rgba(255,255,255,0.05); border-radius: 5px; overflow: hidden; display: flex; gap: 2px; }
+.sr-trafbar-fill { height: 100%; border-radius: 4px; min-width: 0; }
+.sr-trafbar-fill-up { background: var(--accent-2); }
+.sr-trafbar-fill-down { background: var(--accent); }
+.sr-trafbar-value { font-size: 0.78rem; color: var(--text-dim); text-align: right; white-space: nowrap; }
+
 /* ---------------- modal (Profiles: add/edit) ---------------- */
 .sr-modal-overlay {
   position: fixed; inset: 0; z-index: 50; background: rgba(6,8,12,0.65);

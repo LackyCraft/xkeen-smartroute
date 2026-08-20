@@ -229,6 +229,7 @@ var DICT = {
 	status_metrics_last_observatory: { ru: 'Последняя проверка Observatory', en: 'Last Observatory check' },
 	status_metrics_queue: { ru: 'В очереди на проверку Observatory', en: 'Queued for Observatory check' },
 	status_metrics_never: { ru: 'ещё ни разу', en: 'never yet' },
+	status_traffic_by_profile_title: { ru: 'Трафик по профилям', en: 'Traffic by profile' },
 	status_active_profiles_title: { ru: 'Активные профили сейчас', en: 'Active profiles right now' },
 	status_active_profiles_none: { ru: 'Ни один профиль не передаёт трафик прямо сейчас.', en: 'No profile is carrying traffic right now.' },
 	status_servers_known: { ru: 'Серверов', en: 'Servers' },

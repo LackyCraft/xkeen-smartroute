@@ -7,6 +7,7 @@
 	var TRAFFIC_HISTORY_LEN = 60;
 	var METRICS_POLL_MS = 15000;
 	var ACTIVITY_POLL_MS = 3000;
+	var TRAFFIC_BY_PROFILE_POLL_MS = 15000;
 
 	var state = { trafficUp: [], trafficDown: [] };
 
@@ -153,6 +154,52 @@
 		if (n < 1024) return n + ' Б/с';
 		if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' КБ/с';
 		return (n / (1024 * 1024)).toFixed(2) + ' МБ/с';
+	}
+
+	function fmtBytesPlain(n) {
+		n = n || 0;
+		if (n < 1024) return n + ' Б';
+		if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' КБ';
+		if (n < 1024 * 1024 * 1024) return (n / (1024 * 1024)).toFixed(1) + ' МБ';
+		return (n / (1024 * 1024 * 1024)).toFixed(2) + ' ГБ';
+	}
+
+	// Cumulative since Xray's last start (not a rate) -- ranked bars, biggest
+	// first, each split into an up/down segment scaled to the largest single
+	// profile's total so the bars stay comparable to each other.
+	function renderTrafficByProfile(container, rows) {
+		container.innerHTML = '';
+		rows = (rows || []).slice().sort(function (a, b) { return (b.up + b.down) - (a.up + a.down); });
+		if (!rows.length) { container.appendChild(E('p', { class: 'sr-desc' }, T('no_profiles'))); return; }
+
+		container.appendChild(E('div', { class: 'sr-trafbar-legend' }, [
+			E('span', {}, [E('span', { class: 'sr-swatch', style: 'background:var(--accent-2)' }), T('status_traffic_up')]),
+			E('span', {}, [E('span', { class: 'sr-swatch', style: 'background:var(--accent)' }), T('status_traffic_down')])
+		]));
+
+		var max = Math.max.apply(null, rows.map(function (r) { return r.up + r.down; })) || 1;
+		rows.forEach(function (r) {
+			var total = r.up + r.down;
+			var upPct = (r.up / max) * 100, downPct = (r.down / max) * 100;
+			container.appendChild(E('div', { class: 'sr-trafbar-row' }, [
+				E('div', { class: 'sr-trafbar-label', title: r.name }, r.name),
+				E('div', { class: 'sr-trafbar-track' }, [
+					E('div', { class: 'sr-trafbar-fill sr-trafbar-fill-up', style: 'width:' + upPct.toFixed(2) + '%' }),
+					E('div', { class: 'sr-trafbar-fill sr-trafbar-fill-down', style: 'width:' + downPct.toFixed(2) + '%' })
+				]),
+				E('div', { class: 'sr-trafbar-value' }, total ? (fmtBytesPlain(r.up) + ' / ' + fmtBytesPlain(r.down)) : '—')
+			]));
+		});
+	}
+
+	function pollTrafficByProfile() {
+		if (isGone()) return;
+		fetch('/api/traffic-by-profile').then(function (r) { return r.json(); }).then(function (rows) {
+			if (isGone()) return;
+			var box = document.getElementById('sr-traffic-by-profile');
+			if (box) renderTrafficByProfile(box, rows);
+			setTimeout(pollTrafficByProfile, TRAFFIC_BY_PROFILE_POLL_MS);
+		}, function () { if (!isGone()) setTimeout(pollTrafficByProfile, TRAFFIC_BY_PROFILE_POLL_MS); });
 	}
 
 	function drawTraffic() {
@@ -309,6 +356,7 @@
 				E('canvas', { id: 'sr-traffic-canvas', width: '640', height: '90' })
 			]),
 
+			E('div', { class: 'sr-card' }, [E('h3', {}, T('status_traffic_by_profile_title')), E('div', { id: 'sr-traffic-by-profile' })]),
 			E('div', { class: 'sr-card' }, [E('h3', {}, T('status_metrics_title')), E('div', { id: 'sr-status-metrics' })]),
 			E('div', { class: 'sr-card' }, [E('h3', {}, T('status_active_profiles_title')), E('div', { id: 'sr-status-active-profiles' })]),
 			E('div', { class: 'sr-card' }, [E('h3', {}, T('settings_password_title')), E('div', { id: 'sr-password-card' })]),
@@ -338,6 +386,7 @@
 		loadLogConfig();
 		pollMetrics();
 		pollActivity();
+		pollTrafficByProfile();
 		renderPasswordCard(document.getElementById('sr-password-card'));
 	}
 
