@@ -214,6 +214,79 @@ sr_pick_top1() {
 	'
 }
 
+# sr_apply_doublevpn: relays every outbound *except* the double-VPN pool's
+# own members through whichever pool member sr_pick_top1 currently ranks
+# best -- via Xray's real, native outbound-chaining mechanism
+# (streamSettings.sockopt.dialerProxy: "<gateway-tag>"). Confirmed against
+# Xray-core's own source (transport/internet/dialer.go: a dial whose sockopt
+# has DialerProxy set gets redirected through that tag's outbound handler
+# instead of dialing directly) -- so this isn't a bespoke tunnel, it's the
+# same mechanism a "vless outbound behind a SOCKS/HTTP outbound" setup would
+# use, just pointed at another one of our own VLESS/Trojan outbounds. The
+# forced redirect happens for *any* dial through the outbound, Observatory's
+# own health probes included (they're just another dial through the same
+# outbound handler) -- so a server that looks dead only because the ISP
+# blocks it directly comes back alive once its dial is relayed through a
+# gateway the ISP doesn't block, with zero changes needed to how Observatory
+# itself works.
+#
+# The gateway is picked by sr_pick_top1 -- the exact same ranking a
+# balancer-mode profile uses (fresh ping + health.json tiering) -- run
+# against the user-chosen pool, written to a throwaway profile-shaped temp
+# file since sr_pick_top1 only knows how to read a profile's .servers field.
+#
+# Pool members themselves are never chained (not through the gateway, not
+# through each other): sr_pick_top1's own ranking for *which* pool member is
+# best depends on ping.json/health.json reflecting each member's real, direct
+# reachability -- chaining a pool member through another one would corrupt
+# exactly the signal used to pick between them, and a member chained through
+# itself would be a routing loop outright.
+sr_apply_doublevpn() {
+	skip_fresh_ping="${1:-}"
+	[ -s "$SR_OUTBOUNDS_FILE" ] || { rm -f "$SR_DOUBLEVPN_CURRENT_FILE"; return 0; }
+
+	dv="$(sr_get_doublevpn)"
+	enabled="$(echo "$dv" | jq -r '.enabled // false')"
+	[ -s "$SR_SERVERS_FILE" ] || echo '[]' >"$SR_SERVERS_FILE"
+
+	# Same reasoning as sr_pick_top1's own filter: a subscription refresh can
+	# retire a tag out from under a saved pool.
+	pool="$(echo "$dv" | jq -c --slurpfile known "$SR_SERVERS_FILE" '
+		([$known[0][].tag]) as $valid |
+		(.servers // [] | map(select(. as $t | $valid | index($t) != null)))
+	')"
+
+	gateway_tag=""
+	if [ "$enabled" = "true" ] && [ "$(echo "$pool" | jq 'length')" -gt 0 ]; then
+		pool_file="$SR_STATE_DIR/.doublevpn_pool.json"
+		jq -n --argjson s "$pool" '{servers: $s}' >"$pool_file"
+		gateway_tag="$(sr_pick_top1 "$pool_file" "$skip_fresh_ping")"
+		rm -f "$pool_file"
+	fi
+
+	if [ -n "$gateway_tag" ]; then
+		jq --argjson pool "$pool" --arg gw "$gateway_tag" '
+			.outbounds |= map(
+				if (.tag as $t | $pool | index($t) != null) then
+					.streamSettings |= (if type == "object" then del(.sockopt) else . end)
+				else
+					.streamSettings.sockopt = {dialerProxy: $gw}
+				end
+			)
+		' "$SR_OUTBOUNDS_FILE" >"$SR_OUTBOUNDS_FILE.tmp" && mv "$SR_OUTBOUNDS_FILE.tmp" "$SR_OUTBOUNDS_FILE"
+		sr_log "double VPN: relaying through gateway '$gateway_tag' (pool of $(echo "$pool" | jq 'length'))"
+	else
+		jq '.outbounds |= map(.streamSettings |= (if type == "object" then del(.sockopt) else . end))' \
+			"$SR_OUTBOUNDS_FILE" >"$SR_OUTBOUNDS_FILE.tmp" && mv "$SR_OUTBOUNDS_FILE.tmp" "$SR_OUTBOUNDS_FILE"
+		[ "$enabled" = "true" ] && [ "$(echo "$pool" | jq 'length')" -gt 0 ] && sr_log "double VPN: enabled but no reachable gateway in the pool right now, routing direct"
+	fi
+
+	jq -n --argjson enabled "$([ "$enabled" = "true" ] && echo true || echo false)" \
+		--arg gw "$gateway_tag" --argjson pool_size "$(echo "$pool" | jq 'length')" \
+		'{enabled: $enabled, gateway: (if $gw == "" then null else $gw end), pool_size: $pool_size}' \
+		>"$SR_DOUBLEVPN_CURRENT_FILE"
+}
+
 sr_regen() {
 	skip_fresh_ping="${1:-}"
 	sr_ensure_dirs
@@ -308,6 +381,16 @@ sr_regen() {
 	if [ ! -s "$SR_CURRENT_FILE" ] || [ "$(cat "$SR_CURRENT_FILE")" != "$new_current" ]; then
 		printf '%s' "$new_current" >"$SR_CURRENT_FILE"
 	fi
+
+	# Double VPN relaying (see sr_apply_doublevpn's own comment) patches
+	# SR_OUTBOUNDS_FILE directly rather than routing/observatory, so its own
+	# before/after diff feeds the same "did anything actually change"
+	# decision below instead of being compared against stale state.
+	outbounds_before="$(cat "$SR_OUTBOUNDS_FILE" 2>/dev/null || echo '')"
+	sr_apply_doublevpn "$skip_fresh_ping"
+	outbounds_after="$(cat "$SR_OUTBOUNDS_FILE" 2>/dev/null || echo '')"
+	outbounds_changed=1
+	[ "$outbounds_before" = "$outbounds_after" ] && outbounds_changed=0
 
 	# Any domain not covered by one of our profiles needs an explicit
 	# "everything else -> direct" rule, or unmatched traffic on the
@@ -427,7 +510,7 @@ sr_regen() {
 	printf '%s' "$new_routing" >"$SR_ROUTING_FILE"
 	printf '%s' "$new_observatory" >"$SR_OBSERVATORY_FILE"
 
-	if [ "$routing_changed" -eq 0 ] && [ "$observatory_changed" -eq 0 ]; then
+	if [ "$routing_changed" -eq 0 ] && [ "$observatory_changed" -eq 0 ] && [ "$outbounds_changed" -eq 0 ]; then
 		sr_log "regenerated routing ($(echo "$rules" | jq 'length') rule(s)), unchanged -- skipping restart"
 		return 0
 	fi
@@ -495,6 +578,19 @@ case "${1:-}" in
 			echo '[]'
 		fi
 		;;
+	get-doublevpn) sr_get_doublevpn ;;
+	get-doublevpn-current)
+		sr_ensure_dirs
+		[ -s "$SR_DOUBLEVPN_CURRENT_FILE" ] && cat "$SR_DOUBLEVPN_CURRENT_FILE" || echo '{"enabled":false,"gateway":null,"pool_size":0}'
+		;;
+	set-doublevpn-enabled)
+		sr_set_doublevpn_enabled "${2:-}"
+		sr_regen 1
+		;;
+	set-doublevpn-servers)
+		sr_set_doublevpn_servers "${2:-}"
+		sr_regen 1
+		;;
 	get-observatory-period) sr_get_observatory_period_min ;;
 	set-observatory-period) sr_set_observatory_period_min "${2:-}" ;;
 	get-log-enabled) sr_get_log_enabled ;;
@@ -505,5 +601,5 @@ case "${1:-}" in
 	set-log-cap-mb) sr_set_log_cap_mb "${2:-}" ;;
 	get-log-free-mb) sr_log_free_mb ;;
 	clear-logs) sr_clear_logs ;;
-	*) echo "usage: $0 {save <profile.json>|delete <name>|regen|list|get-observatory-period|set-observatory-period <minutes>|get-log-enabled|set-log-enabled <true|false>|get-log-level|set-log-level <debug|info|warning|error>|get-log-cap-mb|set-log-cap-mb <mb>|get-log-free-mb|clear-logs}" >&2; exit 1 ;;
+	*) echo "usage: $0 {save <profile.json>|delete <name>|regen|list|get-doublevpn|get-doublevpn-current|set-doublevpn-enabled <true|false>|set-doublevpn-servers <json-array>|get-observatory-period|set-observatory-period <minutes>|get-log-enabled|set-log-enabled <true|false>|get-log-level|set-log-level <debug|info|warning|error>|get-log-cap-mb|set-log-cap-mb <mb>|get-log-free-mb|clear-logs}" >&2; exit 1 ;;
 esac

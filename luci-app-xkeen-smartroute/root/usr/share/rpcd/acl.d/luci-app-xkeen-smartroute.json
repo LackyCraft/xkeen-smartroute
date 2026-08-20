@@ -9,7 +9,7 @@
 					"list_killswitch_enabled", "redirect_status", "list_lan_devices",
 					"list_subscriptions", "get_pings", "get_health", "get_current", "get_activity",
 					"service_status", "list_custom_lists", "get_observatory_period", "get_auto_refresh_enabled", "get_health_metrics",
-					"get_log_config"
+					"get_log_config", "get_doublevpn_config"
 				]
 			}
 		},
@@ -23,7 +23,8 @@
 					"redirect_set_quic_protect",
 					"delete_subscription", "refresh_subscription", "ping_subscription",
 					"service_control", "delete_custom_list", "add_domain_to_list",
-					"remove_domain_from_list", "set_log_enabled", "set_log_level", "set_log_cap_mb", "clear_logs"
+					"remove_domain_from_list", "set_log_enabled", "set_log_level", "set_log_cap_mb", "clear_logs",
+					"set_doublevpn_enabled", "set_doublevpn_servers"
 				]
 			}
 		}

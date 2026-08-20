@@ -24,6 +24,9 @@
 - [balancer.md](balancer.md) — алгоритм выбора топ-1 сервера
   (`sr_pick_top1`) и приоритетный Observatory-scheduler на основе
   "протухания".
+- [doublevpn.md](doublevpn.md) — Double VPN: релей всего трафика (и
+  Observatory-проб) через один выбранный шлюз, `sockopt.dialerProxy`,
+  почему это не самодельный туннель.
 
 ## Firewall и защита
 

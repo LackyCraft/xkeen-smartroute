@@ -46,6 +46,7 @@ var DICT = {
 	nav_home: { ru: 'Статус', en: 'Status' },
 	nav_subscriptions: { ru: 'Подписки', en: 'Subscriptions' },
 	nav_profiles: { ru: 'Профили', en: 'Profiles' },
+	nav_doublevpn: { ru: 'Double VPN', en: 'Double VPN' },
 	nav_domains: { ru: 'Домены', en: 'Domains' },
 	nav_killswitch: { ru: 'Kill-Switch', en: 'Kill-Switch' },
 	nav_protection: { ru: 'Защита от утечек', en: 'Leak protection' },
@@ -150,6 +151,21 @@ var DICT = {
 	no_profiles: { ru: 'Профилей ещё нет.', en: 'No profiles yet.' },
 	col_domains: { ru: 'Домены', en: 'Domains' },
 	col_target: { ru: 'Куда', en: 'Target' },
+
+	dv_intro: { ru: 'Провайдер часто блокирует отдельные сервера напрямую, но почти всегда хотя бы один остаётся доступен. Double VPN добавляет ещё один хоп перед всем остальным трафиком (и обычным, и собственными проверками живости): весь трафик сначала идёт через один выбранный «шлюз» из группы серверов ниже, и только потом — на его настоящий адрес. Самый быстрый живой шлюз выбирается автоматически (пинг + Observatory), точно так же, как сервер для профиля-группы.',
+		en: "An ISP often blocks individual servers directly, but almost always leaves at least one reachable. Double VPN adds one more hop in front of everything else (both real traffic and our own liveness checks): everything is relayed through one chosen \"gateway\" from the group below first, then on to its real address. The fastest alive gateway is picked automatically (ping + Observatory), the same way a group-mode profile picks its own server." },
+	dv_enabled_label: { ru: 'Double VPN включён', en: 'Double VPN enabled' },
+	dv_pool_label: { ru: 'Группа серверов-шлюзов', en: 'Gateway server pool' },
+	dv_pool_intro: { ru: 'Выберите сервера, из которых будет автоматически выбираться самый быстрый живой шлюз. Сами эти сервера никогда не заворачиваются друг через друга — только через них идёт весь остальной трафик.',
+		en: "Pick the servers to automatically choose the fastest alive gateway from. These servers themselves are never relayed through each other -- only everything else is relayed through them." },
+	dv_current_gateway: { ru: 'Активный шлюз', en: 'Active gateway' },
+	dv_current_none: { ru: 'нет (нет доступного шлюза в группе)', en: 'none (no reachable gateway in the pool)' },
+	dv_current_off: { ru: 'выключено', en: 'off' },
+	dv_pool_size: { ru: 'серверов в группе', en: 'servers in the pool' },
+	dv_save_btn: { ru: 'Сохранить группу', en: 'Save pool' },
+	dv_saved_ok: { ru: 'Сохранено, применится при следующей перегенерации маршрутов (до 3 минут)', en: 'Saved, will apply on the next routing regen (up to 3 minutes)' },
+	dv_toggle_saved_ok: { ru: 'Применено', en: 'Applied' },
+	dv_need_pool_warning: { ru: 'Включено, но группа пуста — добавьте хотя бы один сервер ниже.', en: 'Enabled, but the pool is empty -- pick at least one server below.' },
 
 	devices_title: { ru: 'Устройства (необязательно)', en: 'Devices (optional)' },
 	devices_intro: { ru: 'Ограничьте профиль конкретными устройствами — например, «только телевизор».',
@@ -299,6 +315,9 @@ var api = {
 	setRefreshHours: function (hours) { return apiCall('set_refresh_hours', { hours: hours }); },
 	getObservatoryPeriod: function () { return apiCall('get_observatory_period').then(function (r) { return (r && r.minutes) || 20; }); },
 	setObservatoryPeriod: function (minutes) { return apiCall('set_observatory_period', { minutes: minutes }); },
+	getDoublevpnConfig: function () { return apiCall('get_doublevpn_config'); },
+	setDoublevpnEnabled: function (enabled) { return apiCall('set_doublevpn_enabled', { enabled: enabled }); },
+	setDoublevpnServers: function (servers) { return apiCall('set_doublevpn_servers', { servers: servers }); },
 	getAutoRefreshEnabled: function () { return apiCall('get_auto_refresh_enabled').then(function (r) { return !r || r.enabled !== false; }); },
 	setAutoRefreshEnabled: function (enabled) { return apiCall('set_auto_refresh_enabled', { enabled: enabled }); },
 	getHealthMetrics: function () { return apiCall('get_health_metrics'); },
@@ -504,7 +523,7 @@ function wireLogout() {
 
 // --- section router ---
 
-var SECTIONS = ['home', 'subscriptions', 'profiles', 'domains', 'killswitch', 'protection'];
+var SECTIONS = ['home', 'subscriptions', 'profiles', 'doublevpn', 'domains', 'killswitch', 'protection'];
 var renderers = {}; // filled in by each tab's own <script> (status.js etc.)
 var rendered = {};  // section -> true once its DOM has been built at least once
 
