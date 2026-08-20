@@ -66,29 +66,8 @@ func (b *rpcBridge) allowed(method string) bool {
 // call runs `sh <script> call <method>` with args piped to stdin, exactly
 // how rpcd itself would invoke it -- same process, same environment
 // expectations (PATH is set inside common.sh itself, see its own comment).
-//
-// callTimeout is deliberately generous, not the 30s this used to be: a
-// real refresh_subscription/import_subscription/ping_servers on a
-// 150-200 server subscription routinely runs well past 30s on this
-// hardware -- a fetch, a full parse, up to 20 sequential
-// validate-strip-retry cycles for XHTTP nodes with a rejected "extra"
-// combination (_sr_xray_validate in lib/common.sh, each cycle a real
-// `xray run -test` over the whole confdir), then a real Xray restart.
-// Confirmed live: exec.CommandContext SIGKILLs the shell the instant the
-// context expires, mid-write between servers.json and
-// 04_outbounds.smartroute.json -- which orphans lib/subscription.sh's
-// own import lock (its EXIT trap never runs on SIGKILL) and leaves the
-// two files inconsistent (servers.json updated, Xray's actual outbound
-// list stuck on the old count) until the lock's own 300s staleness
-// timeout lets a later attempt reclaim it. A 30s ceiling here was
-// actively causing the exact "subscription won't update" symptom it
-// looks like from the panel. sr_ping_all's own sequential per-server
-// probe (subscription.sh, 3s timeout each) is the other genuinely slow
-// method this needs to accommodate -- worst case ~150 servers x 3s.
-const callTimeout = 10 * time.Minute
-
 func (b *rpcBridge) call(ctx context.Context, method string, args json.RawMessage) (json.RawMessage, error) {
-	ctx, cancel := context.WithTimeout(ctx, callTimeout)
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, "sh", b.script, "call", method)

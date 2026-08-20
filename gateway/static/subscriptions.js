@@ -3,19 +3,6 @@
 	var E = SR.E, T = SR.T, api = SR.api;
 	var st = { subscriptions: [], servers: [], pings: {}, health: {}, expanded: {}, pingingLabels: {}, refreshingLabels: {} };
 
-	// Refresh/ping-all/ping-one all background themselves on the backend
-	// (rpcd script returns {"ok":true,"note":"started in background"}
-	// near-instantly -- see docs/functionality_doc/rpc-bridge.md) because a
-	// real fetch+parse+possible-XHTTP-retry+Xray-restart cycle on a
-	// 150-200 server subscription routinely takes well past a minute,
-	// confirmed live (one real run took over 3 minutes with several XHTTP
-	// "extra" validation retries). The previous poll window here (32s) was
-	// shorter than a normal refresh, let alone a slow one -- the spinner
-	// stopped and the table re-rendered with stale data before the real
-	// import had actually finished, making a *working* refresh look broken.
-	var BACKGROUND_POLL_TIMES = 60;
-	var BACKGROUND_POLL_INTERVAL_MS = 5000; // 60 * 5s = 5 minutes
-
 	function pingLabel(tag) {
 		var ms = st.pings[tag];
 		if (ms === null || ms === undefined) return T('ping_timeout');
@@ -110,17 +97,15 @@
 	function handleRefreshSubscription(label, ev) {
 		var btn = ev.target; btn.disabled = true; btn.textContent = T('sub_refreshing_one');
 		st.refreshingLabels[label] = true; renderList();
-		api.refreshSubscription(label).then(function (res) {
-			if (res && res.note) SR.toast(T('sub_background_note'), 'info');
-			return pollAndRerender(BACKGROUND_POLL_TIMES, BACKGROUND_POLL_INTERVAL_MS).then(function () { delete st.refreshingLabels[label]; btn.disabled = false; btn.textContent = T('refresh_btn'); renderList(); });
+		api.refreshSubscription(label).then(function () {
+			return pollAndRerender(8, 4000).then(function () { delete st.refreshingLabels[label]; btn.disabled = false; btn.textContent = T('refresh_btn'); renderList(); });
 		});
 	}
 	function handlePingSubscription(label, ev) {
 		var btn = ev.target; btn.disabled = true; btn.textContent = T('pinging');
 		st.pingingLabels[label] = true; renderList();
-		api.pingSubscription(label).then(function (res) {
-			if (res && res.note) SR.toast(T('sub_background_note'), 'info');
-			return pollAndRerender(BACKGROUND_POLL_TIMES, BACKGROUND_POLL_INTERVAL_MS).then(function () { delete st.pingingLabels[label]; btn.disabled = false; btn.textContent = T('ping_btn'); renderList(); });
+		api.pingSubscription(label).then(function () {
+			return pollAndRerender(8, 3000).then(function () { delete st.pingingLabels[label]; btn.disabled = false; btn.textContent = T('ping_btn'); renderList(); });
 		});
 	}
 	function handleDeleteSubscription(label) {
@@ -216,7 +201,7 @@
 				st.refreshingAll = true; renderList();
 				api.refreshNow().then(function () {
 					SR.toast(T('refresh_now_started'), 'info');
-					return pollAndRerender(BACKGROUND_POLL_TIMES, BACKGROUND_POLL_INTERVAL_MS).then(function () { st.refreshingAll = false; btn.disabled = false; btn.textContent = T('refresh_now_btn'); renderList(); });
+					return pollAndRerender(8, 4000).then(function () { st.refreshingAll = false; btn.disabled = false; btn.textContent = T('refresh_now_btn'); renderList(); });
 				});
 			} }, T('refresh_now_btn'))])
 		]);
@@ -245,7 +230,7 @@
 					st.pingingAll = true; renderList();
 					api.pingServers().then(function () {
 						SR.toast(T('sub_ping_started'), 'info');
-						return pollAndRerender(BACKGROUND_POLL_TIMES, BACKGROUND_POLL_INTERVAL_MS).then(function () { st.pingingAll = false; btn.disabled = false; btn.textContent = T('sub_ping_all_btn'); renderList(); });
+						return pollAndRerender(10, 3000).then(function () { st.pingingAll = false; btn.disabled = false; btn.textContent = T('sub_ping_all_btn'); renderList(); });
 					});
 				} }, T('sub_ping_all_btn'))
 			]),
