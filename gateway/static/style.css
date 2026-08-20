@@ -64,13 +64,13 @@ h1, h2, h3 { font-family: var(--display); font-weight: 700; }
   backdrop-filter: blur(16px); padding: 18px 14px; display: flex; flex-direction: column; gap: 3px;
 }
 .sr-brand {
-  display: flex; align-items: center; gap: 10px; padding: 4px 8px 16px; margin-bottom: 8px;
+  display: flex; align-items: center; gap: 12px; padding: 6px 8px 18px; margin-bottom: 8px;
   border-bottom: 1px solid var(--border);
 }
-.sr-brand img { width: 34px; height: 34px; object-fit: contain; }
-.sr-brand span { display: flex; flex-direction: column; line-height: 1.2; }
-.sr-brand strong { font-family: var(--display); font-size: 0.95rem; }
-.sr-brand small { color: var(--text-dim); font-size: 0.72rem; }
+.sr-brand img { width: 56px; height: 56px; object-fit: contain; flex-shrink: 0; }
+.sr-brand span { display: flex; flex-direction: column; line-height: 1.25; }
+.sr-brand strong { font-family: var(--display); font-size: 1.05rem; }
+.sr-brand small { color: var(--text-dim); font-size: 0.76rem; }
 .sr-brand:hover strong { color: var(--accent); }
 
 .sr-nav-item {

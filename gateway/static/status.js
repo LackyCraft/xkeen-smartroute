@@ -15,7 +15,14 @@
 		var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
 		return proto + '//' + location.host + path;
 	}
-	function isGone() { return !document.getElementById('sr-status-root'); }
+	// The section element (#sr-section-home) is never removed from the DOM
+	// in this app -- app.js just toggles its `hidden` attribute -- so this
+	// only needs to catch the (currently theoretical) case of the whole
+	// section vanishing outright, not "currently hidden". Deliberately does
+	// NOT treat hidden==true as gone: the traffic/log WebSockets and metrics
+	// polling are meant to keep running in the background while another tab
+	// is open, so Home shows fresh data immediately when you come back.
+	function isGone() { return !document.getElementById('sr-section-home'); }
 
 	function serviceCard(key, titleKey, running, onAction) {
 		var dot = E('span', { class: 'sr-dot ' + (running ? 'sr-dot-ok' : 'sr-dot-bad') });
@@ -284,7 +291,6 @@
 	}
 
 	function render(container) {
-		container.id = 'sr-status-root';
 		container.innerHTML = '';
 
 		var linksBox = E('div', { class: 'sr-row' }, [
