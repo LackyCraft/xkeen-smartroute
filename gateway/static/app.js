@@ -42,7 +42,7 @@ function E(tag, attrs, children) {
 
 var DICT = {
 	app_name: { ru: 'XKeen SmartRoute', en: 'XKeen SmartRoute' },
-	app_by: { ru: 'byLC', en: 'byLC' },
+	app_by: { ru: 'DanyByLC', en: 'DanyByLC' },
 	nav_home: { ru: 'Статус', en: 'Status' },
 	nav_subscriptions: { ru: 'Подписки', en: 'Subscriptions' },
 	nav_profiles: { ru: 'Профили', en: 'Profiles' },
