@@ -75,11 +75,33 @@ func main() {
 	})
 
 	if staticDir != "" {
-		mux.Handle("/", http.FileServer(http.Dir(staticDir)))
+		mux.Handle("/", noCacheStatic(http.FileServer(http.Dir(staticDir))))
 	}
 
 	log.Printf("smartroute-gateway listening on %s (xray api %s, static %q, rpcd %q)", listenAddr, xrayAddr, staticDir, rpcdScript)
 	log.Fatal(http.ListenAndServe(listenAddr, corsWrap(requireAuth(mux))))
+}
+
+// noCacheStatic forces every static asset to revalidate with the server on
+// every load instead of a browser trusting its own heuristic cache -- Go's
+// plain http.FileServer sets no Cache-Control at all, so a browser that
+// already has a copy of e.g. doublevpn.js can keep serving it verbatim for
+// an arbitrary amount of time after a redeploy, with no way to tell it's
+// stale short of a manual hard refresh. Confirmed live: server-side data,
+// the rpcd script, and the deployed JS file all matched exactly, yet the
+// panel still rendered stale state -- the browser's own cached copy of the
+// JS was the only thing left that could explain it.
+//
+// "no-cache" (not "no-store") still lets the browser keep a local copy, it
+// just can't use it without asking first -- http.FileServer already sets
+// Last-Modified/ETag and answers a conditional GET with a bare 304, so a
+// revalidation that finds nothing changed costs one small round trip, not a
+// full re-download.
+func noCacheStatic(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-cache")
+		h.ServeHTTP(w, r)
+	})
 }
 
 func envOr(key, def string) string {

@@ -26,7 +26,6 @@ One-command deployment of per-domain routing over a VLESS/Trojan subscription on
 - [Diagnostics and common issues](#diagnostics-and-common-issues)
 - [Updating and uninstalling](#updating-and-uninstalling)
 - [What the Actions and Releases tabs are for](#what-the-actions-and-releases-tabs-are-for)
-- [Interface](#interface)
 - [Documentation](#documentation)
 - [Credits](#credits)
 - [License and disclaimer](#license-and-disclaimer)
@@ -328,36 +327,6 @@ Both workflows are fully automatic, you don't need to run them. The Actions tab 
 
 If the project ever ships a "real" release (v1.0 and so on), it'll be a separate tag that says so explicitly.
 
-## Interface
-
-Real screenshots — the SmartRoute panel (port 1001) below; the full set for
-both interfaces (LuCI module **and** the panel) — [docs/screenshots/README.md](docs/screenshots/README.md).
-
-![Subscriptions](docs/screenshots/SmartRouteUI/SubscriptionsPage.png)
-**Subscriptions** — paste a subscription link, see the server list it produced.
-
-![Profiles](docs/screenshots/SmartRouteUI/ProfilesPage.png)
-**Profiles** — the module's core: domain list on the left, server(s) on the right, mode (fixed / auto-pick-fastest) in the middle. Below — a table of configured profiles with edit and delete buttons. In the SmartRoute panel, adding/editing a profile opens in a modal, and custom domain-list management lives in its own "Domains" tab.
-
-![Domains](docs/screenshots/SmartRouteUI/DomainsPage.png)
-**Domains** — your own domain lists (not the built-in Xray geosite categories): create, view, add/remove a single domain, delete a whole list. In LuCI this is built into the "Profiles" tab instead of its own tab.
-
-![Double VPN](docs/screenshots/SmartRouteUI/DoubleVPNPage.png)
-**Double VPN** — pick a pool of candidate "gateway" servers, SmartRoute keeps picking the fastest alive one out of it and relays every other outbound's traffic through it (both regular connections and its own liveness checks) — see [above](#what-smartroute-adds) and [docs/functionality_doc/doublevpn.md](docs/functionality_doc/doublevpn.md) (Russian).
-
-![Status](docs/screenshots/SmartRouteUI/StatusPage1.png)
-**Status** — in LuCI: whether Xray is alive, how many servers and profiles the router currently knows about. In the SmartRoute panel (port 1001) this is also the home page — with a live traffic graph, traffic by profile, server health metrics, and real Xray logs on demand.
-
-![Kill-Switch](docs/screenshots/SmartRouteUI/KillswitchPage.png)
-**Kill-Switch** — a profile list with a toggle; works with zero time gap for any profile, on both geosite categories and custom domain lists.
-
-![Leak protection](docs/screenshots/SmartRouteUI/ProtectionPage.png)
-**Leak protection** — DNS, IPv6, and QUIC protection toggles, plus the list of TCP ports SmartRoute captures (80/443 by default).
-
-Language switch (RU/EN) — a button in the top-right corner of every page in the module.
-
-**The SmartRoute panel** (`http://<router-ip>:1001/`) — a separate admin UI on the same data: a sidebar with the same tabs as LuCI, a home page with status/graph/metrics/logs. Full home page view — [docs/screenshots/SmartRouteUI/StatusPage2.png](docs/screenshots/SmartRouteUI/StatusPage2.png). Details — [above](#the-smartroute-panel-and-why-not-mihomo).
-
 ## Documentation
 
 This README is a user-facing overview — for whoever's installing and configuring the project. Deeper documentation lives under `docs/`, split into two independent views of the same functionality:
@@ -402,7 +371,7 @@ This README is a user-facing overview — for whoever's installing and configuri
 | File | About |
 |---|---|
 | [docs/release-process.md](docs/release-process.md) | The project's branching and release scheme |
-| [docs/screenshots/README.md](docs/screenshots/README.md) | Where to drop screenshots so they show up in the README |
+| [docs/screenshots/README.md](docs/screenshots/README.md) | Real screenshots of both interfaces — the LuCI module and the SmartRoute panel |
 | [AGENTS.md](AGENTS.md) | A condensed findings log for an AI agent deploying the project on a real router — what's already been broken and how it was fixed |
 
 ## Credits
