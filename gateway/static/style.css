@@ -14,6 +14,14 @@
 }
 
 * { box-sizing: border-box; }
+/* The [hidden] attribute is how app.js switches between the login screen
+   and the app shell -- but the UA stylesheet's own [hidden]{display:none}
+   is the lowest-priority origin in the cascade, so any *author* rule that
+   sets display on the same element (.sr-shell/.sr-login-screen below both
+   do) wins regardless of specificity and silently defeats it. Without this,
+   toggling .hidden in JS has no visual effect at all -- both screens stay
+   rendered on top of each other forever. */
+[hidden] { display: none !important; }
 html, body { height: 100%; margin: 0; }
 body {
   background: var(--ink);
