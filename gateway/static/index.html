@@ -36,6 +36,7 @@
       <button class="sr-nav-item" data-section="home"><span class="sr-nav-ico">📊</span><span data-i18n="nav_home">Статус</span></button>
       <button class="sr-nav-item" data-section="subscriptions"><span class="sr-nav-ico">📡</span><span data-i18n="nav_subscriptions">Подписки</span></button>
       <button class="sr-nav-item" data-section="profiles"><span class="sr-nav-ico">🗂️</span><span data-i18n="nav_profiles">Профили</span></button>
+      <button class="sr-nav-item" data-section="domains"><span class="sr-nav-ico">🌐</span><span data-i18n="nav_domains">Домены</span></button>
       <button class="sr-nav-item" data-section="killswitch"><span class="sr-nav-ico">🛑</span><span data-i18n="nav_killswitch">Kill-Switch</span></button>
       <button class="sr-nav-item" data-section="protection"><span class="sr-nav-ico">🛡️</span><span data-i18n="nav_protection">Защита от утечек</span></button>
     </nav>
@@ -54,6 +55,7 @@
     <section class="sr-section" id="sr-section-home"></section>
     <section class="sr-section" id="sr-section-subscriptions" hidden></section>
     <section class="sr-section" id="sr-section-profiles" hidden></section>
+    <section class="sr-section" id="sr-section-domains" hidden></section>
     <section class="sr-section" id="sr-section-killswitch" hidden></section>
     <section class="sr-section" id="sr-section-protection" hidden></section>
   </div>
@@ -61,10 +63,21 @@
 
 <div id="sr-toasts" class="sr-toasts"></div>
 
+<div id="sr-modal-overlay" class="sr-modal-overlay" hidden>
+  <div class="sr-modal">
+    <div class="sr-modal-header">
+      <h2 id="sr-modal-title"></h2>
+      <button id="sr-modal-close" class="sr-modal-close" aria-label="Close">×</button>
+    </div>
+    <div id="sr-modal-body" class="sr-modal-body"></div>
+  </div>
+</div>
+
 <script src="app.js"></script>
 <script src="status.js"></script>
 <script src="subscriptions.js"></script>
 <script src="profiles.js"></script>
+<script src="domains.js"></script>
 <script src="killswitch.js"></script>
 <script src="protection.js"></script>
 </body>

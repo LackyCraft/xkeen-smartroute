@@ -167,3 +167,24 @@ table.sr-table { width: 100%; border-collapse: collapse; }
 #sr-logs-box .sr-log-err { color: var(--bad); }
 
 canvas#sr-traffic-canvas { width: 100%; max-width: 640px; height: 90px; border: 1px solid var(--border); border-radius: 8px; background: rgba(255,255,255,0.02); }
+
+/* ---------------- modal (Profiles: add/edit) ---------------- */
+.sr-modal-overlay {
+  position: fixed; inset: 0; z-index: 50; background: rgba(6,8,12,0.65);
+  display: flex; align-items: flex-start; justify-content: center; padding: 40px 20px; overflow-y: auto;
+}
+.sr-modal {
+  background: var(--card-solid); border: 1px solid var(--border); border-radius: 18px;
+  width: 100%; max-width: 660px; padding: 24px 26px 28px; box-shadow: 0 30px 70px -20px rgba(0,0,0,0.7);
+}
+.sr-modal-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
+.sr-modal-header h2 { margin: 0; font-size: 1.15rem; }
+.sr-modal-close {
+  background: none; border: none; color: var(--text-dim); font-size: 1.5rem; line-height: 1;
+  cursor: pointer; padding: 2px 8px; border-radius: 6px;
+}
+.sr-modal-close:hover { color: var(--text); background: rgba(255,255,255,0.06); }
+.sr-modal-actions { display: flex; gap: 8px; margin-top: 16px; }
+
+.sr-page-toolbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; gap: 12px; flex-wrap: wrap; }
+.sr-page-toolbar h1 { margin: 0; }

@@ -46,8 +46,13 @@ var DICT = {
 	nav_home: { ru: 'Статус', en: 'Status' },
 	nav_subscriptions: { ru: 'Подписки', en: 'Subscriptions' },
 	nav_profiles: { ru: 'Профили', en: 'Profiles' },
+	nav_domains: { ru: 'Домены', en: 'Domains' },
 	nav_killswitch: { ru: 'Kill-Switch', en: 'Kill-Switch' },
 	nav_protection: { ru: 'Защита от утечек', en: 'Leak protection' },
+	add_profile_btn: { ru: '+ Добавить профиль', en: '+ Add profile' },
+	modal_cancel: { ru: 'Отмена', en: 'Cancel' },
+	domains_page_intro: { ru: 'Свои списки доменов — используются как источник доменов при создании профиля (вкладка «Профили»).',
+		en: 'Your own domain lists -- used as a domain source when creating a profile (the Profiles tab).' },
 
 	login_title: { ru: 'Вход', en: 'Sign in' },
 	login_password_placeholder: { ru: 'Пароль', en: 'Password' },
@@ -419,6 +424,33 @@ window.SR = {
 	DEVICE_MODEL_OPTIONS: DEVICE_MODEL_OPTIONS, DEVICE_VER_OPTIONS: DEVICE_VER_OPTIONS
 };
 
+// --- modal (used by the Profiles tab for add/edit) ---
+
+var modalOverlay, modalBody, modalTitleEl;
+
+function initModal() {
+	modalOverlay = document.getElementById('sr-modal-overlay');
+	modalBody = document.getElementById('sr-modal-body');
+	modalTitleEl = document.getElementById('sr-modal-title');
+	document.getElementById('sr-modal-close').addEventListener('click', closeModal);
+	modalOverlay.addEventListener('click', function (ev) { if (ev.target === modalOverlay) closeModal(); });
+	document.addEventListener('keydown', function (ev) { if (ev.key === 'Escape' && !modalOverlay.hidden) closeModal(); });
+}
+
+function openModal(title, bodyEl) {
+	modalTitleEl.textContent = title;
+	modalBody.innerHTML = '';
+	modalBody.appendChild(bodyEl);
+	modalOverlay.hidden = false;
+}
+
+function closeModal() {
+	modalOverlay.hidden = true;
+	modalBody.innerHTML = '';
+}
+
+window.SR.modal = { open: openModal, close: closeModal };
+
 // --- auth / login screen ---
 
 function showApp() {
@@ -471,7 +503,7 @@ function wireLogout() {
 
 // --- section router ---
 
-var SECTIONS = ['home', 'subscriptions', 'profiles', 'killswitch', 'protection'];
+var SECTIONS = ['home', 'subscriptions', 'profiles', 'domains', 'killswitch', 'protection'];
 var renderers = {}; // filled in by each tab's own <script> (status.js etc.)
 var rendered = {};  // section -> true once its DOM has been built at least once
 
@@ -511,6 +543,7 @@ function initApp() {
 document.addEventListener('DOMContentLoaded', function () {
 	wireLogin();
 	wireLogout();
+	initModal();
 
 	document.getElementById('sr-burger-btn').addEventListener('click', function () {
 		document.getElementById('sr-sidebar').classList.toggle('is-open');
