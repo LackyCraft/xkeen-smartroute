@@ -65,6 +65,9 @@ case "$1" in
 	"set_auto_refresh_enabled": {"enabled":"bool1"},
 	"get_observatory_period": {},
 	"set_observatory_period": {"minutes":"str1"},
+	"get_doublevpn_config": {},
+	"set_doublevpn_enabled": {"enabled":"bool1"},
+	"set_doublevpn_servers": {"servers":"str1"},
 	"get_log_config": {},
 	"set_log_enabled": {"enabled":"bool1"},
 	"set_log_level": {"level":"str1"},
@@ -381,6 +384,26 @@ EOF
 					jq -n '{ok:true}'
 				else
 					jq -n --arg log "$(cat /tmp/sr_observatory_period.log)" '{error:"invalid_minutes", detail:$log}'
+				fi
+				;;
+			get_doublevpn_config)
+				cfg="$(sh "$LIB_DIR/genroute.sh" get-doublevpn 2>/dev/null)"
+				[ -n "$cfg" ] || cfg='{"enabled":false,"servers":[]}'
+				cur="$(sh "$LIB_DIR/genroute.sh" get-doublevpn-current 2>/dev/null)"
+				[ -n "$cur" ] || cur='{"enabled":false,"gateway":null,"pool_size":0}'
+				jq -n --argjson cfg "$cfg" --argjson cur "$cur" '$cfg + {current: $cur}'
+				;;
+			set_doublevpn_enabled)
+				enabled="$(echo "$args" | jq -r '.enabled // false')"
+				sh "$LIB_DIR/genroute.sh" set-doublevpn-enabled "$enabled" >/tmp/sr_doublevpn.log 2>&1
+				jq -n '{ok:true}'
+				;;
+			set_doublevpn_servers)
+				servers="$(echo "$args" | jq -r '.servers // "[]"')"
+				if sh "$LIB_DIR/genroute.sh" set-doublevpn-servers "$servers" >/tmp/sr_doublevpn.log 2>&1; then
+					jq -n '{ok:true}'
+				else
+					jq -n --arg log "$(cat /tmp/sr_doublevpn.log)" '{error:"save_failed", detail:$log}'
 				fi
 				;;
 			get_log_config)

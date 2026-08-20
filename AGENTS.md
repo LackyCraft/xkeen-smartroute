@@ -176,3 +176,17 @@ small, topical commits (one concern per commit — engine, UI, docs, etc.),
 not one giant dump. Match that style. Never commit `.env` or any file
 containing a subscription URL, router password, or API token — `.gitignore`
 already excludes `.env`; keep it that way.
+
+**Branch model — see `docs/release-process.md` for the full spec, but the
+short version**: feature branches (any name) → `develop` (only after real
+live-router testing, not just "looks right") → `master` (only when `develop`
+is stable and ready to release) → a `vX.Y.Z` tag on that `master` commit is
+what actually triggers CI to build and publish binaries (`.github/workflows/
+release.yml`, separate from `build-gateway.yml`'s rolling `gateway-latest`
+dev channel that install.sh tracks). Never push routing/balancer/
+subscription-core changes straight to `master` or `develop` without a
+dedicated feature branch tested live first. A `master` merge + version tag
+is a real, user-facing publish action — confirm with the user before doing
+it, don't do it unprompted just because a feature branch's tests passed.
+Update `CHANGELOG.md` (Keep a Changelog format) in the same commit/PR as
+the release, before the tag.

@@ -153,6 +153,17 @@ var callSetObservatoryPeriod = rpc.declare({
 	object: 'luci.xkeen-smartroute', method: 'set_observatory_period',
 	params: ['minutes']
 });
+var callGetDoublevpnConfig = rpc.declare({
+	object: 'luci.xkeen-smartroute', method: 'get_doublevpn_config'
+});
+var callSetDoublevpnEnabled = rpc.declare({
+	object: 'luci.xkeen-smartroute', method: 'set_doublevpn_enabled',
+	params: ['enabled']
+});
+var callSetDoublevpnServers = rpc.declare({
+	object: 'luci.xkeen-smartroute', method: 'set_doublevpn_servers',
+	params: ['servers']
+});
 var _callGetAutoRefreshEnabled = rpc.declare({
 	object: 'luci.xkeen-smartroute', method: 'get_auto_refresh_enabled'
 });
@@ -237,6 +248,22 @@ var DICT = {
 	nav_status:          { ru: 'Статус', en: 'Status' },
 	nav_killswitch:      { ru: 'Kill-Switch', en: 'Kill-Switch' },
 	nav_protection:      { ru: 'Защита от утечек', en: 'Leak protection' },
+	nav_doublevpn:       { ru: 'Double VPN', en: 'Double VPN' },
+
+	dv_intro: { ru: 'Провайдер часто блокирует отдельные сервера напрямую, но почти всегда хотя бы один остаётся доступен. Double VPN добавляет ещё один хоп перед всем остальным трафиком (и обычным, и собственными проверками живости): весь трафик сначала идёт через один выбранный «шлюз» из группы серверов ниже, и только потом — на его настоящий адрес. Самый быстрый живой шлюз выбирается автоматически (пинг + Observatory), точно так же, как сервер для профиля-группы.',
+	          en: "An ISP often blocks individual servers directly, but almost always leaves at least one reachable. Double VPN adds one more hop in front of everything else (both real traffic and our own liveness checks): everything is relayed through one chosen \"gateway\" from the group below first, then on to its real address. The fastest alive gateway is picked automatically (ping + Observatory), the same way a group-mode profile picks its own server." },
+	dv_enabled_label: { ru: 'Double VPN включён', en: 'Double VPN enabled' },
+	dv_pool_label: { ru: 'Группа серверов-шлюзов', en: 'Gateway server pool' },
+	dv_pool_intro: { ru: 'Выберите сервера, из которых будет автоматически выбираться самый быстрый живой шлюз. Сами эти сервера никогда не заворачиваются друг через друга — только через них идёт весь остальной трафик.',
+	                 en: "Pick the servers to automatically choose the fastest alive gateway from. These servers themselves are never relayed through each other -- only everything else is relayed through them." },
+	dv_current_gateway: { ru: 'Активный шлюз', en: 'Active gateway' },
+	dv_current_none: { ru: 'нет (нет доступного шлюза в группе)', en: 'none (no reachable gateway in the pool)' },
+	dv_current_off: { ru: 'выключено', en: 'off' },
+	dv_pool_size: { ru: 'серверов в группе', en: 'servers in the pool' },
+	dv_save_btn: { ru: 'Сохранить группу', en: 'Save pool' },
+	dv_saved_ok: { ru: 'Сохранено, применится при следующей перегенерации маршрутов (до 3 минут)', en: 'Saved, will apply on the next routing regen (up to 3 minutes)' },
+	dv_toggle_saved_ok: { ru: 'Применено', en: 'Applied' },
+	dv_need_pool_warning: { ru: 'Включено, но группа пуста — добавьте хотя бы один сервер ниже.', en: 'Enabled, but the pool is empty -- pick at least one server below.' },
 
 	sub_intro: { ru: 'Вставьте ссылку-подписку VLESS/Trojan (та же, что в V2rayNG/V2Box) — сервера из неё появятся ниже и станут доступны для выбора в профилях.',
 	             en: 'Paste a VLESS/Trojan subscription link (the same one you use in V2rayNG/V2Box) — its servers will show up below and become selectable in profiles.' },
@@ -603,6 +630,9 @@ return L.Class.extend({
 		setRefreshHours: callSetRefreshHours,
 		getObservatoryPeriod: callGetObservatoryPeriod,
 		setObservatoryPeriod: callSetObservatoryPeriod,
+		getDoublevpnConfig: callGetDoublevpnConfig,
+		setDoublevpnEnabled: callSetDoublevpnEnabled,
+		setDoublevpnServers: callSetDoublevpnServers,
 		getAutoRefreshEnabled: callGetAutoRefreshEnabled,
 		setAutoRefreshEnabled: callSetAutoRefreshEnabled,
 		getHealthMetrics: callGetHealthMetrics,

@@ -461,6 +461,7 @@ for f in root/usr/share/rpcd/acl.d/luci-app-xkeen-smartroute.json \
          root/www/luci-static/resources/xkeen-smartroute.js \
          root/www/luci-static/resources/view/xkeen-smartroute/subscriptions.js \
          root/www/luci-static/resources/view/xkeen-smartroute/profiles.js \
+         root/www/luci-static/resources/view/xkeen-smartroute/doublevpn.js \
          root/www/luci-static/resources/view/xkeen-smartroute/status.js \
          root/www/luci-static/resources/view/xkeen-smartroute/killswitch.js \
          root/www/luci-static/resources/view/xkeen-smartroute/protection.js ; do
@@ -496,7 +497,7 @@ else
 	rm -f /tmp/smartroute-gateway.gz
 
 	if [ -x "$SR_SHARE_DIR/gateway" ]; then
-		for f in index.html style.css app.js status.js subscriptions.js profiles.js killswitch.js protection.js logo.png; do
+		for f in index.html style.css app.js status.js subscriptions.js profiles.js doublevpn.js domains.js killswitch.js protection.js logo.png logo_without_background.png; do
 			wget -O "$SR_SHARE_DIR/panel/$f" "$REPO_RAW/gateway/static/$f" \
 				|| die "не удалось скачать панель gateway/static/$f"
 		done
