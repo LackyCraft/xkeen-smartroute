@@ -3,3 +3,5 @@
 __pycache__/
 .DS_Store
 RELEASE_NOTES.md
+article.md
+article_censor.md
