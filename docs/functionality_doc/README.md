@@ -58,6 +58,9 @@
 - [install-and-process-management.md](install-and-process-management.md) —
   `install.sh`, жизненный цикл процесса Xray (валидация/запуск/рестарт),
   boot-порядок, расписание cron.
+- [domain-lists.md](domain-lists.md) — автообновление списков доменов,
+  которых нет в geosite: `scripts/update_lists.py`, проверка живости,
+  публикация через `lists-ГГГГ-ММ-ДД-N`.
 
 ## Смежное
 
