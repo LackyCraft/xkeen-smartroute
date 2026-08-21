@@ -177,10 +177,11 @@ var DICT = {
 	devices_none_detected: { ru: 'Устройства не найдены (проверьте DHCP-аренды роутера).', en: "No devices found (check the router's DHCP leases)." },
 
 	ip_ranges_title: { ru: 'IP-диапазоны (необязательно)', en: 'IP ranges (optional)' },
-	ip_ranges_intro: { ru: 'Для приложений вроде Telegram, чей основной трафик не резолвится по домену. IP/CIDR по одному на строку или через запятую.',
-		en: "For apps like Telegram whose core traffic isn't routed by domain. One IP/CIDR per line or comma-separated." },
-	ip_ranges_placeholder: { ru: '91.108.56.0/22\n149.154.160.0/20\n...', en: '91.108.56.0/22\n149.154.160.0/20\n...' },
-	ip_ranges_invalid: { ru: 'Некорректный IP/CIDR', en: 'Invalid IP/CIDR' },
+	ip_ranges_intro: { ru: 'Для приложений вроде Telegram, чей основной трафик не резолвится по домену. IP/CIDR по одному на строку или через запятую — либо вставьте/загрузите список в формате .bat (Keenetic Routes, "route ADD сеть MASK маска шлюз"), распознаётся автоматически.',
+		en: 'For apps like Telegram whose core traffic isn\'t routed by domain. One IP/CIDR per line or comma-separated -- or paste/load a Keenetic Routes .bat list ("route ADD network MASK mask gateway"), detected automatically.' },
+	ip_ranges_placeholder: { ru: '91.108.56.0/22\n149.154.160.0/20\nroute ADD 147.75.208.0 MASK 255.255.240.0 172.16.0.2\n...', en: '91.108.56.0/22\n149.154.160.0/20\nroute ADD 147.75.208.0 MASK 255.255.240.0 172.16.0.2\n...' },
+	ip_ranges_invalid: { ru: 'Некорректная строка/IP/CIDR', en: 'Invalid line/IP/CIDR' },
+	ip_ranges_load_bat_btn: { ru: 'Загрузить .bat (Keenetic Routes)', en: 'Load .bat (Keenetic Routes)' },
 
 	custom_domain_title: { ru: 'Добавить свой домен(ы)', en: 'Add your own domain(s)' },
 	custom_domain_intro: { ru: 'Если нужного сайта нет ни в geosite, ни в готовых списках — впишите домены через запятую.',
@@ -396,6 +397,65 @@ function sanitizeDomain(s) {
 	return s.replace(/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//, '').replace(/[/?#].*$/, '').replace(/:\d+$/, '').toLowerCase();
 }
 
+// --- ip_ranges parsing: plain CIDR/IP list, or Keenetic's exported static
+// route .bat format ("route ADD <network> MASK <netmask> <gateway>", one
+// per line -- the trailing gateway address is Keenetic's own VPN-policy
+// artifact and is ignored, only network+mask matter) -- see
+// docs/functionality_doc/routing-generation.md for the format and why.
+var IPV4_RE = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
+var KEENETIC_ROUTE_RE = /^route\s+add\s+(\S+)\s+mask\s+(\S+)\s+\S+/i;
+
+function ipv4ToInt(ip) {
+	var m = IPV4_RE.exec(ip);
+	if (!m) return null;
+	var parts = [Number(m[1]), Number(m[2]), Number(m[3]), Number(m[4])];
+	if (parts.some(function (n) { return n > 255; })) return null;
+	return ((parts[0] << 24) | (parts[1] << 16) | (parts[2] << 8) | parts[3]) >>> 0;
+}
+
+// maskToPrefixLength: dotted-decimal netmask -> CIDR prefix length, or null
+// if it isn't a real netmask (must be a contiguous run of 1-bits followed
+// by 0-bits -- "255.255.240.0" is valid, "255.255.0.240" is not).
+function maskToPrefixLength(mask) {
+	var n = ipv4ToInt(mask);
+	if (n === null) return null;
+	var bin = (n >>> 0).toString(2);
+	while (bin.length < 32) bin = '0' + bin;
+	if (!/^1*0*$/.test(bin)) return null;
+	return (bin.match(/1/g) || []).length;
+}
+
+// parseKeeneticRouteLine: undefined = not a route line at all (caller
+// should fall through to plain-token parsing), null = looked like a route
+// line but network/mask is malformed, string = converted "network/prefix".
+function parseKeeneticRouteLine(line) {
+	var m = KEENETIC_ROUTE_RE.exec(line);
+	if (!m) return undefined;
+	var net = m[1], mask = m[2];
+	if (ipv4ToInt(net) === null) return null;
+	var prefix = maskToPrefixLength(mask);
+	if (prefix === null) return null;
+	return net + '/' + prefix;
+}
+
+// parseIpRanges: raw textarea text -> {entries: [CIDR/IP, ...], errors: [bad line/token, ...]}.
+function parseIpRanges(raw) {
+	var entries = [], errors = [];
+	if (!raw) return { entries: entries, errors: errors };
+	raw.split(/\r?\n/).forEach(function (line) {
+		var trimmed = line.trim();
+		if (!trimmed || trimmed.charAt(0) === '#') return;
+		var routeResult = parseKeeneticRouteLine(trimmed);
+		if (routeResult === null) { errors.push(trimmed); return; }
+		if (routeResult !== undefined) { entries.push(routeResult); return; }
+		trimmed.split(/[\s,]+/).filter(Boolean).forEach(function (tok) {
+			if (/^[0-9a-fA-F.:]+(\/\d{1,3})?$/.test(tok)) entries.push(tok);
+			else errors.push(tok);
+		});
+	});
+	return { entries: entries, errors: errors };
+}
+
 function spinner() {
 	return E('span', { class: 'sr-spinner' });
 }
@@ -439,7 +499,7 @@ function toast(msg, kind) {
 window.SR = {
 	E: E, T: T, api: api, lang: srLang, setLang: srSetLang,
 	renderName: renderName, sanitizeDomain: sanitizeDomain, spinner: spinner,
-	relTime: relTime, fmtBytes: fmtBytes, toast: toast,
+	relTime: relTime, fmtBytes: fmtBytes, toast: toast, parseIpRanges: parseIpRanges,
 	CLIENT_PRESETS: CLIENT_PRESETS, DEVICE_OS_OPTIONS: DEVICE_OS_OPTIONS,
 	DEVICE_MODEL_OPTIONS: DEVICE_MODEL_OPTIONS, DEVICE_VER_OPTIONS: DEVICE_VER_OPTIONS
 };

@@ -202,6 +202,10 @@
 				E('label', { class: 'sr-label' }, T('ip_ranges_title')),
 				E('p', { class: 'sr-desc' }, T('ip_ranges_intro')),
 				E('textarea', { id: 'sr-ip-ranges', class: 'sr-textarea', rows: '4', placeholder: T('ip_ranges_placeholder') }),
+				E('div', { class: 'sr-row', style: 'margin-top:6px' }, [
+					E('input', { type: 'file', id: 'sr-ip-ranges-file', accept: '.bat,.txt', style: 'display:none', change: handleLoadBatFile }),
+					E('button', { class: 'sr-btn sr-btn-sm', click: function () { document.getElementById('sr-ip-ranges-file').click(); } }, T('ip_ranges_load_bat_btn'))
+				]),
 				E('div', { class: 'sr-modal-actions' }, [
 					E('button', { class: 'sr-btn sr-btn-primary', click: handleSaveProfile }, T('save_profile_btn')),
 					E('button', { class: 'sr-btn', click: function () { SR.modal.close(); } }, T('modal_cancel'))
@@ -244,10 +248,10 @@
 		var srcRaw = document.getElementById('sr-domain-source').value;
 		var chosen = Array.prototype.slice.call(document.querySelectorAll('input[name="sr-server-choice"]:checked')).map(function (i) { return i.value; });
 		var devices = Array.prototype.slice.call(document.querySelectorAll('input[name="sr-device-choice"]:checked')).map(function (i) { return i.value; });
-		var ipRangesRaw = document.getElementById('sr-ip-ranges').value.trim();
-		var ip_ranges = ipRangesRaw ? ipRangesRaw.split(/[\s,]+/).map(function (s) { return s.trim(); }).filter(Boolean) : [];
-		var badIp = ip_ranges.filter(function (s) { return !/^[0-9a-fA-F.:]+(\/\d{1,3})?$/.test(s); })[0];
-		if (badIp) { SR.toast(T('ip_ranges_invalid') + ': ' + badIp, 'error'); return; }
+		var ipRangesRaw = document.getElementById('sr-ip-ranges').value;
+		var parsedRanges = SR.parseIpRanges(ipRangesRaw);
+		if (parsedRanges.errors.length) { SR.toast(T('ip_ranges_invalid') + ': ' + parsedRanges.errors.join(', '), 'error'); return; }
+		var ip_ranges = parsedRanges.entries;
 		if (!name) { SR.toast(T('profile_name'), 'error'); return; }
 		if (!chosen.length) { SR.toast(T('need_servers_first'), 'error'); return; }
 
@@ -269,6 +273,25 @@
 			SR.modal.close();
 			return reloadProfilesTable();
 		});
+	}
+
+	// handleLoadBatFile: dumps the picked file's raw text into the ip_ranges
+	// textarea (appended, not replacing whatever's already typed there) --
+	// no upload, no server round-trip, just a local FileReader. Parsing/
+	// validation happens uniformly at save time via SR.parseIpRanges, same
+	// as text typed by hand, so a malformed .bat surfaces the same error.
+	function handleLoadBatFile(ev) {
+		var file = ev.target.files && ev.target.files[0];
+		if (!file) return;
+		var reader = new FileReader();
+		reader.onload = function () {
+			var textarea = document.getElementById('sr-ip-ranges');
+			var existing = textarea.value.replace(/\s+$/, '');
+			var text = String(reader.result || '');
+			textarea.value = existing ? existing + '\n' + text : text;
+		};
+		reader.readAsText(file);
+		ev.target.value = '';
 	}
 
 	function handleAddManualDevice() {

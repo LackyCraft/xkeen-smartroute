@@ -291,6 +291,25 @@ return view.extend({
 		input.value = '';
 	},
 
+	// handleLoadBatFile: dumps the picked file's raw text into the ip_ranges
+	// textarea (appended, not replacing whatever's already typed there) --
+	// no upload, no server round-trip, just a local FileReader. Parsing/
+	// validation happens uniformly at save time via sr.parseIpRanges, same
+	// as text typed by hand, so a malformed .bat surfaces the same error.
+	handleLoadBatFile: function (ev) {
+		var file = ev.target.files && ev.target.files[0];
+		if (!file) return;
+		var reader = new FileReader();
+		reader.onload = function () {
+			var textarea = document.getElementById('sr-ip-ranges');
+			var existing = textarea.value.replace(/\s+$/, '');
+			var text = String(reader.result || '');
+			textarea.value = existing ? existing + '\n' + text : text;
+		};
+		reader.readAsText(file);
+		ev.target.value = '';
+	},
+
 	handleSaveProfile: function (ev) {
 		var name = document.getElementById('sr-profile-name').value.trim();
 		var mode = document.getElementById('sr-mode').value;
@@ -301,16 +320,13 @@ return view.extend({
 		var devices = Array.prototype.slice.call(
 			document.querySelectorAll('input[name="sr-device-choice"]:checked')
 		).map(function (i) { return i.value; });
-		var ipRangesRaw = document.getElementById('sr-ip-ranges').value.trim();
-		var ip_ranges = ipRangesRaw ? ipRangesRaw.split(/[\s,]+/).map(function (s) { return s.trim(); }).filter(Boolean) : [];
-		// IPv4/IPv6 address or CIDR only -- matches what genroute.sh itself
-		// accepts server-side; catching a typo here beats a save-time
-		// error round-trip.
-		var badIp = ip_ranges.filter(function (s) { return !/^[0-9a-fA-F.:]+(\/\d{1,3})?$/.test(s); })[0];
-		if (badIp) {
-			ui.addNotification(null, E('p', {}, sr.T('ip_ranges_invalid') + ': ' + badIp));
+		var ipRangesRaw = document.getElementById('sr-ip-ranges').value;
+		var parsedRanges = sr.parseIpRanges(ipRangesRaw);
+		if (parsedRanges.errors.length) {
+			ui.addNotification(null, E('p', {}, sr.T('ip_ranges_invalid') + ': ' + parsedRanges.errors.join(', ')));
 			return;
 		}
+		var ip_ranges = parsedRanges.entries;
 
 		if (!name) { ui.addNotification(null, E('p', {}, sr.T('profile_name'))); return; }
 		if (!chosen.length) { ui.addNotification(null, E('p', {}, sr.T('need_servers_first'))); return; }
@@ -616,6 +632,14 @@ return view.extend({
 				'style': 'display:block;width:100%;max-width:28em;margin:.25em 0 1em',
 				'placeholder': sr.T('ip_ranges_placeholder')
 			}),
+			E('input', {
+				'type': 'file', 'id': 'sr-ip-ranges-file', 'accept': '.bat,.txt', 'style': 'display:none',
+				'change': ui.createHandlerFn(view, 'handleLoadBatFile')
+			}),
+			E('button', {
+				'class': 'cbi-button', 'style': 'margin:0 0 1em',
+				'click': function (ev) { ev.preventDefault(); document.getElementById('sr-ip-ranges-file').click(); }
+			}, sr.T('ip_ranges_load_bat_btn')),
 
 			E('button', {
 				'class': 'cbi-button cbi-button-positive',

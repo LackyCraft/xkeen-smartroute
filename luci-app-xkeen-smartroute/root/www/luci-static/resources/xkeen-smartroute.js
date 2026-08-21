@@ -362,10 +362,11 @@ var DICT = {
 	devices_manual_add: { ru: 'Добавить', en: 'Add' },
 
 	ip_ranges_title: { ru: 'IP-диапазоны (необязательно)', en: 'IP ranges (optional)' },
-	ip_ranges_intro: { ru: 'Некоторые приложения не используют домены для основного трафика — например, Telegram на телефоне/десктопе соединяется по MTProto напрямую по IP дата-центров, без SNI/Host, поэтому geosite:telegram (список доменов) их не ловит — только веб-версию. Впишите сюда известные IP-диапазоны такого сервиса (по одному на строку или через запятую) — они добавят отдельное правило маршрутизации в дополнение к списку доменов выше.',
-	                  en: "Some apps don't route their core traffic by domain at all — e.g. Telegram's phone/desktop apps talk MTProto straight to datacenter IPs with no SNI/Host, so geosite:telegram (a domain list) only ever catches the web version. Paste that service's known IP ranges here (one per line or comma-separated) — they add a separate routing rule alongside the domain list above." },
-	ip_ranges_placeholder: { ru: '91.108.56.0/22\n149.154.160.0/20\n...', en: '91.108.56.0/22\n149.154.160.0/20\n...' },
-	ip_ranges_invalid: { ru: 'Некорректный IP/CIDR', en: 'Invalid IP/CIDR' },
+	ip_ranges_intro: { ru: 'Некоторые приложения не используют домены для основного трафика — например, Telegram на телефоне/десктопе соединяется по MTProto напрямую по IP дата-центров, без SNI/Host, поэтому geosite:telegram (список доменов) их не ловит — только веб-версию. Впишите сюда известные IP-диапазоны такого сервиса (по одному на строку или через запятую) — они добавят отдельное правило маршрутизации в дополнение к списку доменов выше. Поддерживается и формат .bat со статическими маршрутами Keenetic ("route ADD сеть MASK маска шлюз") — вставьте или загрузите файлом, распознаётся автоматически.',
+	                  en: "Some apps don't route their core traffic by domain at all — e.g. Telegram's phone/desktop apps talk MTProto straight to datacenter IPs with no SNI/Host, so geosite:telegram (a domain list) only ever catches the web version. Paste that service's known IP ranges here (one per line or comma-separated) — they add a separate routing rule alongside the domain list above. Keenetic's exported static-route .bat format (\"route ADD network MASK mask gateway\") is also supported — paste or load it as a file, detected automatically." },
+	ip_ranges_placeholder: { ru: '91.108.56.0/22\n149.154.160.0/20\nroute ADD 147.75.208.0 MASK 255.255.240.0 172.16.0.2\n...', en: '91.108.56.0/22\n149.154.160.0/20\nroute ADD 147.75.208.0 MASK 255.255.240.0 172.16.0.2\n...' },
+	ip_ranges_invalid: { ru: 'Некорректная строка/IP/CIDR', en: 'Invalid line/IP/CIDR' },
+	ip_ranges_load_bat_btn: { ru: 'Загрузить .bat (Keenetic Routes)', en: 'Load .bat (Keenetic Routes)' },
 	devices_manual_invalid: { ru: 'Введите IPv4-адрес или CIDR, например 192.168.1.50 или 192.168.1.0/24', en: 'Enter an IPv4 address or CIDR, e.g. 192.168.1.50 or 192.168.1.0/24' },
 	devices_detected_title: { ru: 'Обнаруженные в сети', en: 'Detected on the network' },
 	devices_loading: { ru: 'Ищу устройства…', en: 'Looking for devices…' },
@@ -561,6 +562,65 @@ function srSanitizeDomain(s) {
 		.toLowerCase();
 }
 
+// --- ip_ranges parsing: plain CIDR/IP list, or Keenetic's exported static
+// route .bat format ("route ADD <network> MASK <netmask> <gateway>", one
+// per line -- the trailing gateway address is Keenetic's own VPN-policy
+// artifact and is ignored, only network+mask matter) -- see
+// docs/functionality_doc/routing-generation.md for the format and why.
+var SR_IPV4_RE = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
+var SR_KEENETIC_ROUTE_RE = /^route\s+add\s+(\S+)\s+mask\s+(\S+)\s+\S+/i;
+
+function srIpv4ToInt(ip) {
+	var m = SR_IPV4_RE.exec(ip);
+	if (!m) return null;
+	var parts = [Number(m[1]), Number(m[2]), Number(m[3]), Number(m[4])];
+	if (parts.some(function (n) { return n > 255; })) return null;
+	return ((parts[0] << 24) | (parts[1] << 16) | (parts[2] << 8) | parts[3]) >>> 0;
+}
+
+// srMaskToPrefixLength: dotted-decimal netmask -> CIDR prefix length, or
+// null if it isn't a real netmask (must be a contiguous run of 1-bits
+// followed by 0-bits -- "255.255.240.0" is valid, "255.255.0.240" is not).
+function srMaskToPrefixLength(mask) {
+	var n = srIpv4ToInt(mask);
+	if (n === null) return null;
+	var bin = (n >>> 0).toString(2);
+	while (bin.length < 32) bin = '0' + bin;
+	if (!/^1*0*$/.test(bin)) return null;
+	return (bin.match(/1/g) || []).length;
+}
+
+// srParseKeeneticRouteLine: undefined = not a route line at all (caller
+// should fall through to plain-token parsing), null = looked like a route
+// line but network/mask is malformed, string = converted "network/prefix".
+function srParseKeeneticRouteLine(line) {
+	var m = SR_KEENETIC_ROUTE_RE.exec(line);
+	if (!m) return undefined;
+	var net = m[1], mask = m[2];
+	if (srIpv4ToInt(net) === null) return null;
+	var prefix = srMaskToPrefixLength(mask);
+	if (prefix === null) return null;
+	return net + '/' + prefix;
+}
+
+// srParseIpRanges: raw textarea text -> {entries: [CIDR/IP, ...], errors: [bad line/token, ...]}.
+function srParseIpRanges(raw) {
+	var entries = [], errors = [];
+	if (!raw) return { entries: entries, errors: errors };
+	raw.split(/\r?\n/).forEach(function (line) {
+		var trimmed = line.trim();
+		if (!trimmed || trimmed.charAt(0) === '#') return;
+		var routeResult = srParseKeeneticRouteLine(trimmed);
+		if (routeResult === null) { errors.push(trimmed); return; }
+		if (routeResult !== undefined) { entries.push(routeResult); return; }
+		trimmed.split(/[\s,]+/).filter(Boolean).forEach(function (tok) {
+			if (/^[0-9a-fA-F.:]+(\/\d{1,3})?$/.test(tok)) entries.push(tok);
+			else errors.push(tok);
+		});
+	});
+	return { entries: entries, errors: errors };
+}
+
 function srLangSwitchButton() {
 	return E('button', {
 		'class': 'cbi-button',
@@ -658,6 +718,7 @@ return L.Class.extend({
 	renderName: srRenderName,
 	spinner: srSpinner,
 	sanitizeDomain: srSanitizeDomain,
+	parseIpRanges: srParseIpRanges,
 	CLIENT_PRESETS: CLIENT_PRESETS,
 	DEVICE_OS_OPTIONS: DEVICE_OS_OPTIONS,
 	DEVICE_MODEL_OPTIONS: DEVICE_MODEL_OPTIONS,
