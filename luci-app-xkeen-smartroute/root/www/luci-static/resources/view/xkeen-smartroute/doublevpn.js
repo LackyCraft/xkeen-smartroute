@@ -128,6 +128,20 @@ return view.extend({
 			]));
 		});
 		box.appendChild(table);
+
+		// sr.renderName() returns a DOM node -- see profiles.js's own
+		// comment on why joining an array of those with .join(', ')
+		// stringifies to "[object HTMLSpanElement]" instead of the name.
+		var removed = (this.current && this.current.removed_servers) || [];
+		if (removed.length) {
+			var removedChildren = ['⚠ '];
+			removed.forEach(function (r, i) {
+				if (i > 0) removedChildren.push(', ');
+				removedChildren.push(sr.renderName(r.name || r.tag));
+			});
+			removedChildren.push(' — ' + sr.T('profile_removed_servers_label'));
+			box.appendChild(E('div', { 'style': 'margin-top:.5em;color:#e74c3c;font-size:.9em' }, removedChildren));
+		}
 	},
 
 	handleToggleEnabled: function (ev) {

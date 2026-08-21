@@ -89,6 +89,12 @@
 			]));
 		});
 		box.appendChild(table);
+
+		var removed = (st.current && st.current.removed_servers) || [];
+		if (removed.length) {
+			box.appendChild(E('div', { class: 'sr-warning-row', style: 'margin-top:8px' },
+				'⚠ ' + removed.map(function (r) { return r.name || r.tag; }).join(', ') + ' — ' + T('profile_removed_servers_label')));
+		}
 	}
 
 	function pollActivity() {

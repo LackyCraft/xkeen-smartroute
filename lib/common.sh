@@ -60,7 +60,12 @@ sr_set_doublevpn_servers() {
 	# $1 = JSON array of server tags (the candidate gateway pool)
 	sr_ensure_dirs
 	echo "$1" | jq -e 'type == "array"' >/dev/null 2>&1 || sr_die "servers must be a JSON array of tags"
-	new="$(sr_get_doublevpn | jq --argjson s "$1" '.servers = $s')"
+	# .removed_servers is cleared here, not merged -- a manual save from the
+	# UI always sends the pool the user actually wants right now, so any
+	# previously-flagged "disappeared" warning no longer applies (mirrors
+	# genroute.sh's "save" case for profiles: cp-ing the whole file over
+	# implicitly drops removed_servers the same way).
+	new="$(sr_get_doublevpn | jq --argjson s "$1" '.servers = $s | .removed_servers = []')"
 	printf '%s' "$new" >"$SR_DOUBLEVPN_FILE"
 }
 

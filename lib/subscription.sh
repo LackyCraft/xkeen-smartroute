@@ -208,6 +208,34 @@ build_outbound() {
 		}'
 }
 
+# _sr_compute_tag_remap: shared by sr_remap_profile_tags and
+# sr_remap_doublevpn_tags -- given a subscription's server list from just
+# before and just after a refresh, returns a JSON array of
+# {old, name, new} for every tag that disappeared, `new` set to the tag's
+# new identity if a matching .match_key was found elsewhere in the new
+# list, or null if the node is genuinely gone.
+#
+# Entries imported before match_key existed at all (any install that
+# refreshed between this feature landing and its predecessor) have no
+# .match_key field -- accessing a missing key gives jq's `null`, and
+# `$obj[null]` is itself a hard error ("Cannot index object with null"),
+# not just a harmless miss. Confirmed live upgrading this exact router's
+# own pre-match_key servers.json. Filtering match_key-less entries out of
+# $by_key up front, and guarding the lookup on the old side, means such an
+# entry is simply never remapped (falls through to "removed", same as a
+# real miss) instead of crashing the whole import.
+_sr_compute_tag_remap() {
+	old_servers="$1"
+	new_servers="$2"
+	jq -cn --argjson old "$old_servers" --argjson new "$new_servers" '
+		($new | map(.tag)) as $new_tags |
+		($new | map(select(.match_key != null)) | map({key: .match_key, value: .tag}) | from_entries) as $by_key |
+		[ $old[] | select(.tag as $t | ($new_tags | index($t)) | not) |
+			{ old: .tag, name: .name, new: (if .match_key == null then null else ($by_key[.match_key] // null) end) }
+		]
+	'
+}
+
 # sr_remap_profile_tags: given a subscription label's server list from just
 # before and just after a refresh, re-associate every profile that
 # referenced a tag that disappeared -- to whatever new tag shares its
@@ -221,22 +249,7 @@ sr_remap_profile_tags() {
 	old_servers="$1"
 	new_servers="$2"
 
-	# Entries imported before match_key existed at all (any install that
-	# refreshed between this feature landing and its predecessor) have no
-	# .match_key field -- accessing a missing key gives jq's `null`, and
-	# `$obj[null]` is itself a hard error ("Cannot index object with
-	# null"), not just a harmless miss. Confirmed live upgrading this exact
-	# router's own pre-match_key servers.json. Filtering match_key-less
-	# entries out of $by_key up front, and guarding the lookup on the old
-	# side, means such an entry is simply never remapped (falls through to
-	# "removed", same as a real miss) instead of crashing the whole import.
-	remap="$(jq -cn --argjson old "$old_servers" --argjson new "$new_servers" '
-		($new | map(.tag)) as $new_tags |
-		($new | map(select(.match_key != null)) | map({key: .match_key, value: .tag}) | from_entries) as $by_key |
-		[ $old[] | select(.tag as $t | ($new_tags | index($t)) | not) |
-			{ old: .tag, name: .name, new: (if .match_key == null then null else ($by_key[.match_key] // null) end) }
-		]
-	')"
+	remap="$(_sr_compute_tag_remap "$old_servers" "$new_servers")"
 	remap_count="$(echo "$remap" | jq 'length')"
 	[ "$remap_count" -gt 0 ] || return 0
 
@@ -276,6 +289,63 @@ sr_remap_profile_tags() {
 			| .removed_servers = ($existing_removed + $removed_from_servers + $fixed_res.removed)
 		' "$pf" > "$pf.tmp" && mv "$pf.tmp" "$pf"
 	done
+}
+
+# sr_remap_doublevpn_tags: same idea as sr_remap_profile_tags, but for the
+# double-VPN gateway pool (SR_DOUBLEVPN_FILE, a single JSON file -- not a
+# directory of profiles). Confirmed missing live: sr_apply_doublevpn
+# (genroute.sh) already filters its pool down to currently-known tags
+# before picking a gateway, so a disappeared server never breaks anything
+# functionally -- but silently, with no remap to a node's new identity and
+# no UI indication a server dropped out, unlike every profile. The pool
+# stayed a comma-separated graveyard of dead tags forever, only ever
+# growing, since nothing ever pruned .servers itself.
+sr_remap_doublevpn_tags() {
+	old_servers="$1"
+	new_servers="$2"
+	[ -s "$SR_DOUBLEVPN_FILE" ] || return 0
+
+	remap="$(_sr_compute_tag_remap "$old_servers" "$new_servers")"
+	[ "$(echo "$remap" | jq 'length')" -gt 0 ] || return 0
+
+	# Only the tags actually in this pool matter for the log line -- $remap
+	# itself covers every tag the whole subscription lost, most of which
+	# were never in the double-VPN pool at all.
+	decisions="$(jq -c --argjson remap "$remap" '
+		(reduce $remap[] as $r ({}; . + {($r.old): $r})) as $rmap |
+		[(.servers // [])[] as $t |
+			($rmap[$t]) as $r |
+			if $r == null then empty
+			elif $r.new != null then {kind: "remapped", tag: $t, new: $r.new}
+			else {kind: "removed", tag: $t, name: $r.name}
+			end
+		]
+	' "$SR_DOUBLEVPN_FILE")"
+	[ "$(echo "$decisions" | jq 'length')" -gt 0 ] || return 0
+
+	remapped_count="$(echo "$decisions" | jq '[.[] | select(.kind == "remapped")] | length')"
+	removed_count="$(echo "$decisions" | jq '[.[] | select(.kind == "removed")] | length')"
+	sr_log "double VPN pool: $remapped_count tag(s) remapped to their new identity, $removed_count server(s) genuinely gone"
+
+	jq --argjson remap "$remap" '
+		(reduce $remap[] as $r ({}; . + {($r.old): $r})) as $rmap |
+		(.servers // []) as $orig |
+		(.removed_servers // []) as $existing_removed |
+		(now | todate) as $now |
+		(
+			[range(0; ($orig | length)) as $i |
+				($orig[$i]) as $t |
+				($rmap[$t]) as $r |
+				if $r == null then {kind: "keep", tag: $t}
+				elif $r.new != null then {kind: "keep", tag: $r.new}
+				else {kind: "removed", tag: $t, name: $r.name}
+				end
+			]
+		) as $decisions |
+		.servers = ($decisions | map(select(.kind == "keep")) | map(.tag))
+		| .removed_servers = ($existing_removed +
+			($decisions | map(select(.kind == "removed")) | map({tag: .tag, name: .name, removed_at: $now})))
+	' "$SR_DOUBLEVPN_FILE" > "$SR_DOUBLEVPN_FILE.tmp" && mv "$SR_DOUBLEVPN_FILE.tmp" "$SR_DOUBLEVPN_FILE"
 }
 
 sr_import() {
@@ -480,6 +550,7 @@ sr_import() {
 	# that server checked would otherwise silently lose it, with no
 	# indication anything happened.
 	sr_remap_profile_tags "$old_label_servers" "$(cat "$tmp_servers")"
+	sr_remap_doublevpn_tags "$old_label_servers" "$(cat "$tmp_servers")"
 
 	# Same full replace-by-label semantics as servers.json above, not a
 	# keep-if-tag-still-present filter: a node that roams to a new IP
