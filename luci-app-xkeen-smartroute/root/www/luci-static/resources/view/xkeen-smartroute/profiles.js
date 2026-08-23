@@ -39,7 +39,7 @@ return view.extend({
 		var sanitizedList = domainsRaw.split(',').map(function (d) { return sr.sanitizeDomain(d.trim()); }).filter(Boolean);
 		var domains = sanitizedList.join(',');
 		if (domains !== domainsRaw.split(',').map(function (d) { return d.trim(); }).filter(Boolean).join(',')) {
-			ui.addNotification(null, E('p', {}, sr.T('domains_sanitized_note') + domains), 'info');
+			ui.addNotification(null, E('p', {}, [sr.T('domains_sanitized_note') + domains]), 'info');
 		}
 
 		var btn = ev.target;
@@ -51,10 +51,10 @@ return view.extend({
 				return;
 			}
 			if (res && res.error) {
-				ui.addNotification(null, E('p', {}, res.error), 'error');
+				ui.addNotification(null, E('p', {}, [res.error]), 'error');
 				return;
 			}
-			ui.addNotification(null, E('p', {}, sr.T('add_btn') + ': ' + res.file), 'info');
+			ui.addNotification(null, E('p', {}, [sr.T('add_btn') + ': ' + res.file]), 'info');
 			nameInput.value = '';
 			domInput.value = '';
 			this.refreshDomainSourceOptions(name, res.file);
@@ -65,7 +65,7 @@ return view.extend({
 	refreshDomainSourceOptions: function (key, file) {
 		var sel = document.getElementById('sr-domain-source');
 		if (!sel) return;
-		var opt = E('option', { 'value': 'custom::' + file }, '[custom] ' + key);
+		var opt = E('option', { 'value': 'custom::' + file }, ['[custom] ' + key]);
 		sel.appendChild(opt);
 		sel.value = 'custom::' + file;
 	},
@@ -131,7 +131,7 @@ return view.extend({
 			var label = sr.lang() === 'en' ? (l.label_en || l.key) : (l.label_ru || l.key);
 
 			var toggle = E('a', { 'href': '#', 'style': 'font-weight:bold;text-decoration:none' },
-				(isOpen ? '▾ ' : '▸ ') + label + ' — ' + l.domains.length);
+				[(isOpen ? '▾ ' : '▸ ') + label + ' — ' + l.domains.length]);
 			toggle.addEventListener('click', function (ev) { ev.preventDefault(); view.handleToggleCustomList(l.key); });
 
 			var deleteBtn = E('button', { 'class': 'cbi-button cbi-button-remove' }, sr.T('delete_btn'));
@@ -215,7 +215,7 @@ return view.extend({
 		groups.forEach(function (g) {
 			var isOpen = !!(view.serverGroupExpanded && view.serverGroupExpanded[g.label]);
 			var toggle = E('a', { 'href': '#', 'style': 'font-weight:bold;text-decoration:none;display:block;margin:.5em 0 .25em' },
-				(isOpen ? '▾ ' : '▸ ') + (g.label || sr.T('sub_no_subscriptions')) + ' — ' + g.servers.length + ' ' + sr.T('sub_servers_word'));
+				[(isOpen ? '▾ ' : '▸ ') + (g.label || sr.T('sub_no_subscriptions')) + ' — ' + g.servers.length + ' ' + sr.T('sub_servers_word')]);
 			toggle.addEventListener('click', function (ev) { ev.preventDefault(); view.handleToggleServerGroup(g.label); });
 			box.appendChild(toggle);
 
@@ -323,7 +323,7 @@ return view.extend({
 		var ipRangesRaw = document.getElementById('sr-ip-ranges').value;
 		var parsedRanges = sr.parseIpRanges(ipRangesRaw);
 		if (parsedRanges.errors.length) {
-			ui.addNotification(null, E('p', {}, sr.T('ip_ranges_invalid') + ': ' + parsedRanges.errors.join(', ')));
+			ui.addNotification(null, E('p', {}, [sr.T('ip_ranges_invalid') + ': ' + parsedRanges.errors.join(', ')]));
 			return;
 		}
 		var ip_ranges = parsedRanges.entries;
@@ -357,7 +357,7 @@ return view.extend({
 			btn.disabled = false;
 			btn.textContent = sr.T('save_profile_btn');
 			if (res && res.error) {
-				ui.addNotification(null, E('p', {}, sr.T('save_failed') + ': ' + (res.detail || res.error)), 'error');
+				ui.addNotification(null, E('p', {}, [sr.T('save_failed') + ': ' + (res.detail || res.error)]), 'error');
 				return;
 			}
 			ui.addNotification(null, E('p', {}, sr.T('saved_ok')), 'info');
@@ -512,8 +512,8 @@ return view.extend({
 			}
 
 			table.appendChild(E('tr', { 'class': 'tr' }, [
-				E('td', { 'class': 'td' }, p.name),
-				E('td', { 'class': 'td' }, domainsParts.join(' · ')),
+				E('td', { 'class': 'td' }, [p.name]),
+				E('td', { 'class': 'td' }, [domainsParts.join(' · ')]),
 				E('td', { 'class': 'td' }, targetNode),
 				E('td', { 'class': 'td', 'style': 'display:flex;gap:.4em' }, [
 					E('button', {
@@ -577,11 +577,11 @@ return view.extend({
 			E('option', { 'value': 'any::' }, sr.T('domain_source_any')),
 			E('optgroup', { 'label': sr.T('domain_source_geosite') },
 				categories.map(function (c) {
-					return E('option', { 'value': 'geosite::' + c.key }, sr.lang() === 'en' ? c.label_en : c.label_ru);
+					return E('option', { 'value': 'geosite::' + c.key }, [sr.lang() === 'en' ? c.label_en : c.label_ru]);
 				})),
 			E('optgroup', { 'label': sr.T('domain_source_custom') },
 				customCategories.map(function (c) {
-					return E('option', { 'value': 'custom::' + c.file }, sr.lang() === 'en' ? c.label_en : c.label_ru);
+					return E('option', { 'value': 'custom::' + c.file }, [sr.lang() === 'en' ? c.label_en : c.label_ru]);
 				}))
 		]);
 

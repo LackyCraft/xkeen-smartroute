@@ -57,7 +57,7 @@ return view.extend({
 		return sr.rpc.redirectSetPorts(ports).then(function (status) {
 			ev.target.disabled = false;
 			if (status && status.error) {
-				ui.addNotification(null, E('p', {}, sr.T('prot_save_failed') + ': ' + (status.detail || status.error)), 'error');
+				ui.addNotification(null, E('p', {}, [sr.T('prot_save_failed') + ': ' + (status.detail || status.error)]), 'error');
 			} else {
 				view.applyStatus(status);
 				ui.addNotification(null, E('p', {}, sr.T('prot_saved_ok')), 'info');

@@ -71,7 +71,7 @@ return view.extend({
 		groups.forEach(function (g) {
 			var isOpen = !!(view.serverGroupExpanded && view.serverGroupExpanded[g.label]);
 			var toggle = E('a', { 'href': '#', 'style': 'font-weight:bold;text-decoration:none;display:block;margin:.5em 0 .25em' },
-				(isOpen ? '▾ ' : '▸ ') + (g.label || sr.T('sub_no_subscriptions')) + ' — ' + g.servers.length + ' ' + sr.T('sub_servers_word'));
+				[(isOpen ? '▾ ' : '▸ ') + (g.label || sr.T('sub_no_subscriptions')) + ' — ' + g.servers.length + ' ' + sr.T('sub_servers_word')]);
 			toggle.addEventListener('click', function (ev) { ev.preventDefault(); view.handleToggleServerGroup(g.label); });
 			box.appendChild(toggle);
 
@@ -120,7 +120,7 @@ return view.extend({
 			var isGateway = tag === gateway;
 			table.appendChild(E('tr', { 'class': 'tr' }, [
 				E('td', { 'class': 'td' }, [isGateway ? view.activityDot(tag) : view.activityDot(null), sr.renderName(s.name)]),
-				E('td', { 'class': 'td' }, s.address ? (s.address + ':' + s.port) : '—'),
+				E('td', { 'class': 'td' }, [s.address ? (s.address + ':' + s.port) : '—']),
 				E('td', { 'class': 'td' }, view.pingLabel(tag)),
 				E('td', { 'class': 'td' }, isGateway ? E('span', {
 					'style': 'display:inline-block;padding:.1em .6em;border-radius:999px;font-size:.78em;font-weight:bold;background:rgba(79,140,255,0.16);color:#4f8cff'

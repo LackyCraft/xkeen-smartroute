@@ -18,7 +18,7 @@ return view.extend({
 
 	handleToggleAutoRefresh: function (ev) {
 		return sr.rpc.setAutoRefreshEnabled(ev.target.checked).then(function (res) {
-			if (res && res.error) ui.addNotification(null, E('p', {}, res.detail || res.error), 'error');
+			if (res && res.error) ui.addNotification(null, E('p', {}, [res.detail || res.error]), 'error');
 		});
 	},
 
@@ -66,7 +66,7 @@ return view.extend({
 			btn.disabled = false;
 			btn.textContent = sr.T('sub_import_btn');
 			if (res && res.error) {
-				ui.addNotification(null, E('p', {}, sr.T('sub_import_failed') + ': ' + (res.detail || res.error)), 'error');
+				ui.addNotification(null, E('p', {}, [sr.T('sub_import_failed') + ': ' + (res.detail || res.error)]), 'error');
 				return;
 			}
 			ui.addNotification(null, E('p', {}, sr.T('sub_imported_ok')), 'info');
@@ -83,7 +83,7 @@ return view.extend({
 		return sr.rpc.setRefreshHours(hours).then(function (res) {
 			btn.disabled = false;
 			if (res && res.error) {
-				ui.addNotification(null, E('p', {}, res.detail || res.error), 'error');
+				ui.addNotification(null, E('p', {}, [res.detail || res.error]), 'error');
 				return;
 			}
 			ui.addNotification(null, E('p', {}, sr.T('refresh_saved_ok')), 'info');
@@ -98,7 +98,7 @@ return view.extend({
 		return sr.rpc.setObservatoryPeriod(minutes).then(function (res) {
 			btn.disabled = false;
 			if (res && res.error) {
-				ui.addNotification(null, E('p', {}, res.detail || res.error), 'error');
+				ui.addNotification(null, E('p', {}, [res.detail || res.error]), 'error');
 				return;
 			}
 			ui.addNotification(null, E('p', {}, sr.T('observatory_period_saved_ok')), 'info');
@@ -329,8 +329,8 @@ return view.extend({
 					var pingCell = isPinging ? sr.spinner() : view.pingLabel(srv.tag);
 					table.appendChild(E('tr', { 'class': 'tr' }, [
 						E('td', { 'class': 'td' }, sr.renderName(srv.name)),
-						E('td', { 'class': 'td' }, srv.address + ':' + srv.port),
-						E('td', { 'class': 'td' }, srv.protocol),
+						E('td', { 'class': 'td' }, [srv.address + ':' + srv.port]),
+						E('td', { 'class': 'td' }, [srv.protocol]),
 						E('td', { 'class': 'td' }, pingCell),
 						E('td', { 'class': 'td' }, view.healthLabel(srv.tag))
 					]));

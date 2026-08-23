@@ -46,7 +46,7 @@ return view.extend({
 		btn.disabled = true;
 		return sr.rpc.serviceControl(service, action).then(function (res) {
 			if (res && res.error) {
-				ui.addNotification(null, E('p', {}, sr.T('status_action_failed') + ': ' + (res.detail || res.error)), 'error');
+				ui.addNotification(null, E('p', {}, [sr.T('status_action_failed') + ': ' + (res.detail || res.error)]), 'error');
 			}
 			return sr.rpc.serviceStatus().then(function (st) {
 				view.serviceState = st || {};
@@ -79,7 +79,7 @@ return view.extend({
 	renderOverview: function (getStatusResult, subs) {
 		var rows = (subs || []).map(function (s) {
 			return E('tr', {}, [
-				E('td', {}, s.label || '—'),
+				E('td', {}, [s.label || '—']),
 				E('td', {}, String(s.server_count != null ? s.server_count : 0))
 			]);
 		});

@@ -36,8 +36,8 @@ return view.extend({
 			toggle.checked = enabledNames.indexOf(p.name) !== -1;
 			toggle.addEventListener('change', function (ev) { view.handleToggle(p.name, ev); });
 			table.appendChild(E('tr', { 'class': 'tr' }, [
-				E('td', { 'class': 'td' }, p.name),
-				E('td', { 'class': 'td' }, domainsLabel),
+				E('td', { 'class': 'td' }, [p.name]),
+				E('td', { 'class': 'td' }, [domainsLabel]),
 				E('td', { 'class': 'td' }, [toggle, isGeosite ? E('span', { 'class': 'cbi-value-description' }, ' ' + sr.T('ks_geosite_note')) : ''])
 			]));
 		});
