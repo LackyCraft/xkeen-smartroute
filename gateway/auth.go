@@ -129,7 +129,16 @@ func (l *loginLimiter) allow(ip string) bool {
 			recent = append(recent, t)
 		}
 	}
-	l.fails[ip] = recent
+	// Drop the key entirely once it has nothing recent left, rather than
+	// keeping an empty slice around forever -- with clientIP no longer
+	// spoofable via XFF this map can only grow as large as the number of
+	// distinct real client IPs that have ever failed a login, but there's
+	// no reason to let entries that "aged out" sit in memory permanently.
+	if len(recent) == 0 {
+		delete(l.fails, ip)
+	} else {
+		l.fails[ip] = recent
+	}
 	return len(recent) < 10
 }
 
@@ -139,10 +148,15 @@ func (l *loginLimiter) recordFail(ip string) {
 	l.mu.Unlock()
 }
 
+// clientIP: deliberately RemoteAddr only, never X-Forwarded-For -- this
+// gateway has no reverse proxy in front of it (same fact isLoopback below
+// already relies on), so XFF is a plain client-supplied header any caller
+// can set to an arbitrary, rotating value. Keying the login rate limiter
+// on it let a real attacker bypass the throttle entirely by sending a
+// fresh XFF on every attempt, and grew loginLimiter.fails without bound
+// (a fresh map key per attempted value) -- a memory-exhaustion vector, not
+// just a throttle bypass.
 func clientIP(r *http.Request) string {
-	if xf := r.Header.Get("X-Forwarded-For"); xf != "" {
-		return strings.TrimSpace(strings.Split(xf, ",")[0])
-	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr
@@ -273,19 +287,33 @@ func handleChangePassword(w http.ResponseWriter, r *http.Request) {
 // (there's nothing sensitive in the HTML/CSS/JS itself, and the login
 // screen has to load from somewhere); every data-bearing endpoint --
 // everything else -- requires a session once a password is configured.
+//
+// Used to gate by URL *extension* (".js"/".png"/etc. => public) rather
+// than by route -- confirmed live as a real bypass: any protected route
+// whose last path segment merely *ends* in one of those extensions (e.g.
+// PUT /proxies/whatever.svg) skipped the auth check entirely and reached
+// the real handler, saved only by that handler's own downstream "not
+// found" logic rather than by this gate. Inverted to an explicit list of
+// this binary's actual sensitive routes instead -- anything not on it
+// (the SPA shell, its JS/CSS/images, /version) is public by construction,
+// the same set that was reachable before, just checked by what the route
+// *is* instead of by what its last path segment happens to look like.
 func isPublicPath(p string) bool {
 	switch p {
-	case "/api/login", "/api/auth/status":
+	case "/api/login", "/api/auth/status", "/version":
 		return true
 	}
-	if p == "/" {
-		return true
+	switch {
+	case strings.HasPrefix(p, "/api/"): // /api/call/*, /api/change-password, /api/logout, /api/traffic-by-profile
+		return false
+	case p == "/proxies", strings.HasPrefix(p, "/proxies/"):
+		return false
+	case p == "/connections", p == "/rules", p == "/configs":
+		return false
+	case p == "/traffic", p == "/activity", p == "/logs":
+		return false
 	}
-	switch filepath.Ext(p) {
-	case ".html", ".css", ".js", ".png", ".svg", ".ico", ".webmanifest":
-		return true
-	}
-	return false
+	return true // the SPA shell and everything served from staticDir
 }
 
 func requireAuth(next http.Handler) http.Handler {

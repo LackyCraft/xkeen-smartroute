@@ -15,6 +15,7 @@ import (
 	"context"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"time"
 
@@ -68,11 +69,6 @@ func main() {
 	mux.HandleFunc("GET /activity", handleActivity)
 	mux.HandleFunc("GET /api/traffic-by-profile", handleTrafficByProfile(xc))
 	mux.HandleFunc("GET /logs", logsWSHandler())
-	mux.HandleFunc("OPTIONS /", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "*")
-	})
 
 	if staticDir != "" {
 		mux.Handle("/", noCacheStatic(http.FileServer(http.Dir(staticDir))))
@@ -111,15 +107,59 @@ func envOr(key, def string) string {
 	return def
 }
 
+// sameOriginHost: true if the browser-supplied Origin header names the same
+// host:port this request itself arrived on (r.Host -- what the browser put
+// in its own Host header dialing in, so this holds regardless of which
+// LAN IP/hostname the panel happens to be reached at, no hardcoded
+// allowlist needed). An empty Origin (same-tab navigation, curl, the rpcd
+// script's own loopback calls) is treated as same-origin -- only a
+// genuine cross-site browser request ever sends a *mismatching* Origin.
+func sameOriginHost(origin, host string) bool {
+	if origin == "" {
+		return true
+	}
+	u, err := url.Parse(origin)
+	if err != nil || u.Host == "" {
+		return false
+	}
+	return u.Host == host
+}
+
+// corsWrap: found live wide open -- Access-Control-Allow-Origin:* on every
+// response plus a blanket `OPTIONS /` handler meant any website a LAN user
+// had open in another tab could call this panel's API cross-origin and
+// read the response (traffic stats, profiles, kill-switch state), and with
+// no password set (the shipped default) actually change state too. Now
+// reflects the Origin back only when it matches this request's own Host,
+// and answers preflight generically instead of via a separate always-on
+// route -- a cross-site page gets no CORS header at all, which is what
+// makes the browser refuse to hand the response back to that page's JS.
 func corsWrap(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
+		origin := r.Header.Get("Origin")
+		if origin != "" && sameOriginHost(origin, r.Host) {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Vary", "Origin")
+		}
+		if r.Method == http.MethodOptions {
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "*")
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
 		h.ServeHTTP(w, r)
 	})
 }
 
+// upgrader.CheckOrigin was unconditionally true -- any website could open a
+// cross-site WebSocket to /traffic or /logs and stream live traffic
+// counters or the router's own browsing-domain log. Same same-origin rule
+// as corsWrap; an empty Origin (non-browser clients, same-origin fetches
+// in some older engines) is still allowed through.
 var upgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool { return true },
+	CheckOrigin: func(r *http.Request) bool {
+		return sameOriginHost(r.Header.Get("Origin"), r.Host)
+	},
 }
 
 // trafficWSHandler pushes {"up":N,"down":N} once a second -- bytes/sec deltas

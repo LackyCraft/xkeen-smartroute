@@ -164,8 +164,11 @@ func handleRPC(b *rpcBridge) http.HandlerFunc {
 			writeErr(w, http.StatusBadGateway, "rpc_failed: "+err.Error())
 			return
 		}
+		// No Access-Control-Allow-Origin here -- see writeJSON's comment in
+		// handlers.go for why (corsWrap already set the correct value; a
+		// second hardcoded wildcard here would silently override it, same
+		// bug, same fix).
 		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(out)
 	}

@@ -13,9 +13,16 @@ import (
 	"time"
 )
 
+// No Access-Control-Allow-Origin set here on purpose -- corsWrap (main.go)
+// already sets it once, correctly, for every response this binary sends,
+// after checking the Origin against the request's own Host. This used to
+// also set a hardcoded wildcard here, silently overwriting corsWrap's
+// value on every single JSON response in the whole API surface (Set
+// replaces, it doesn't merge) -- confirmed live, this was the actual
+// reason a same-origin-only corsWrap still measured as wide-open "*" on
+// every real endpoint.
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
 }
