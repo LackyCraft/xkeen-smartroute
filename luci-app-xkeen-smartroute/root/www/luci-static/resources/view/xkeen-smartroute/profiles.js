@@ -206,10 +206,18 @@ return view.extend({
 			return;
 		}
 
-		// Keep whatever was already checked across a re-render (mode switch,
-		// group expand/collapse) instead of losing the user's picks.
-		var previouslyChecked = {};
-		box.querySelectorAll('input[name="sr-server-choice"]:checked').forEach(function (i) { previouslyChecked[i.value] = true; });
+		// Read/write view._picked, never the DOM -- the picker only renders
+		// <input> elements for currently-expanded subscription groups, so a
+		// server checked in a group the user has since collapsed has no
+		// element left to query at all. Querying box for ":checked" also
+		// used to run *after* box.innerHTML was already cleared above,
+		// which made it return nothing even for open groups -- every
+		// re-render (a plain mode switch included, not just collapse) lost
+		// every selection. view._picked is kept in sync by each checkbox's
+		// own change event below regardless of which groups are open, so
+		// it's the only complete source of truth (same pattern doublevpn.js
+		// uses for its pool picker).
+		view._picked = view._picked || {};
 
 		var groups = view.groupServersBySubscription(servers);
 		groups.forEach(function (g) {
@@ -227,7 +235,20 @@ return view.extend({
 					'name': 'sr-server-choice',
 					'value': s.tag
 				});
-				input.checked = !!previouslyChecked[s.tag];
+				input.checked = !!view._picked[s.tag];
+				input.addEventListener('change', function () {
+					if (mode === 'fixed') {
+						// Only one fixed_server is ever saved -- reset
+						// rather than accumulate, so a later save can't
+						// pick up a stale tag from a since-collapsed group.
+						view._picked = {};
+						if (input.checked) view._picked[s.tag] = true;
+					} else if (input.checked) {
+						view._picked[s.tag] = true;
+					} else {
+						delete view._picked[s.tag];
+					}
+				});
 				list.appendChild(E('label', { 'style': 'display:flex;align-items:center;gap:.4em;padding:.15em 0' }, [
 					input, sr.renderName(s.name), ' (', s.address, ':', String(s.port), ', ', s.protocol, ', ', view.pingLabel(s.tag), ')'
 				]));
@@ -239,6 +260,14 @@ return view.extend({
 	handleModeChange: function () {
 		document.getElementById('sr-server-picker-label').textContent =
 			document.getElementById('sr-mode').value === 'fixed' ? sr.T('pick_server') : sr.T('pick_servers');
+		// Switching to "fixed" only ever saves one server (chosen[0]) --
+		// trim any carried-over multi-selection down to one now, so the
+		// single radio left checked after render matches what save would
+		// actually use instead of an arbitrary Object.keys() ordering.
+		if (document.getElementById('sr-mode').value === 'fixed') {
+			var keys = Object.keys(this._picked || {});
+			if (keys.length > 1) { this._picked = {}; this._picked[keys[0]] = true; }
+		}
 		this.renderServerPicker();
 	},
 
@@ -314,9 +343,7 @@ return view.extend({
 		var name = document.getElementById('sr-profile-name').value.trim();
 		var mode = document.getElementById('sr-mode').value;
 		var srcRaw = document.getElementById('sr-domain-source').value;
-		var chosen = Array.prototype.slice.call(
-			document.querySelectorAll('input[name="sr-server-choice"]:checked')
-		).map(function (i) { return i.value; });
+		var chosen = Object.keys(this._picked || {});
 		var devices = Array.prototype.slice.call(
 			document.querySelectorAll('input[name="sr-device-choice"]:checked')
 		).map(function (i) { return i.value; });
@@ -392,15 +419,13 @@ return view.extend({
 
 		var tags = p.mode === 'fixed' ? [p.fixed_server] : (p.servers || []);
 		this.serverGroupExpanded = this.serverGroupExpanded || {};
+		this._picked = {};
 		tags.forEach(function (t) {
+			view._picked[t] = true;
 			var s = view.serverForTag(t);
 			if (s) view.serverGroupExpanded[s.subscription || ''] = true;
 		});
 		this.renderServerPicker();
-		tags.forEach(function (t) {
-			var input = document.querySelector('input[name="sr-server-choice"][value="' + CSS.escape(t) + '"]');
-			if (input) input.checked = true;
-		});
 
 		(p.devices || []).forEach(function (d) { view.addDeviceCheckbox(d, d, true); });
 		document.getElementById('sr-ip-ranges').value = (p.ip_ranges || []).join('\n');
@@ -572,6 +597,7 @@ return view.extend({
 		(data[8] || []).forEach(function (t) { view.activeTags[t] = true; });
 		this.serverGroupExpanded = {};
 		this.customListExpanded = {};
+		this._picked = {};
 
 		var domainSourceSelect = E('select', { 'class': 'cbi-input-select', 'id': 'sr-domain-source' }, [
 			E('option', { 'value': 'any::' }, sr.T('domain_source_any')),

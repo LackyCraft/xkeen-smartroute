@@ -3,7 +3,7 @@
 	var E = SR.E, T = SR.T, api = SR.api;
 	var st = {
 		servers: [], profiles: [], pings: {}, lanDevices: [], current: {}, activeTags: {},
-		serverGroupExpanded: {}, profileTargetExpanded: {}
+		serverGroupExpanded: {}, profileTargetExpanded: {}, picked: {}
 	};
 
 	function pingLabel(tag) {
@@ -32,11 +32,16 @@
 		return order.map(function (key) { return { label: key, servers: groups[key] }; });
 	}
 
+	// Reads/writes st.picked, never the DOM -- the picker only renders
+	// <input> elements for currently-expanded subscription groups, so a
+	// server checked in a group the user has since collapsed has no
+	// element left to query at the next re-render or at save time.
+	// st.picked is kept in sync by each checkbox's own change event below
+	// regardless of which groups are open, so it's the only complete
+	// source of truth (same pattern doublevpn.js uses for its pool picker).
 	function renderServerPicker() {
 		var box = document.getElementById('sr-server-picker');
 		if (!box) return;
-		var previouslyChecked = {};
-		box.querySelectorAll('input[name="sr-server-choice"]:checked').forEach(function (i) { previouslyChecked[i.value] = true; });
 		box.innerHTML = '';
 		var mode = document.getElementById('sr-mode') ? document.getElementById('sr-mode').value : 'fixed';
 
@@ -52,7 +57,20 @@
 			var list = E('div', { style: 'margin:0 0 6px 8px' });
 			g.servers.forEach(function (s) {
 				var input = E('input', { type: mode === 'fixed' ? 'radio' : 'checkbox', name: 'sr-server-choice', value: s.tag });
-				input.checked = !!previouslyChecked[s.tag];
+				input.checked = !!st.picked[s.tag];
+				input.addEventListener('change', function () {
+					if (mode === 'fixed') {
+						// Only one fixed_server is ever saved -- reset
+						// rather than accumulate, so a later save can't
+						// pick up a stale tag from a since-collapsed group.
+						st.picked = {};
+						if (input.checked) st.picked[s.tag] = true;
+					} else if (input.checked) {
+						st.picked[s.tag] = true;
+					} else {
+						delete st.picked[s.tag];
+					}
+				});
 				list.appendChild(E('label', { class: 'sr-row', style: 'padding:2px 0' }, [
 					input, SR.renderName(s.name), ' (' + s.address + ':' + s.port + ', ' + s.protocol + ', ' + pingLabel(s.tag) + ')'
 				]));
@@ -169,6 +187,7 @@
 		Promise.all([api.listCategories(), api.listCustomCategories()]).then(function (data) {
 			var categories = data[0] || [], customCategories = data[1] || [];
 			st.serverGroupExpanded = {};
+			st.picked = {};
 
 			var domainSourceSelect = E('select', { class: 'sr-select', id: 'sr-domain-source' }, [E('option', { value: 'any::' }, T('domain_source_any'))]);
 			domainSourceSelect.appendChild(E('optgroup', { label: T('domain_source_geosite') },
@@ -181,6 +200,14 @@
 			]);
 			modeSelect.addEventListener('change', function () {
 				document.getElementById('sr-server-picker-label').textContent = modeSelect.value === 'fixed' ? T('pick_server') : T('pick_servers');
+				// Switching to "fixed" only ever saves one server
+				// (chosen[0]) -- trim any carried-over multi-selection
+				// down to one now, so the single radio left checked after
+				// render matches what save would actually use.
+				if (modeSelect.value === 'fixed') {
+					var keys = Object.keys(st.picked);
+					if (keys.length > 1) { st.picked = {}; st.picked[keys[0]] = true; }
+				}
 				renderServerPicker();
 			});
 
@@ -227,14 +254,11 @@
 
 				var tags = existing.mode === 'fixed' ? [existing.fixed_server] : (existing.servers || []);
 				tags.forEach(function (t) {
+					st.picked[t] = true;
 					var s = serverForTag(t);
 					if (s) st.serverGroupExpanded[s.subscription || ''] = true;
 				});
 				renderServerPicker();
-				tags.forEach(function (t) {
-					var input = document.querySelector('input[name="sr-server-choice"][value="' + CSS.escape(t) + '"]');
-					if (input) input.checked = true;
-				});
 
 				(existing.devices || []).forEach(function (d) { addDeviceCheckbox(d, d, true); });
 				document.getElementById('sr-ip-ranges').value = (existing.ip_ranges || []).join('\n');
@@ -246,7 +270,7 @@
 		var name = document.getElementById('sr-profile-name').value.trim();
 		var mode = document.getElementById('sr-mode').value;
 		var srcRaw = document.getElementById('sr-domain-source').value;
-		var chosen = Array.prototype.slice.call(document.querySelectorAll('input[name="sr-server-choice"]:checked')).map(function (i) { return i.value; });
+		var chosen = Object.keys(st.picked);
 		var devices = Array.prototype.slice.call(document.querySelectorAll('input[name="sr-device-choice"]:checked')).map(function (i) { return i.value; });
 		var ipRangesRaw = document.getElementById('sr-ip-ranges').value;
 		var parsedRanges = SR.parseIpRanges(ipRangesRaw);
