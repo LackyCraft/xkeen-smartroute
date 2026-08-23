@@ -96,6 +96,33 @@ ENTWARE_HOOK_EOF
 	/etc/init.d/entware enable
 fi
 
+# ---------------------------------------------------------------------------
+log "dnsmasq-full (нужен для hard kill-switch)"
+
+# The stock `dnsmasq` package on most OpenWrt builds has neither ipset nor
+# nftset compiled in (confirmed live: `dnsmasq --version` shows
+# "no-ipset no-nftset"). Without one of those, lib/killswitch.sh's hard
+# kill-switch can write all the UCI it wants -- nothing ever tells dnsmasq
+# to feed resolved IPs into the ipset the firewall REJECT rule depends on.
+# Swapping to dnsmasq-full once here, at install time (a strict superset --
+# DHCP/DNS behavior for users who never touch kill-switch is unchanged),
+# avoids every future kill-switch toggle needing this same package swap
+# under a less controlled, less visible rpcd call. Run with the system
+# `opkg` (not yet shadowed by Entware's own /opt/bin/opkg -- PATH is
+# extended below) since dnsmasq is a base-system package, not an Entware one.
+if ! dnsmasq --version 2>/dev/null | grep -q ' ipset\| nftset'; then
+	opkg update >/dev/null 2>&1 || true
+	opkg list-installed 2>/dev/null | grep -q '^dnsmasq -' && { opkg remove dnsmasq >/dev/null 2>&1 || true; }
+	if opkg install dnsmasq-full >/dev/null 2>&1; then
+		/etc/init.d/dnsmasq restart >/dev/null 2>&1 || true
+		log "dnsmasq-full установлен."
+	else
+		log "ПРЕДУПРЕЖДЕНИЕ: не удалось поставить dnsmasq-full -- hard kill-switch будет недоступен, пока не поставите его вручную (opkg remove dnsmasq && opkg install dnsmasq-full). / WARNING: could not install dnsmasq-full -- hard kill-switch unavailable until installed manually."
+	fi
+else
+	log "dnsmasq уже поддерживает ipset/nftset, пропускаю."
+fi
+
 export PATH="/opt/bin:/opt/sbin:$PATH"
 /opt/bin/opkg update >/dev/null 2>&1 || true
 /opt/bin/opkg install jq curl bash coreutils-base64 coreutils-tr coreutils-timeout unzip shadow-su grep sed >/dev/null 2>&1 \
