@@ -122,8 +122,20 @@ func (b *rpcBridge) allowed(method string) bool {
 // method this needs to accommodate -- worst case ~150 servers x 3s.
 const callTimeout = 10 * time.Minute
 
-func (b *rpcBridge) call(ctx context.Context, method string, args json.RawMessage) (json.RawMessage, error) {
-	ctx, cancel := context.WithTimeout(ctx, callTimeout)
+// call deliberately roots its context in context.Background(), never in the
+// HTTP request's own r.Context() -- confirmed live: a client that closes the
+// tab, navigates away, or just loses the LAN link mid subscription-refresh
+// cancels r.Context() the instant the connection drops, and that used to
+// propagate straight into this exec.CommandContext, SIGKILLing the shell for
+// the exact same reason callTimeout above was widened from 30s: the script's
+// own EXIT trap (its import lock cleanup) never runs on SIGKILL, leaving
+// servers.json and 04_outbounds.smartroute.json inconsistent until the
+// lock's 300s staleness timeout expires. A dropped connection is not a
+// reason to abort a write that's already in progress -- the script runs to
+// completion either way, bounded only by callTimeout; handleRPC below simply
+// finds it has no live connection left to write the response to.
+func (b *rpcBridge) call(method string, args json.RawMessage) (json.RawMessage, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), callTimeout)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, "sh", b.script, "call", method)
@@ -159,7 +171,7 @@ func handleRPC(b *rpcBridge) http.HandlerFunc {
 				args = json.RawMessage(body)
 			}
 		}
-		out, err := b.call(r.Context(), method, args)
+		out, err := b.call(method, args)
 		if err != nil {
 			writeErr(w, http.StatusBadGateway, "rpc_failed: "+err.Error())
 			return
