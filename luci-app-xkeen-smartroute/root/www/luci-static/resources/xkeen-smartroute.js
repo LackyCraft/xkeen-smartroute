@@ -338,6 +338,7 @@ var DICT = {
 	delete_btn: { ru: 'Удалить', en: 'Delete' },
 	edit_btn: { ru: 'Изменить', en: 'Edit' },
 	edit_loaded_note: { ru: 'Профиль загружен в форму выше — измените и сохраните', en: 'Profile loaded into the form above — change it and save' },
+	profile_delete_confirm: { ru: 'Удалить профиль «%s»?', en: 'Delete profile "%s"?' },
 	domains_manage_title: { ru: 'Управление списками доменов', en: 'Domain list management' },
 	domains_manage_intro: { ru: 'Ваши собственные списки доменов (не путать со списками из geosite Xray). Можно посмотреть, что в них, добавить или убрать отдельный домен, или удалить список целиком.',
 	                         en: "Your own domain lists (not the built-in Xray geosite categories). View what's in them, add or remove a single domain, or delete the whole list." },

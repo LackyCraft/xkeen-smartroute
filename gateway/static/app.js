@@ -150,6 +150,7 @@ var DICT = {
 	need_servers_first: { ru: 'Сначала импортируйте подписку на вкладке «Подписки».', en: 'Import a subscription on the Subscriptions tab first.' },
 	existing_profiles: { ru: 'Существующие профили', en: 'Existing profiles' },
 	no_profiles: { ru: 'Профилей ещё нет.', en: 'No profiles yet.' },
+	profile_delete_confirm: { ru: 'Удалить профиль «%s»?', en: 'Delete profile "%s"?' },
 	col_domains: { ru: 'Домены', en: 'Domains' },
 	col_target: { ru: 'Куда', en: 'Target' },
 

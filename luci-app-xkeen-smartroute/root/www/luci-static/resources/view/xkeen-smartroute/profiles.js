@@ -393,6 +393,7 @@ return view.extend({
 	},
 
 	handleDeleteProfile: function (name) {
+		if (!confirm(sr.T('profile_delete_confirm').replace('%s', name))) return;
 		return sr.rpc.deleteProfile(name).then(L.bind(function (res) {
 			if (res && res.error) {
 				ui.addNotification(null, E('p', {}, [sr.T('status_action_failed') + ': ' + (res.detail || res.error)]), 'error');
