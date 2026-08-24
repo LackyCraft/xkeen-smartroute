@@ -359,7 +359,15 @@
 
 				renderProfilesTable();
 
+				// Skips the real getCurrent/getActivity fetch (each an
+				// api.* call -> a fresh `sh`-exec of the 26KB rpcd script)
+				// while this section isn't the visible one or the browser
+				// tab itself is backgrounded -- the "online now" dot has no
+				// reason to stay live for a page nobody can see. Always
+				// reschedules regardless, so the very next tick notices on
+				// its own once visible again, no separate resume needed.
 				(function pollLoop() {
+					if (!SR.sectionVisible('profiles')) { setTimeout(pollLoop, 3000); return; }
 					pollActivity().then(function () { setTimeout(pollLoop, 3000); }, function () { setTimeout(pollLoop, 3000); });
 				})();
 			});

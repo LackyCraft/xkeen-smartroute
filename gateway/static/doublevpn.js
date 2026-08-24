@@ -188,7 +188,13 @@
 			renderServerPicker();
 			renderMembers();
 
+			// Skips the real activity fetch (an api.* call -> a fresh
+			// `sh`-exec of the 26KB rpcd script) while this section isn't
+			// the visible one or the browser tab itself is backgrounded.
+			// Always reschedules regardless, so the next tick notices on
+			// its own once visible again, no separate resume needed.
 			(function pollLoop() {
+				if (!SR.sectionVisible('doublevpn')) { setTimeout(pollLoop, 3000); return; }
 				pollActivity().then(function () { setTimeout(pollLoop, 3000); }, function () { setTimeout(pollLoop, 3000); });
 			})();
 		});

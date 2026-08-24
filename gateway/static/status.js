@@ -25,6 +25,19 @@
 	// is open, so Home shows fresh data immediately when you come back.
 	function isGone() { return !document.getElementById('sr-section-home'); }
 
+	// shouldPoll: unlike isGone() above, DOES treat the actual browser tab
+	// being backgrounded (document.hidden) as a reason to pause -- used
+	// only by the rpcd-backed polls below (pollMetrics/pollActivity/
+	// pollTrafficByProfile, each an api.* call -> a fresh `sh`-exec of the
+	// 26KB rpcd script on the router), not by the WebSocket reconnect logic
+	// above, which isn't part of that cost at all. Each poll loop always
+	// reschedules itself regardless of this check and just skips the real
+	// work when it's false, rather than stopping the setTimeout chain
+	// outright -- so there's no separate "resume on visibilitychange"
+	// mechanism needed, the very next tick (a few seconds later, at most)
+	// notices the tab is visible again on its own.
+	function shouldPoll() { return !document.hidden && !isGone(); }
+
 	function serviceCard(key, titleKey, running, onAction) {
 		var dot = E('span', { class: 'sr-dot ' + (running ? 'sr-dot-ok' : 'sr-dot-bad') });
 		return E('div', { class: 'sr-row-between', style: 'padding:6px 0' }, [
@@ -194,6 +207,7 @@
 
 	function pollTrafficByProfile() {
 		if (isGone()) return;
+		if (!shouldPoll()) { setTimeout(pollTrafficByProfile, TRAFFIC_BY_PROFILE_POLL_MS); return; }
 		fetch('/api/traffic-by-profile').then(function (r) { return r.json(); }).then(function (rows) {
 			if (isGone()) return;
 			var box = document.getElementById('sr-traffic-by-profile');
@@ -252,6 +266,7 @@
 
 	function pollMetrics() {
 		if (isGone()) return;
+		if (!shouldPoll()) { setTimeout(pollMetrics, METRICS_POLL_MS); return; }
 		api.getHealthMetrics().then(function (m) {
 			if (isGone()) return;
 			var box = document.getElementById('sr-status-metrics');
@@ -262,6 +277,7 @@
 
 	function pollActivity() {
 		if (isGone()) return;
+		if (!shouldPoll()) { setTimeout(pollActivity, ACTIVITY_POLL_MS); return; }
 		Promise.all([api.listProfiles(), api.getCurrent(), api.getActivity()]).then(function (data) {
 			if (isGone()) return;
 			var profiles = data[0] || [], current = data[1] || {};

@@ -516,10 +516,31 @@ function toast(msg, kind) {
 // --- wiring exported globally for tab modules (no bundler in this
 // project -- plain <script> tags, same as gateway/static/index.html
 // always was) ---
+// sectionVisible: true only while both the browser tab itself is in the
+// foreground (not document.hidden -- backgrounded/minimized) AND this
+// specific section is the one currently shown. activateSection (below)
+// never removes a section from the DOM, only toggles its `hidden`
+// attribute, so checking *existence* (a pattern status.js used to lean on
+// via its own now-fixed isGone()) can never actually detect "navigated
+// away" -- the element is always still there. Every page's own
+// setTimeout-chained poll loop (status.js's traffic/logs/metrics/activity
+// polling, profiles.js's and doublevpn.js's activity polling) checks this
+// before doing any real work, so switching tabs/sections -- or just
+// backgrounding the browser tab -- stops the router from fielding a fresh
+// `sh`-exec of the 26KB rpcd script every few seconds for a page nobody is
+// looking at; the loop keeps re-checking cheaply (no network call) and
+// resumes real polling the moment the section/tab is visible again.
+function sectionVisible(name) {
+	if (document.hidden) return false;
+	var el = document.getElementById('sr-section-' + name);
+	return !!el && !el.hidden;
+}
+
 window.SR = {
 	E: E, T: T, api: api, lang: srLang, setLang: srSetLang,
 	renderName: renderName, sanitizeDomain: sanitizeDomain, spinner: spinner,
 	relTime: relTime, fmtBytes: fmtBytes, toast: toast, parseIpRanges: parseIpRanges,
+	sectionVisible: sectionVisible,
 	CLIENT_PRESETS: CLIENT_PRESETS, DEVICE_OS_OPTIONS: DEVICE_OS_OPTIONS,
 	DEVICE_MODEL_OPTIONS: DEVICE_MODEL_OPTIONS, DEVICE_VER_OPTIONS: DEVICE_VER_OPTIONS
 };
