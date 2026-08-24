@@ -525,6 +525,14 @@ case "${1:-}" in
 		[ -n "${2:-}" ] && [ -f "$2" ] || sr_die "profile json file required"
 		name="$(jq -r '.name' "$2")"
 		[ -n "$name" ] && [ "$name" != "null" ] || sr_die "profile json must have a .name"
+		# name becomes a filename below ($SR_PROFILES_DIR/$name.json) --
+		# reject anything that could escape that directory (a literal "/"
+		# is the only thing that can, since a name with no "/" at all can
+		# never resolve to "..") rather than silently mangling it, so a
+		# legitimate name (spaces, unicode, whatever) round-trips exactly
+		# as typed everywhere else this same string is compared against
+		# (kill-switch's flag file, current.json, etc).
+		case "$name" in */*) sr_die "profile name cannot contain '/'" ;; esac
 
 		# A profile matching by none of domain, device, or ip_ranges would
 		# generate a rule matching every domain from every device --
@@ -566,6 +574,7 @@ case "${1:-}" in
 		;;
 	delete)
 		[ -n "${2:-}" ] || sr_die "profile name required"
+		case "$2" in */*) sr_die "profile name cannot contain '/'" ;; esac
 		rm -f "$SR_PROFILES_DIR/$2.json"
 		sr_regen 1
 		;;

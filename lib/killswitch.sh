@@ -212,6 +212,10 @@ ks_check_dnsmasq_capability() {
 
 ks_enable() {
 	name="${1:?profile name required}"
+	# name becomes a filename below ($SR_KS_FLAG_DIR/$name.name) -- same
+	# path-escape guard as lib/genroute.sh's save/delete (a literal "/" is
+	# the only thing that can turn this into a path outside the flag dir).
+	case "$name" in */*) sr_die "profile name cannot contain '/'" ;; esac
 	ks_check_dnsmasq_capability
 	mkdir -p "$SR_KS_FLAG_DIR"
 	echo "$name" >"$SR_KS_FLAG_DIR/$name.name"
@@ -221,6 +225,7 @@ ks_enable() {
 
 ks_disable() {
 	name="${1:?profile name required}"
+	case "$name" in */*) sr_die "profile name cannot contain '/'" ;; esac
 	rm -f "$SR_KS_FLAG_DIR/$name.name"
 	ks_rebuild_dnsmasq
 	sr_log "kill-switch disabled for profile '$name'"
