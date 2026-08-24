@@ -199,8 +199,21 @@ return view.extend({
 	// poll the cheap read-only endpoints a handful of times and re-render as
 	// data arrives, then stop. Good enough feedback without blocking the UI
 	// on an operation that (for a big subscription) can take minutes.
+	//
+	// Not label-scoped: every caller (refresh-all, ping-all, one
+	// subscription's own refresh/ping button) polls the exact same four
+	// global endpoints and writes the exact same view.subscriptions/
+	// servers/pings/health, so two overlapping calls (e.g. "refresh all"
+	// clicked while one subscription's own refresh is still polling) used
+	// to run two fully independent timer chains hitting the router twice
+	// as often for no benefit -- both converge on the same shared state
+	// regardless. Only one poll loop ever runs at a time now; a second
+	// caller just attaches its own .then() to the one already in flight
+	// instead of starting a redundant one (each caller's own .then() below
+	// still clears its own specific flag correctly either way).
 	pollAndRerender: function (times, intervalMs) {
 		var view = this;
+		if (view._activePoll) return view._activePoll;
 		var i = 0;
 		function tick() {
 			return Promise.all([sr.rpc.listSubscriptions(), sr.rpc.listServers(), sr.rpc.getPings(), sr.rpc.getHealth()]).then(function (data) {
@@ -210,11 +223,12 @@ return view.extend({
 				view.health = data[3] || {};
 				view.renderSubscriptions();
 				i++;
-				if (i >= times) return;
+				if (i >= times) { view._activePoll = null; return; }
 				return new Promise(function (resolve) { setTimeout(resolve, intervalMs); }).then(tick);
 			});
 		}
-		return tick();
+		view._activePoll = tick().catch(function (err) { view._activePoll = null; throw err; });
+		return view._activePoll;
 	},
 
 	reloadAll: function () {
