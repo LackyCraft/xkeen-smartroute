@@ -53,8 +53,6 @@ function E(tag, attrs, children) {
 // --- i18n ---
 
 var DICT = {
-	app_name: { ru: 'XKeen SmartRoute', en: 'XKeen SmartRoute' },
-	app_by: { ru: 'DanyByLC', en: 'DanyByLC' },
 	nav_home: { ru: 'Статус', en: 'Status' },
 	nav_subscriptions: { ru: 'Подписки', en: 'Subscriptions' },
 	nav_profiles:        { ru: 'Профили маршрутизации', en: 'Routing profiles' },
@@ -275,7 +273,6 @@ var DICT = {
 	logs_cap_save: { ru: 'Сохранить', en: 'Save' },
 	logs_cap_free: { ru: 'свободно', en: 'free' },
 	logs_cap_rejected: { ru: 'Слишком много — превышает половину свободной памяти', en: 'Too large — exceeds half of free memory' },
-	logs_empty: { ru: 'Пока пусто — включите логи выше.', en: 'Empty so far — enable logging above.' },
 	logs_tmpfs_note: { ru: 'Хранятся в ОЗУ (tmpfs), не на флеше — пропадают при перезагрузке, ограничены заданным лимитом.',
 		en: 'Stored in RAM (tmpfs), not flash — cleared on reboot, bounded by the cap above.' },
 
@@ -394,9 +391,11 @@ var CLIENT_PRESETS = [
 	{ key: 'flclash', label: 'FlClash' },
 	{ key: 'incy', label: 'Incy' }
 ];
-var DEVICE_OS_OPTIONS = ['XKeen SmartRoute', 'iOS', 'Android', 'Windows', 'macOS', 'Linux'];
-var DEVICE_MODEL_OPTIONS = ['iPhone 15 Pro', 'iPhone16,1', 'iPhone 14', 'Pixel 8', 'Pixel 9 Pro', 'Samsung Galaxy S24', 'ELP-NX1', 'PC', 'MacBook Pro 16'];
-var DEVICE_VER_OPTIONS = ['17.5', '17.0', '16.6', '15', '14', '10', '11', '13.0'];
+// DEVICE_OS_OPTIONS/DEVICE_MODEL_OPTIONS/DEVICE_VER_OPTIONS (LuCI's device-
+// header override datalists) don't exist here -- this panel's own
+// subscriptions.js uses plain text inputs for those fields, not a
+// <datalist>, so the three arrays were dead weight, defined and exported
+// but never actually read anywhere in this codebase.
 
 // --- flag-emoji rendering (Windows never renders regional-indicator pairs
 // as flags -- swap for a Twemoji SVG, same fix as the LuCI app) ---
@@ -537,11 +536,28 @@ function relTime(v) {
 	return hr + (srLang() === 'en' ? 'h ago' : 'ч назад');
 }
 
-function fmtBytes(n) {
+// fmtBytes: one locale-aware byte formatter for the whole panel --
+// previously three separate copies here and in status.js (fmtBytes,
+// fmtTrafficBytes, fmtBytesPlain), all hardcoded to Russian units
+// regardless of the selected language, plus a fourth (fmtFree, log-cap
+// free space) hardcoded to English units instead, and a fifth (this
+// function's own original body) that was never even called from anywhere.
+// rate=true appends a "per second" suffix (for live throughput); omit/false
+// for a plain size (a file, a cap, free space).
+var BYTE_UNITS = {
+	ru: ['Б', 'КБ', 'МБ', 'ГБ'],
+	en: ['B', 'KB', 'MB', 'GB']
+};
+function fmtBytes(n, rate) {
 	n = n || 0;
-	if (n < 1024) return n + ' Б/с';
-	if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' КБ/с';
-	return (n / (1024 * 1024)).toFixed(2) + ' МБ/с';
+	var units = BYTE_UNITS[srLang()] || BYTE_UNITS.en;
+	var suffix = rate ? '/' + (srLang() === 'en' ? 's' : 'с') : '';
+	var value, unit;
+	if (n < 1024) { value = n; unit = units[0]; }
+	else if (n < 1024 * 1024) { value = (n / 1024).toFixed(1); unit = units[1]; }
+	else if (n < 1024 * 1024 * 1024) { value = (n / (1024 * 1024)).toFixed(rate ? 2 : 1); unit = units[2]; }
+	else { value = (n / (1024 * 1024 * 1024)).toFixed(2); unit = units[3]; }
+	return value + ' ' + unit + suffix;
 }
 
 // --- toasts (replaces LuCI's ui.addNotification) ---
@@ -587,8 +603,7 @@ window.SR = {
 	sectionVisible: sectionVisible,
 	pingLabel: pingLabel, serverForTag: serverForTag, activityDot: activityDot,
 	groupServersBySubscription: groupServersBySubscription,
-	CLIENT_PRESETS: CLIENT_PRESETS, DEVICE_OS_OPTIONS: DEVICE_OS_OPTIONS,
-	DEVICE_MODEL_OPTIONS: DEVICE_MODEL_OPTIONS, DEVICE_VER_OPTIONS: DEVICE_VER_OPTIONS
+	CLIENT_PRESETS: CLIENT_PRESETS
 };
 
 // --- modal (used by the Profiles tab for add/edit) ---

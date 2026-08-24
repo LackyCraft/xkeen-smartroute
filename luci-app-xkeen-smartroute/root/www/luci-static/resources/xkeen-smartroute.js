@@ -547,6 +547,23 @@ function srSpinner() {
 	});
 }
 
+// srFmtBytes: locale-aware byte formatter -- status.js used to hardcode
+// Russian units (Б/КБ/МБ) regardless of the selected language, matching the
+// same bug (and the same fix, one shared formatter) as the gateway panel's
+// own three copies. rate=true appends a "per second" suffix.
+var BYTE_UNITS = { ru: ['Б', 'КБ', 'МБ', 'ГБ'], en: ['B', 'KB', 'MB', 'GB'] };
+function srFmtBytes(n, rate) {
+	n = n || 0;
+	var units = BYTE_UNITS[srLang()] || BYTE_UNITS.en;
+	var suffix = rate ? '/' + (srLang() === 'en' ? 's' : 'с') : '';
+	var value, unit;
+	if (n < 1024) { value = n; unit = units[0]; }
+	else if (n < 1024 * 1024) { value = (n / 1024).toFixed(1); unit = units[1]; }
+	else if (n < 1024 * 1024 * 1024) { value = (n / (1024 * 1024)).toFixed(rate ? 2 : 1); unit = units[2]; }
+	else { value = (n / (1024 * 1024 * 1024)).toFixed(2); unit = units[3]; }
+	return value + ' ' + unit + suffix;
+}
+
 // srPingLabel/srServerForTag/srActivityDot/srGroupServersBySubscription:
 // used identically by both profiles.js and doublevpn.js's server pickers --
 // used to be copied into each view object separately (4 definitions in this
@@ -765,6 +782,7 @@ return L.Class.extend({
 	spinner: srSpinner,
 	sanitizeDomain: srSanitizeDomain,
 	parseIpRanges: srParseIpRanges,
+	fmtBytes: srFmtBytes,
 	pingLabel: srPingLabel,
 	serverForTag: srServerForTag,
 	activityDot: srActivityDot,

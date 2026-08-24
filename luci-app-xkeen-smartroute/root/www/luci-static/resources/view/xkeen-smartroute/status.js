@@ -146,12 +146,8 @@ return view.extend({
 		});
 	},
 
-	fmtBytes: function (n) {
-		n = n || 0;
-		if (n < 1024) return n + ' Б/с';
-		if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' КБ/с';
-		return (n / (1024 * 1024)).toFixed(2) + ' МБ/с';
-	},
+	// fmtBytes now lives as sr.fmtBytes(n, rate) in the shared module -- see
+	// its own comment for why.
 
 	drawTraffic: function () {
 		var canvas = document.getElementById('sr-traffic-canvas');
@@ -209,8 +205,8 @@ return view.extend({
 				var d = JSON.parse(ev.data);
 				var upEl = document.getElementById('sr-traffic-up');
 				var downEl = document.getElementById('sr-traffic-down');
-				if (upEl) upEl.textContent = view.fmtBytes(d.up);
-				if (downEl) downEl.textContent = view.fmtBytes(d.down);
+				if (upEl) upEl.textContent = sr.fmtBytes(d.up, true);
+				if (downEl) downEl.textContent = sr.fmtBytes(d.down, true);
 				view.trafficUp.push(d.up || 0);
 				view.trafficDown.push(d.down || 0);
 				if (view.trafficUp.length > TRAFFIC_HISTORY_LEN) view.trafficUp.shift();
