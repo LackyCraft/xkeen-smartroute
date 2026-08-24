@@ -60,7 +60,7 @@ not `exec_command`.
 One command, idempotent (safe to re-run):
 
 ```sh
-sh <(wget -O - https://raw.githubusercontent.com/LackyCraft/xkeen-smartroute/main/install.sh)
+sh <(wget -O - https://raw.githubusercontent.com/LackyCraft/xkeen-smartroute/master/install.sh)
 ```
 
 What it needs to succeed, in order: OpenWrt (`/etc/openwrt_release` present),

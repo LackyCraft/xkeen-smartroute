@@ -238,9 +238,15 @@ func saveProfile(p srProfile) error {
 	return nil
 }
 
-// --- GET /proxies/{name}/delay: plain TCP-connect latency, same technique
-// as lib/subscription.sh's sr_ping_one (no real proxy handshake needed to
-// know whether a node is reachable at all) ---
+// --- GET /proxies/{name}/delay: TLS handshake latency (tls.DialWithDialer,
+// certificate verification skipped -- REALITY/self-signed nodes are the
+// normal case here, not the exception) -- NOT a bare TCP connect despite
+// what this comment used to say. Every server this project actually
+// generates outbounds for speaks VLESS/Trojan over TLS or REALITY, so this
+// has never been observed to matter in practice, but a hypothetical
+// plain-TCP (no TLS at all) node would report "connect failed" here even
+// while genuinely reachable, since there's no fallback path that tries a
+// bare net.Dial instead. ---
 
 func handleDelay(w http.ResponseWriter, r *http.Request, name string) {
 	timeoutMs := 3000
