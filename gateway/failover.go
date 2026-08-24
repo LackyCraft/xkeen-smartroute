@@ -41,26 +41,42 @@ func startFailoverLoop(xc *xrayClient) {
 	ticker := time.NewTicker(failoverInterval)
 	go func() {
 		defer ticker.Stop()
+		wasFailing := false
 		for range ticker.C {
-			runFailoverTick(xc)
+			wasFailing = runFailoverTick(xc, wasFailing)
 		}
 	}()
 }
 
-func runFailoverTick(xc *xrayClient) {
+// runFailoverTick logs a queryOutboundHealth failure only on the
+// success->failure transition (and the reverse, on recovery), not on every
+// tick -- on an install with no balancer-mode profile at all (the single
+// most common real reason for this to fail: no
+// 07_observatory.smartroute.json for ObservatoryService to report against,
+// see lib/genroute.sh), this ran at failoverInterval forever, ~4300 log
+// lines/day for a condition that was never going away and never needed
+// repeating. wasFailing (this tick's outcome) is threaded through the
+// caller's loop variable rather than a package global so state stays
+// scoped to this one ticker goroutine.
+func runFailoverTick(xc *xrayClient, wasFailing bool) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	health, err := xc.queryOutboundHealth(ctx)
 	if err != nil {
-		// Most commonly means no balancer-mode profile exists yet
-		// (07_observatory.smartroute.json isn't written, see
-		// lib/genroute.sh) so ObservatoryService has nothing to report --
-		// still logged (at a low volume, once per tick) since it's just as
-		// likely to mean ObservatoryService isn't enabled in
-		// 00_api.smartroute.json, or Xray's API isn't reachable at all.
-		log.Printf("failover: queryOutboundHealth: %v", err)
-		return
+		if !wasFailing {
+			// Most commonly means no balancer-mode profile exists yet
+			// (07_observatory.smartroute.json isn't written, see
+			// lib/genroute.sh) so ObservatoryService has nothing to report
+			// -- also logged here since it's just as likely to mean
+			// ObservatoryService isn't enabled in 00_api.smartroute.json,
+			// or Xray's API isn't reachable at all.
+			log.Printf("failover: queryOutboundHealth: %v", err)
+		}
+		return true
+	}
+	if wasFailing {
+		log.Printf("failover: queryOutboundHealth recovered")
 	}
 	persistHealth(health)
 
@@ -91,6 +107,7 @@ func runFailoverTick(xc *xrayClient) {
 	// 	}
 	// 	reconcileBalancer(ctx, xc, "bal_"+p.Name, p.Servers, health)
 	// }
+	return false
 }
 
 // reconcileBalancer -- DISABLED, see the comment in runFailoverTick above.
