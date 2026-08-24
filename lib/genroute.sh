@@ -328,6 +328,19 @@ sr_regen() {
 
 	for pf in "$SR_PROFILES_DIR"/*.json; do
 		[ -e "$pf" ] || continue
+		# A profile file that isn't valid JSON (a partial write from a crash
+		# mid-save, a corrupted flash sector, anything) used to abort this
+		# entire loop right here: under `set -e`, `name="$(jq ... "$pf")"`
+		# failing aborts sr_regen (and, upstream, whatever rpcd call
+		# triggered it) with no message -- every OTHER profile, not just
+		# this broken one, silently stopped getting routing rules from that
+		# point on, and list_profiles' own `jq -s` (below) would fail the
+		# exact same way for the whole list. Skip just the broken file and
+		# say so, instead of taking every profile down with it.
+		if ! jq -e . "$pf" >/dev/null 2>&1; then
+			sr_log "profile file '$pf' is not valid JSON, skipping it"
+			continue
+		fi
 		name="$(jq -r '.name' "$pf")"
 		mode="$(jq -r '.mode' "$pf")"
 		field_list="$(build_rule_list "$pf")"
@@ -582,7 +595,21 @@ case "${1:-}" in
 	list)
 		sr_ensure_dirs
 		if ls "$SR_PROFILES_DIR"/*.json >/dev/null 2>&1; then
-			jq -s '.' "$SR_PROFILES_DIR"/*.json
+			# `jq -s` (slurp) on *.json directly fails its whole output the
+			# instant any ONE file isn't valid JSON -- same failure mode
+			# sr_regen's loop above used to have, just for the read side:
+			# every other real profile disappears from the list along with
+			# the broken one, with no error surfaced anywhere. Filter to
+			# files that actually parse first; skipping the rest here
+			# mirrors sr_regen already skipping them for routing purposes,
+			# so "shows up in the list" and "gets routing rules" agree.
+			out="[]"
+			for pf in "$SR_PROFILES_DIR"/*.json; do
+				[ -e "$pf" ] || continue
+				jq -e . "$pf" >/dev/null 2>&1 || { sr_log "profile file '$pf' is not valid JSON, omitting it from the list"; continue; }
+				out="$(printf '%s' "$out" | jq --slurpfile p "$pf" '. + $p')"
+			done
+			printf '%s' "$out"
 		else
 			echo '[]'
 		fi
