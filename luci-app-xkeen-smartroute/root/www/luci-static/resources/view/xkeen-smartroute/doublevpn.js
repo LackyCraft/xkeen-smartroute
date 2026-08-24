@@ -162,6 +162,7 @@ return view.extend({
 		var enabled = document.getElementById('sr-dv-enabled').checked;
 		if (enabled && !chosen.length) {
 			ui.addNotification(null, E('p', {}, sr.T('dv_need_pool_warning')), 'error');
+			return;
 		}
 
 		var btn = ev.target;

@@ -113,7 +113,7 @@
 		// which groups are open, so it's the only complete source of truth.
 		var chosen = Object.keys(st.picked);
 		var enabled = document.getElementById('sr-dv-enabled').checked;
-		if (enabled && !chosen.length) SR.toast(T('dv_need_pool_warning'), 'error');
+		if (enabled && !chosen.length) { SR.toast(T('dv_need_pool_warning'), 'error'); return; }
 
 		var btn = ev.target;
 		btn.disabled = true;
