@@ -443,6 +443,19 @@ sr_import() {
 		hostport="${userhostport#*@}"
 		host="${hostport%:*}"
 		port="${hostport##*:}"
+		# Bracketed IPv6 literal ("[2001:db8::1]:443", RFC 3986 -- how a URI
+		# has to encode an IPv6 host, since a bare literal's own colons
+		# would be indistinguishable from the ":port" separator). The %:*
+		# split above correctly finds the port after the closing bracket
+		# (shortest match from the end lands on the last colon either way),
+		# but leaves the brackets themselves inside $host; Xray's own
+		# outbound "address" field wants the bare literal, not URI bracket
+		# syntax, so a real IPv6 server would silently fail to connect
+		# (address "[2001:db8::1]" is not a valid address, just a mangled
+		# one) without this.
+		case "$host" in
+			\[*\]) host="${host#\[}"; host="${host%\]}" ;;
+		esac
 		name="$(urldecode "$frag_raw")"; [ -n "$name" ] || name="$host:$port"
 
 		i=$((i + 1))
@@ -703,6 +716,11 @@ sr_do_refresh() {
 	now="$(date +%s)"
 	count="$(jq 'length' "$SR_SUBS_META_FILE")"
 	sr_log "refresh: re-importing $count saved subscription(s)"
+	# Marker file, not a plain shell variable -- ok_count="$((ok_count+1))"
+	# set inside a `cmd | while read` pipeline lives in a subshell and never
+	# survives back to this scope; a file write does.
+	ok_marker="$(mktemp)"
+	rm -f "$ok_marker"
 	jq -c '.[]' "$SR_SUBS_META_FILE" | while IFS= read -r entry; do
 		u="$(printf '%s' "$entry" | jq -r '.url')"
 		l="$(printf '%s' "$entry" | jq -r '.label')"
@@ -715,9 +733,25 @@ sr_do_refresh() {
 		# subshell: sr_import calls sr_die (exit) on a fetch failure, which
 		# would otherwise abort this whole while loop on the first bad
 		# subscription instead of moving on to the next one
-		( sr_import "$u" "$l" "$c" "$o" "$lo" "$m" "$v" "$h" ) || sr_log "refresh: failed to re-import '$l'"
+		if ( sr_import "$u" "$l" "$c" "$o" "$lo" "$m" "$v" "$h" ); then
+			: >"$ok_marker"
+		else
+			sr_log "refresh: failed to re-import '$l'"
+		fi
 	done
-	sr_restart_xray
+	# Restarting Xray is not free (drops the current connection briefly,
+	# and resets Observatory's in-memory health data, which can take the
+	# better part of an hour to fully re-cover for a large subscription --
+	# see failover.go's persistHealth comment) -- doing it unconditionally
+	# even when every single label failed to re-import (a transient outage
+	# on the provider side, nothing about the router's own state actually
+	# changed) traded a real, visible cost for zero benefit.
+	if [ -f "$ok_marker" ]; then
+		sr_restart_xray
+	else
+		sr_log "refresh: every subscription failed to re-import, skipping xray restart"
+	fi
+	rm -f "$ok_marker"
 	jq -n --arg now "$now" '{last: ($now|tonumber)}' >"$SR_REFRESH_STATE_FILE"
 }
 
