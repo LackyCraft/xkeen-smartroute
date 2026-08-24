@@ -279,12 +279,31 @@ function T(key) {
 
 // --- RPC bridge: POST /api/call/{method} {args...} -> the exact JSON the
 // rpcd script itself would have returned to LuCI ---
+//
+// A 401 here only ever means one thing -- requireAuth (gateway/auth.go)
+// rejected the request because the session cookie is missing/expired/
+// revoked; handleRPC itself never returns 401 for any other reason. Left
+// unhandled, that response body ({"success":false,"error":"unauthorized"})
+// used to flow straight into each api.* wrapper's own `.then(r => r.foo ||
+// [])` below, which silently resolved to an empty list/object -- a session
+// that died mid-visit (7-day TTL elapsed, a password change elsewhere,
+// this process restarting and dropping in-memory sessions) rendered as
+// "you have no servers/profiles/subscriptions" instead of "please log back
+// in". Catch it here, once, and send the user to the login screen instead
+// of letting every call site downstream have to guess why its data
+// vanished.
 function apiCall(method, args) {
 	return fetch('/api/call/' + encodeURIComponent(method), {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json' },
 		body: JSON.stringify(args || {})
-	}).then(function (r) { return r.json(); });
+	}).then(function (r) {
+		if (r.status === 401) {
+			showLogin();
+			return Promise.reject(new Error('unauthorized'));
+		}
+		return r.json();
+	});
 }
 
 var api = {
