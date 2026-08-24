@@ -176,8 +176,32 @@ func persistHealth(health map[string]outboundHealth) {
 	for tag, h := range health {
 		merged[tag] = h
 	}
+
+	// Prune entries for tags a subscription refresh has genuinely removed
+	// -- gateway-telemetry.md calls this file "critically important" but
+	// it never shrank, only ever grew: every server that ever existed
+	// stayed in it forever, one stale entry per churned tag, accumulating
+	// for the life of the router. This does NOT undo the merge above (the
+	// whole point of which is keeping a tag's last-known verdict around
+	// while Xray hasn't gotten around to re-probing it since its last
+	// restart, which for a large subscription can take the better part of
+	// an hour) -- only tags loadServers() no longer knows about at all get
+	// dropped, never ones just pending re-probe.
+	if servers, err := loadServers(); err == nil {
+		live := make(map[string]struct{}, len(servers))
+		for _, s := range servers {
+			live[s.Tag] = struct{}{}
+		}
+		for tag := range merged {
+			if _, ok := live[tag]; !ok {
+				delete(merged, tag)
+			}
+		}
+	}
+
 	b, err := json.Marshal(merged)
 	if err != nil {
+		log.Printf("persistHealth: marshal: %v", err)
 		return
 	}
 	// A power cut mid-write (this fires every 20s, all day) can leave a
@@ -192,7 +216,10 @@ func persistHealth(health map[string]outboundHealth) {
 	// never a partial write.
 	tmp := healthStateFile + ".tmp"
 	if err := os.WriteFile(tmp, b, 0o644); err != nil {
+		log.Printf("persistHealth: write %s: %v", tmp, err)
 		return
 	}
-	_ = os.Rename(tmp, healthStateFile)
+	if err := os.Rename(tmp, healthStateFile); err != nil {
+		log.Printf("persistHealth: rename %s -> %s: %v", tmp, healthStateFile, err)
+	}
 }
