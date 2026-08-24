@@ -100,6 +100,22 @@ sr_fetch_sub() {
 	curl "$@" "$url"
 }
 
+# redact_url: scheme://host/path only -- strips everything from the first
+# "?" onward. Subscription URLs carry their access secret as a query-string
+# token (e.g. ?token=...); logging the URL verbatim on a fetch failure put
+# that token in syslog (sr_die -> sr_log -> `logger`, readable by anyone
+# with router access, and plausibly the exact thing a user pastes into a
+# support request) and in the RPC error response's own .detail field
+# (returned straight to the browser, see import_subscription in the rpcd
+# script). Keeping host/path lets a failure still be diagnosed ("which
+# subscription, which host") without the secret.
+redact_url() {
+	case "$1" in
+		*\?*) printf '%s***' "${1%%\?*}" ;;
+		*) printf '%s' "$1" ;;
+	esac
+}
+
 urldecode() {
 	# percent-decode + turn '+' into space, POSIX-portable (no bash-isms)
 	printf '%b' "$(printf '%s' "$1" | sed 's/+/ /g; s/%\(..\)/\\x\1/g')"
@@ -382,7 +398,7 @@ sr_import() {
 	done
 	trap 'rm -rf "$lock_dir"' EXIT INT TERM
 
-	raw="$(sr_fetch_sub "$client" "$url" "$os_ov" "$locale_ov" "$model_ov" "$ver_ov" "$hwid_ov")" || sr_die "failed to fetch subscription: $url"
+	raw="$(sr_fetch_sub "$client" "$url" "$os_ov" "$locale_ov" "$model_ov" "$ver_ov" "$hwid_ov")" || sr_die "failed to fetch subscription: $(redact_url "$url")"
 	decoded="$(printf '%s' "$raw" | base64 -d 2>/dev/null || true)"
 	case "$decoded" in
 		*"://"*) body="$decoded" ;;
@@ -608,6 +624,11 @@ sr_save_subscription_meta() {
 		'{url:$url, label:$label, client:$client, os:$os, locale:$locale, model:$model, ver:$ver, hwid:$hwid}')"
 	jq --arg lbl "$label" --argjson e "$entry" '[.[] | select(.label != $lbl)] + [$e]' "$SR_SUBS_META_FILE" >"$SR_SUBS_META_FILE.new"
 	mv "$SR_SUBS_META_FILE.new" "$SR_SUBS_META_FILE"
+	# Contains each subscription's raw URL, secret token included -- same
+	# tier as gateway_password_hash, which this project already stores
+	# 0600. Re-asserted on every write since `mv` from a freshly-written
+	# .new file doesn't inherit any prior chmod, just the default umask.
+	chmod 600 "$SR_SUBS_META_FILE" 2>/dev/null || true
 }
 
 sr_get_refresh_hours() {
@@ -730,6 +751,11 @@ sr_delete_subscription() {
 	[ -s "$SR_SUBS_META_FILE" ] || echo '[]' >"$SR_SUBS_META_FILE"
 	jq --arg lbl "$label" '[.[] | select(.label != $lbl)]' "$SR_SUBS_META_FILE" >"$SR_SUBS_META_FILE.new"
 	mv "$SR_SUBS_META_FILE.new" "$SR_SUBS_META_FILE"
+	# Contains each subscription's raw URL, secret token included -- same
+	# tier as gateway_password_hash, which this project already stores
+	# 0600. Re-asserted on every write since `mv` from a freshly-written
+	# .new file doesn't inherit any prior chmod, just the default umask.
+	chmod 600 "$SR_SUBS_META_FILE" 2>/dev/null || true
 
 	sr_restart_xray || true
 	sr_log "subscription '$label' deleted"
