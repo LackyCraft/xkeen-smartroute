@@ -11,6 +11,7 @@
 - [Генерация тега: история трёх коллизий](#генерация-тега-история-трёх-коллизий)
 - [match_key: отдельная, более грубая идентичность](#match_key-отдельная-более-грубая-идентичность)
 - [Атомарность импорта: блокировка и пустой ответ](#атомарность-импорта-блокировка-и-пустой-ответ)
+- [Импорт: один файл на узел, не переразбор всего массива на каждой строке](#импорт-один-файл-на-узел-не-переразбор-всего-массива-на-каждой-строке)
 - [ARG_MAX: почему outbounds пишутся через файл, а не аргумент](#arg_max-почему-outbounds-пишутся-через-файл-а-не-аргумент)
 - [Пинг: почему последовательно, а не параллельно](#пинг-почему-последовательно-а-не-параллельно)
 
@@ -23,7 +24,7 @@ base64, и если получившийся текст содержит `://` �
 считает, что сервер уже отдал обычный (не закодированный) текст:
 
 ```sh
-raw="$(sr_fetch_sub "$client" "$url" "$os_ov" "$locale_ov" "$model_ov" "$ver_ov" "$hwid_ov")" || sr_die "failed to fetch subscription: $url"
+raw="$(sr_fetch_sub "$client" "$url" "$os_ov" "$locale_ov" "$model_ov" "$ver_ov" "$hwid_ov")" || sr_die "failed to fetch subscription: $(redact_url "$url")"
 decoded="$(printf '%s' "$raw" | base64 -d 2>/dev/null || true)"
 case "$decoded" in
 	*"://"*) body="$decoded" ;;
@@ -31,7 +32,21 @@ case "$decoded" in
 esac
 ```
 
-([`lib/subscription.sh:315-320`](../../lib/subscription.sh#L315-L320))
+([`lib/subscription.sh:401-406`](../../lib/subscription.sh#L401-L406))
+
+`redact_url()` (найденная и закрытая реальная утечка секрета): URL
+подписки несёт токен доступа прямо в query-строке. Ошибка фетча
+логировалась (`sr_die` → `sr_log` → `logger`, читаемо любым, у кого
+есть доступ к роутеру) и возвращалась в `.detail` RPC-ответа **целиком,
+с токеном** — достижимо не только при первом импорте, но и через
+`refresh_subscription`/`refresh_now` на уже сохранённой подписке, то
+есть без пароля панели (документированный дефолт) любой LAN-клиент мог
+дёрнуть refresh и прочитать чужой токен. `redact_url()` оставляет
+`scheme://host/path`, обрезая всё от первого `?` — этого достаточно,
+чтобы понять, какая подписка и какой хост не ответили, не раскрывая
+секрет. Тем же приёмом (`chmod 600`) теперь защищён и
+`state/subscriptions.json`, где эти URL хранятся постоянно — раньше
+были доступны на чтение всем (0644).
 
 ## Обход anti-bot защиты подписок (client presets)
 
@@ -89,7 +104,27 @@ esac
 Дальше — ручной разбор URI без внешних библиотек (POSIX `sh`, никаких
 `bash`-измов): `user@host:port?query#fragment` разбирается через
 `${var%pattern}` / `${var#pattern}` подстановки
-([`lib/subscription.sh:339-352`](../../lib/subscription.sh#L339-L352)).
+([`lib/subscription.sh:433-445`](../../lib/subscription.sh#L433-L445)).
+
+Отдельно обрабатывается IPv6-литерал в квадратных скобках
+(`[2001:db8::1]:443`, обязательная по RFC 3986 форма записи IPv6-хоста
+в URI — иначе собственные двоеточия литерала было бы не отличить от
+разделителя `:port`). Найденный и исправленный реальный баг: `host="${hostport%:*}"`
+сам по себе корректно находит порт после закрывающей скобки, но
+оставляет сами скобки внутри `$host` — а Xray-шное поле `address`
+ожидает голый литерал, не URI-синтаксис со скобками, так что реальный
+IPv6-сервер тихо не подключался (`address: "[2001:db8::1]"` — не
+валидный адрес, просто испорченный). Скобки срезаются отдельным
+шагом сразу после разбора хоста:
+
+```sh
+case "$host" in
+	\[*\]) host="${host#\[}"; host="${host%\]}" ;;
+esac
+```
+
+([`lib/subscription.sh:456-458`](../../lib/subscription.sh#L456-L458))
+
 `qval()` вытаскивает конкретный query-параметр (ещё в percent-encoded
 виде), `urldecode()` — percent-decode + `+` → пробел, оба
 POSIX-портируемые (без `bash`-массивов/regex-подстановок):
@@ -104,13 +139,13 @@ qval() {
 }
 ```
 
-([`lib/subscription.sh:103-111`](../../lib/subscription.sh#L103-L111))
+([`lib/subscription.sh:119-127`](../../lib/subscription.sh#L119-L127))
 
 `build_outbound()` собирает итоговый Xray outbound-объект из разобранных
 полей — protocol-specific `settings` (vless: `vnext`+`users`, trojan:
 `servers`+`password`), затем `streamSettings` по `security`
 (`tls`/`reality`/`none`) и `network` (`tcp`/`ws`/`grpc`/`xhttp`), одним
-`jq -n` вызовом ([`lib/subscription.sh:118-208`](../../lib/subscription.sh#L118-L208)).
+`jq -n` вызовом ([`lib/subscription.sh:134-225`](../../lib/subscription.sh#L134-L225)).
 
 ## XHTTP `extra`: почему это не опциональное украшение
 
@@ -135,7 +170,7 @@ extra_json="$(printf '%s' "$extra_raw" | jq -c . 2>/dev/null)"
 [ -n "$extra_json" ] || extra_json='null'
 ```
 
-([`lib/subscription.sh:165-177`](../../lib/subscription.sh#L165-L177))
+([`lib/subscription.sh:181-193`](../../lib/subscription.sh#L181-L193))
 
 **Реальный баг, который тут был и починен**: `jq -c .` на пустом
 stdin (нет `extra` у большинства узлов, особенно REALITY) завершается
@@ -169,7 +204,7 @@ line_hash="$(printf '%s' "$line" | md5sum | cut -c1-10)"
 tag="sr_${label_slug}_$(slugify "$host")_${port}_${name_slug}_${line_hash}"
 ```
 
-([`lib/subscription.sh:391-393`](../../lib/subscription.sh#L391-L393))
+([`lib/subscription.sh:498-500`](../../lib/subscription.sh#L498-L500))
 
 Три коллизии, найденные на реальной подписке (152 узла), в порядке
 эскалации фикса:
@@ -204,7 +239,7 @@ match_sni="$(urldecode "$(qval "$query" sni)")"; [ -n "$match_sni" ] || match_sn
 match_key="$(printf '%s|%s|%s|%s' "$host" "$port" "$secret" "$match_sni" | md5sum | cut -c1-16)"
 ```
 
-([`lib/subscription.sh:408-409`](../../lib/subscription.sh#L408-L409))
+([`lib/subscription.sh:515-516`](../../lib/subscription.sh#L515-L516))
 
 `host+port+secret+camouflage-домен` (sni, с фолбэком на host) — это то,
 что реально определяет "тот же логический узел" у провайдера; путь,
@@ -246,7 +281,7 @@ done
 trap 'rm -rf "$lock_dir"' EXIT INT TERM
 ```
 
-([`lib/subscription.sh:297-313`](../../lib/subscription.sh#L297-L313))
+([`lib/subscription.sh:383-399`](../../lib/subscription.sh#L383-L399))
 Явный "Обновить сейчас", гоняющийся с часовым cron-рефрешем, всё равно
 должен реально импортировать — не молча ничего не делать только потому,
 что кто-то другой оказался первым.
@@ -261,12 +296,40 @@ trap 'rm -rf "$lock_dir"' EXIT INT TERM
 parsed_count="$(jq 'length' "$tmp_servers")"
 if [ "$parsed_count" -eq 0 ]; then
 	sr_log "import '$label' fetched 0 usable server(s) (empty/invalid response?) -- keeping existing data untouched"
-	rm -f "$tmp_outbounds" "$tmp_servers" ...
+	rm -f "$tmp_outbounds" "$tmp_servers" 2>/dev/null || true
 	return 1
 fi
 ```
 
-([`lib/subscription.sh:426-431`](../../lib/subscription.sh#L426-L431))
+([`lib/subscription.sh:544-549`](../../lib/subscription.sh#L544-L549))
+
+## Импорт: один файл на узел, не переразбор всего массива на каждой строке
+
+Найдена и закрыта реальная O(n²)-проблема: цикл разбора раньше на
+**каждой** строке подписки перечитывал, перепарсивал и переписывал
+весь накопленный массив outbounds/servers целиком (`jq --argjson ob '.
++ [$ob]' "$tmp_outbounds" > ...`) — O(n) работы на сервер, O(n²) в
+сумме на подписку в диапазоне 150-190 серверов, который этот проект
+реально видит; на слабом железе роутера это заметная доля времени
+импорта. Сейчас каждый разобранный узел пишет **свой** маленький файл
+(`ob_N.json`/`sv_N.json`) во временную директорию, не трогая
+накопленный массив вообще, а один `jq -s` (slurp) после цикла сливает
+все файлы за один O(n) проход:
+
+```sh
+if ls "$tmp_dir"/ob_*.json >/dev/null 2>&1; then
+	jq -s '.' "$tmp_dir"/ob_*.json >"$tmp_outbounds"
+else
+	echo '[]' >"$tmp_outbounds"
+fi
+```
+
+([`lib/subscription.sh:408-419`](../../lib/subscription.sh#L408-L419),
+[`lib/subscription.sh:520-536`](../../lib/subscription.sh#L520-L536))
+
+Тот же итоговый формат, та же независимость от порядка (теги и
+`match_key` уже глобально уникальны по построению, ничего ниже по
+цепочке не зависит от порядка массива).
 
 ## ARG_MAX: почему outbounds пишутся через файл, а не аргумент
 
@@ -279,7 +342,7 @@ fi
 единого outbound'а. Финальная версия читает состояние прямо из файла
 (`jq '...' "$SR_OUTBOUNDS_STATE_FILE"`, без прогона через аргумент
 шелла) и пишет во временный файл перед атомарным `mv`
-([`lib/subscription.sh:504-515`](../../lib/subscription.sh#L504-L515)) —
+([`lib/subscription.sh:623-634`](../../lib/subscription.sh#L623-L634)) —
 закрывает и лимит размера, и риск оставить обрезанный файл при любом
 сбое на середине записи.
 

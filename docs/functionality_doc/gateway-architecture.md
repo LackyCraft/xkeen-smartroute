@@ -10,6 +10,8 @@
 - [Файловая структура](#файловая-структура)
 - [Как читаются состояния (smartroute.go)](#как-читаются-состояния-smartroutego)
 - [Единственный путь записи: PUT /proxies/{name}](#единственный-путь-записи-put-proxiesname)
+- [Same-origin: CORS, Host, WebSocket](#same-origin-cors-host-websocket)
+- [`http.Server`: таймауты и WS-keepalive](#httpserver-таймауты-и-ws-keepalive)
 - [Процесс: сборка, деплой, боевой цикл](#процесс-сборка-деплой-боевой-цикл)
 
 ## Зачем свой сервис, а не готовый Mihomo
@@ -123,16 +125,122 @@ func saveProfile(p srProfile) error {
 }
 ```
 
-([`gateway/handlers.go:210-232`](../../gateway/handlers.go#L210-L232))
+([`gateway/handlers.go:217-239`](../../gateway/handlers.go#L217-L239))
 
 Это тот же `genroute.sh save`, что и rpcd-скрипт вызывает из LuCI, и
 что кнопка "Сохранить" в панели вызывает через RPC-мост — единая точка
 входа, единая валидация, единый рестарт Xray
 ([routing-generation.md](routing-generation.md)).
 
-`handleDelay()` — TCP+TLS connect-таймер, независимый от общего пинга
-`lib/subscription.sh` (тот же принцип: измеряется голое время
-установления соединения, не полноценный proxy-хендшейк).
+`srProfile` (`smartroute.go`) обязан перечислять **каждое** поле, которое
+реально может быть в файле профиля, не только те, что использует эта
+конкретная ручка — `json.Unmarshal` в Go молча отбрасывает поля JSON, у
+которых нет соответствующего поля структуры, а `json.Marshal` при записи
+обратно просто не напишет то, чего не было прочитано. Подтверждено
+вживую: `devices`/`ip_ranges`/`removed_servers` отсутствовали в
+структуре — выбор конкретного сервера через `PUT /proxies/{name}`
+(например, дашбордом yacd/metacubexd) молча стирал ограничение профиля
+по устройствам/IP-диапазонам при следующем же сохранении через этот
+путь, хотя сам пользователь ничего такого не трогал.
+
+`handleDelay()` — TLS-хендшейк-таймер (не голый TCP-connect, несмотря
+на то что комментарий в коде когда-то утверждал обратное — все узлы,
+для которых этот проект вообще генерирует outbound'ы, говорят
+VLESS/Trojan поверх TLS или REALITY), независимый от общего пинга
+`lib/subscription.sh`. `?timeout=` теперь ограничен 15 секундами
+сверху — раньше клиент мог запросить произвольно большое значение и
+держать goroutine с диалером открытой сколько угодно, по одной на
+каждый такой запрос.
+
+## Same-origin: CORS, Host, WebSocket
+
+При отсутствии пароля (задокументированный дефолт) единственная
+граница, отделяющая эту панель от любой веб-страницы, которую LAN-юзер
+открыл в соседней вкладке — это same-origin-проверка на уровне HTTP.
+Раньше её не было вообще:
+
+```go
+func sameOriginHost(origin, host string) bool {
+	if origin == "" {
+		return true
+	}
+	u, err := url.Parse(origin)
+	if err != nil || u.Host == "" {
+		return false
+	}
+	return u.Host == host
+}
+```
+
+([`gateway/main.go:133-142`](../../gateway/main.go#L133-L142))
+
+`corsWrap` отражает `Origin` обратно только когда он совпадает с
+`r.Host` этого же запроса (а не хардкодит allowlist конкретных
+адресов — работает независимо от того, по какому LAN IP/hostname
+реально открыта панель), и отвечает на preflight сам, а не через
+отдельный вечно висящий маршрут `OPTIONS /`
+([`gateway/main.go:153-168`](../../gateway/main.go#L153-L168)). Та же
+проверка используется в `upgrader.CheckOrigin`
+([`gateway/main.go:175-179`](../../gateway/main.go#L175-L179)) — раньше
+было `CheckOrigin: func(r *http.Request) bool { return true }`, то есть
+**любой** сайт мог открыть кросс-сайтовый WebSocket к `/traffic` или
+`/logs` и стримить чужой роутерный лог посещённых доменов.
+
+Найдено вживую при проверке: одного `corsWrap` было недостаточно —
+`writeJSON` (handlers.go) и `handleRPC` (rpc.go) каждый independently
+ставил свой собственный хардкодный `Access-Control-Allow-Origin: *`
+**поверх** уже правильно выставленного значения (`Header().Set`
+замещает, не мержит) на каждом отдельном ответе — из-за этого
+исправленный `corsWrap` всё равно измерялся как полностью открытый
+`*` на любом реальном эндпоинте, пока оба лишних `Set()` не были
+убраны.
+
+## `http.Server`: таймауты и WS-keepalive
+
+`http.ListenAndServe` без настроек не ограничивает ни время чтения
+заголовков, ни время простоя keep-alive соединения, ни размер
+заголовков — на железе такого класса это реальный slowloris-риск, не
+теоретический. `main()` теперь конфигурирует `http.Server` явно
+(`ReadHeaderTimeout`, `IdleTimeout`, `MaxHeaderBytes`) — ничего из
+этого не действует на уже апгрейженное WebSocket-соединение, тем
+занимается отдельный механизм ниже.
+
+Ни `/traffic`, ни `/logs` раньше не читали из своего же соединения ни
+байта — `gorilla/websocket` обрабатывает входящие control-фреймы
+(pong, close) только пока что-то активно вызывает `ReadMessage`. Без
+этого клиент, чьё TCP-соединение оборвалось не чистым FIN/RST
+(телефон вышел из Wi-Fi посреди сессии, ноутбук уснул, NAT-таймаут —
+не редкость), оставлял `conn.WriteJSON` буквально не с чем упасть,
+пока не сработает таймаут повторных попыток самого TCP на уровне ОС
+(может занять минуты) — всё это время горутина, её тикер и (для
+`/traffic`) опрос Xray API раз в секунду продолжали жить ради пира,
+которого уже нет. `wsKeepalive()` добавляет стандартный для
+`gorilla/websocket` heartbeat — read pump плюс read-дедлайн, который
+двигает только свежий pong:
+
+```go
+func wsKeepalive(conn *websocket.Conn, cancel context.CancelFunc) {
+	conn.SetReadDeadline(time.Now().Add(wsPongWait))
+	conn.SetPongHandler(func(string) error {
+		conn.SetReadDeadline(time.Now().Add(wsPongWait))
+		return nil
+	})
+	go func() {
+		defer cancel()
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	}()
+}
+```
+
+([`gateway/main.go:202-216`](../../gateway/main.go#L202-L216))
+
+Используется обоими WS-хендлерами (`/traffic` в `main.go`, `/logs` в
+`logs.go`) — мёртвый пир теперь обнаруживается в пределах `wsPongWait`
+(30с), а не сколько бы ни занимал голый TCP.
 
 ## Процесс: сборка, деплой, боевой цикл
 
