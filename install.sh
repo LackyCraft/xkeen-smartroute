@@ -472,7 +472,6 @@ for f in common.sh subscription.sh genroute.sh killswitch.sh redirect.sh; do
 	wget -O "$SR_LIB_DIR/$f" "$REPO_RAW/lib/$f" || die "не удалось скачать lib/$f"
 	chmod +x "$SR_LIB_DIR/$f"
 done
-sed -i "s#XKEEN_CONFIGS_DIR=\"/opt/etc/xray/configs\"#XKEEN_CONFIGS_DIR=\"/opt/etc/xray/configs\"#" "$SR_LIB_DIR/common.sh" 2>/dev/null || true
 
 wget -O "$SR_ETC_DIR/lists/geosite-categories.json" "$REPO_RAW/lists/geosite-categories.json" || true
 wget -O "$SR_ETC_DIR/lists/custom-categories.json" "$REPO_RAW/lists/custom-categories.json" || true
