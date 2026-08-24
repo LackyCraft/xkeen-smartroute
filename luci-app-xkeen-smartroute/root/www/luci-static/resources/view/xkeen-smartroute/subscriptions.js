@@ -3,6 +3,17 @@
 'require ui';
 'require xkeen-smartroute as sr';
 
+// A big subscription's refresh/ping can genuinely take minutes (sequential
+// per-server probing, see lib/subscription.sh) -- the previous 8x4s/10x3s
+// windows (24-40s total) stopped polling long before a slow run actually
+// finished, which read as "refresh looks broken" even though it was still
+// working in the background the whole time. The gateway panel's own copy
+// of this same poll already carries the real fix (60x5s = 5 minutes); this
+// just ports the same window here instead of leaving LuCI on the shorter,
+// already-known-insufficient one.
+var BACKGROUND_POLL_TIMES = 60;
+var BACKGROUND_POLL_INTERVAL_MS = 5000; // 60 * 5s = 5 minutes
+
 return view.extend({
 	load: function () {
 		return Promise.all([
@@ -114,7 +125,7 @@ return view.extend({
 		view.renderSubscriptions();
 		return sr.rpc.refreshNow().then(function () {
 			ui.addNotification(null, E('p', {}, sr.T('refresh_now_started')), 'info');
-			return view.pollAndRerender(8, 4000).then(function () {
+			return view.pollAndRerender(BACKGROUND_POLL_TIMES, BACKGROUND_POLL_INTERVAL_MS).then(function () {
 				view.refreshingAll = false;
 				btn.disabled = false;
 				btn.textContent = sr.T('refresh_now_btn');
@@ -132,7 +143,7 @@ return view.extend({
 		view.renderSubscriptions();
 		return sr.rpc.pingServers().then(function () {
 			ui.addNotification(null, E('p', {}, sr.T('sub_ping_started')), 'info');
-			return view.pollAndRerender(10, 3000).then(function () {
+			return view.pollAndRerender(BACKGROUND_POLL_TIMES, BACKGROUND_POLL_INTERVAL_MS).then(function () {
 				view.pingingAll = false;
 				btn.disabled = false;
 				btn.textContent = sr.T('sub_ping_all_btn');
@@ -150,7 +161,7 @@ return view.extend({
 		view.refreshingLabels[label] = true;
 		view.renderSubscriptions();
 		return sr.rpc.refreshSubscription(label).then(function () {
-			return view.pollAndRerender(8, 4000).then(function () {
+			return view.pollAndRerender(BACKGROUND_POLL_TIMES, BACKGROUND_POLL_INTERVAL_MS).then(function () {
 				delete view.refreshingLabels[label];
 				btn.disabled = false;
 				btn.textContent = sr.T('refresh_btn');
@@ -168,7 +179,7 @@ return view.extend({
 		view.pingingLabels[label] = true;
 		view.renderSubscriptions();
 		return sr.rpc.pingSubscription(label).then(function () {
-			return view.pollAndRerender(8, 3000).then(function () {
+			return view.pollAndRerender(BACKGROUND_POLL_TIMES, BACKGROUND_POLL_INTERVAL_MS).then(function () {
 				delete view.pingingLabels[label];
 				btn.disabled = false;
 				btn.textContent = sr.T('ping_btn');
