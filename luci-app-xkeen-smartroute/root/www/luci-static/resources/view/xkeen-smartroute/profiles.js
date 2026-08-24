@@ -169,23 +169,11 @@ return view.extend({
 	// a profile out of a single flat list of 100+ entries across several
 	// subscriptions was the actual usability problem being solved here, not
 	// just cosmetics.
-	pingLabel: function (tag) {
-		var ms = (this.pings || {})[tag];
-		if (ms === null || ms === undefined) return sr.T('ping_timeout');
-		if (typeof ms === 'number') return ms + ' ms';
-		return '—';
-	},
-
-	groupServersBySubscription: function (servers) {
-		var groups = {};
-		var order = [];
-		servers.forEach(function (s) {
-			var key = s.subscription || '';
-			if (!groups[key]) { groups[key] = []; order.push(key); }
-			groups[key].push(s);
-		});
-		return order.map(function (key) { return { label: key, servers: groups[key] }; });
-	},
+	// pingLabel/serverForTag/activityDot/groupServersBySubscription now live
+	// in the shared xkeen-smartroute.js module (sr.*) -- see its own comment
+	// for why: these were copied into every view that needed them (this
+	// file, doublevpn.js, and both again in the gateway panel), the exact
+	// duplication vector F-B1/F-B2 spread through.
 
 	handleToggleServerGroup: function (label) {
 		this.serverGroupExpanded = this.serverGroupExpanded || {};
@@ -219,7 +207,7 @@ return view.extend({
 		// uses for its pool picker).
 		view._picked = view._picked || {};
 
-		var groups = view.groupServersBySubscription(servers);
+		var groups = sr.groupServersBySubscription(servers);
 		groups.forEach(function (g) {
 			var isOpen = !!(view.serverGroupExpanded && view.serverGroupExpanded[g.label]);
 			var toggle = E('a', { 'href': '#', 'style': 'font-weight:bold;text-decoration:none;display:block;margin:.5em 0 .25em' },
@@ -250,7 +238,7 @@ return view.extend({
 					}
 				});
 				list.appendChild(E('label', { 'style': 'display:flex;align-items:center;gap:.4em;padding:.15em 0' }, [
-					input, sr.renderName(s.name), ' (', s.address, ':', String(s.port), ', ', s.protocol, ', ', view.pingLabel(s.tag), ')'
+					input, sr.renderName(s.name), ' (', s.address, ':', String(s.port), ', ', s.protocol, ', ', sr.pingLabel(s.tag, view.pings), ')'
 				]));
 			});
 			box.appendChild(list);
@@ -427,7 +415,7 @@ return view.extend({
 		this._picked = {};
 		tags.forEach(function (t) {
 			view._picked[t] = true;
-			var s = view.serverForTag(t);
+			var s = sr.serverForTag(t, view.servers);
 			if (s) view.serverGroupExpanded[s.subscription || ''] = true;
 		});
 		this.renderServerPicker();
@@ -463,23 +451,6 @@ return view.extend({
 		});
 	},
 
-	serverForTag: function (tag) {
-		return (this.servers || []).filter(function (x) { return x.tag === tag; })[0] || { tag: tag, name: tag };
-	},
-
-	// Small colored dot: green + glow while the given outbound tag has
-	// carried traffic in the last few seconds (this.activeTags, refreshed by
-	// pollActivity), grey otherwise. Grey covers both "genuinely idle" and
-	// "no data yet" -- there's no third state worth the extra complexity,
-	// since the tooltip already explains what green means.
-	activityDot: function (tag) {
-		var active = !!(tag && this.activeTags && this.activeTags[tag]);
-		return E('span', {
-			'title': sr.T(active ? 'activity_online' : 'activity_idle'),
-			'style': 'display:inline-block;width:.6em;height:.6em;border-radius:50%;margin-right:.4em;' +
-				(active ? 'background:#2ecc71;box-shadow:0 0 4px #2ecc71' : 'background:var(--border-color-medium,#bbb)')
-		});
-	},
 
 	handleToggleProfileTarget: function (name) {
 		this.profileTargetExpanded = this.profileTargetExpanded || {};
@@ -518,7 +489,7 @@ return view.extend({
 
 			var targetNode;
 			if (p.mode === 'fixed') {
-				targetNode = E('span', {}, [view.activityDot(p.fixed_server), sr.renderName(view.serverForTag(p.fixed_server).name)]);
+				targetNode = E('span', {}, [sr.activityDot(p.fixed_server, view.activeTags), sr.renderName(sr.serverForTag(p.fixed_server, view.servers).name)]);
 			} else {
 				var tags = p.servers || [];
 				var currentTag = (view.current && view.current[p.name]) || '';
@@ -528,13 +499,13 @@ return view.extend({
 				toggle.addEventListener('click', function (ev) { ev.preventDefault(); view.handleToggleProfileTarget(p.name); });
 				var children = [];
 				if (currentTag) {
-					children.push(E('div', { 'style': 'margin-bottom:.25em' }, [view.activityDot(currentTag), sr.renderName(view.serverForTag(currentTag).name)]));
+					children.push(E('div', { 'style': 'margin-bottom:.25em' }, [sr.activityDot(currentTag, view.activeTags), sr.renderName(sr.serverForTag(currentTag, view.servers).name)]));
 				}
 				children.push(toggle);
 				if (isOpen) {
 					var list = E('div', { 'style': 'margin:.35em 0 0 .5em' });
 					tags.forEach(function (t) {
-						list.appendChild(E('div', { 'style': 'padding:.1em 0' }, [view.activityDot(t), sr.renderName(view.serverForTag(t).name)]));
+						list.appendChild(E('div', { 'style': 'padding:.1em 0' }, [sr.activityDot(t, view.activeTags), sr.renderName(sr.serverForTag(t, view.servers).name)]));
 					});
 					children.push(list);
 				}

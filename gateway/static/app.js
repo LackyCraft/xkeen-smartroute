@@ -492,6 +492,38 @@ function spinner() {
 	return E('span', { class: 'sr-spinner' });
 }
 
+// pingLabel/serverForTag/activityDot/groupServersBySubscription: used
+// identically by both profiles.js and doublevpn.js's server pickers here --
+// used to be copied into each page separately (2 definitions in this panel,
+// another 2 in LuCI's own copies). Take their state as an explicit
+// parameter rather than reading module-local `st`, so both callers can pass
+// whichever state applies.
+function pingLabel(tag, pings) {
+	var ms = (pings || {})[tag];
+	if (ms === null || ms === undefined) return T('ping_timeout');
+	if (typeof ms === 'number') return ms + ' ms';
+	return '—';
+}
+
+function serverForTag(tag, servers) {
+	return (servers || []).filter(function (x) { return x.tag === tag; })[0] || { tag: tag, name: tag };
+}
+
+function activityDot(tag, activeTags) {
+	var active = !!(tag && activeTags && activeTags[tag]);
+	return E('span', { title: T(active ? 'activity_online' : 'activity_idle'), class: 'sr-dot ' + (active ? 'sr-dot-ok' : '') });
+}
+
+function groupServersBySubscription(servers) {
+	var groups = {}, order = [];
+	servers.forEach(function (s) {
+		var key = s.subscription || '';
+		if (!groups[key]) { groups[key] = []; order.push(key); }
+		groups[key].push(s);
+	});
+	return order.map(function (key) { return { label: key, servers: groups[key] }; });
+}
+
 // relTime: epoch seconds or an ISO8601 string -> "Xm ago"/never
 function relTime(v) {
 	if (!v) return T('status_metrics_never');
@@ -553,6 +585,8 @@ window.SR = {
 	renderName: renderName, sanitizeDomain: sanitizeDomain, spinner: spinner,
 	relTime: relTime, fmtBytes: fmtBytes, toast: toast, parseIpRanges: parseIpRanges,
 	sectionVisible: sectionVisible,
+	pingLabel: pingLabel, serverForTag: serverForTag, activityDot: activityDot,
+	groupServersBySubscription: groupServersBySubscription,
 	CLIENT_PRESETS: CLIENT_PRESETS, DEVICE_OS_OPTIONS: DEVICE_OS_OPTIONS,
 	DEVICE_MODEL_OPTIONS: DEVICE_MODEL_OPTIONS, DEVICE_VER_OPTIONS: DEVICE_VER_OPTIONS
 };

@@ -16,36 +16,9 @@ return view.extend({
 		]);
 	},
 
-	pingLabel: function (tag) {
-		var ms = (this.pings || {})[tag];
-		if (ms === null || ms === undefined) return sr.T('ping_timeout');
-		if (typeof ms === 'number') return ms + ' ms';
-		return '—';
-	},
-
-	serverForTag: function (tag) {
-		return (this.servers || []).filter(function (x) { return x.tag === tag; })[0] || { tag: tag, name: tag };
-	},
-
-	activityDot: function (tag) {
-		var active = !!(tag && this.activeTags && this.activeTags[tag]);
-		return E('span', {
-			'title': sr.T(active ? 'activity_online' : 'activity_idle'),
-			'style': 'display:inline-block;width:.6em;height:.6em;border-radius:50%;margin-right:.4em;' +
-				(active ? 'background:#2ecc71;box-shadow:0 0 4px #2ecc71' : 'background:var(--border-color-medium,#bbb)')
-		});
-	},
-
-	groupServersBySubscription: function (servers) {
-		var groups = {};
-		var order = [];
-		servers.forEach(function (s) {
-			var key = s.subscription || '';
-			if (!groups[key]) { groups[key] = []; order.push(key); }
-			groups[key].push(s);
-		});
-		return order.map(function (key) { return { label: key, servers: groups[key] }; });
-	},
+	// pingLabel/serverForTag/activityDot/groupServersBySubscription now live
+	// in the shared xkeen-smartroute.js module (sr.*) -- see its own
+	// comment for why.
 
 	handleToggleServerGroup: function (label) {
 		this.serverGroupExpanded = this.serverGroupExpanded || {};
@@ -67,7 +40,7 @@ return view.extend({
 
 		if (!view._picked) view._picked = {};
 
-		var groups = view.groupServersBySubscription(servers);
+		var groups = sr.groupServersBySubscription(servers);
 		groups.forEach(function (g) {
 			var isOpen = !!(view.serverGroupExpanded && view.serverGroupExpanded[g.label]);
 			var toggle = E('a', { 'href': '#', 'style': 'font-weight:bold;text-decoration:none;display:block;margin:.5em 0 .25em' },
@@ -84,7 +57,7 @@ return view.extend({
 					if (input.checked) view._picked[s.tag] = true; else delete view._picked[s.tag];
 				});
 				list.appendChild(E('label', { 'style': 'display:flex;align-items:center;gap:.4em;padding:.15em 0' }, [
-					input, sr.renderName(s.name), ' (', s.address, ':', String(s.port), ', ', s.protocol, ', ', view.pingLabel(s.tag), ')'
+					input, sr.renderName(s.name), ' (', s.address, ':', String(s.port), ', ', s.protocol, ', ', sr.pingLabel(s.tag, view.pings), ')'
 				]));
 			});
 			box.appendChild(list);
@@ -116,12 +89,12 @@ return view.extend({
 			])
 		]);
 		poolTags.forEach(function (tag) {
-			var s = view.serverForTag(tag);
+			var s = sr.serverForTag(tag, view.servers);
 			var isGateway = tag === gateway;
 			table.appendChild(E('tr', { 'class': 'tr' }, [
-				E('td', { 'class': 'td' }, [isGateway ? view.activityDot(tag) : view.activityDot(null), sr.renderName(s.name)]),
+				E('td', { 'class': 'td' }, [isGateway ? sr.activityDot(tag, view.activeTags) : sr.activityDot(null, view.activeTags), sr.renderName(s.name)]),
 				E('td', { 'class': 'td' }, [s.address ? (s.address + ':' + s.port) : '—']),
-				E('td', { 'class': 'td' }, view.pingLabel(tag)),
+				E('td', { 'class': 'td' }, sr.pingLabel(tag, view.pings)),
 				E('td', { 'class': 'td' }, isGateway ? E('span', {
 					'style': 'display:inline-block;padding:.1em .6em;border-radius:999px;font-size:.78em;font-weight:bold;background:rgba(79,140,255,0.16);color:#4f8cff'
 				}, sr.T('dv_gateway_badge')) : '')
@@ -211,7 +184,7 @@ return view.extend({
 		(this.current.servers || []).forEach(function (t) { view._picked[t] = true; });
 		this.serverGroupExpanded = {};
 		(this.current.servers || []).forEach(function (t) {
-			var s = view.serverForTag(t);
+			var s = sr.serverForTag(t, view.servers);
 			if (s) view.serverGroupExpanded[s.subscription || ''] = true;
 		});
 

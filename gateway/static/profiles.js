@@ -6,31 +6,8 @@
 		serverGroupExpanded: {}, profileTargetExpanded: {}, picked: {}
 	};
 
-	function pingLabel(tag) {
-		var ms = st.pings[tag];
-		if (ms === null || ms === undefined) return T('ping_timeout');
-		if (typeof ms === 'number') return ms + ' ms';
-		return '—';
-	}
-
-	function serverForTag(tag) {
-		return st.servers.filter(function (x) { return x.tag === tag; })[0] || { tag: tag, name: tag };
-	}
-
-	function activityDot(tag) {
-		var active = !!(tag && st.activeTags[tag]);
-		return E('span', { title: T(active ? 'activity_online' : 'activity_idle'), class: 'sr-dot ' + (active ? 'sr-dot-ok' : '') });
-	}
-
-	function groupServersBySubscription(servers) {
-		var groups = {}, order = [];
-		servers.forEach(function (s) {
-			var key = s.subscription || '';
-			if (!groups[key]) { groups[key] = []; order.push(key); }
-			groups[key].push(s);
-		});
-		return order.map(function (key) { return { label: key, servers: groups[key] }; });
-	}
+	// pingLabel/serverForTag/activityDot/groupServersBySubscription now live
+	// in the shared app.js module (SR.*) -- see its own comment for why.
 
 	// Reads/writes st.picked, never the DOM -- the picker only renders
 	// <input> elements for currently-expanded subscription groups, so a
@@ -47,7 +24,7 @@
 
 		if (!st.servers.length) { box.appendChild(E('p', { class: 'sr-desc' }, T('need_servers_first'))); return; }
 
-		groupServersBySubscription(st.servers).forEach(function (g) {
+		SR.groupServersBySubscription(st.servers).forEach(function (g) {
 			var isOpen = !!st.serverGroupExpanded[g.label];
 			var toggle = E('a', { href: '#', style: 'font-weight:700;display:block;margin:6px 0 3px' },
 				(isOpen ? '▾ ' : '▸ ') + (g.label || T('sub_no_subscriptions')) + ' — ' + g.servers.length + ' ' + T('sub_servers_word'));
@@ -72,7 +49,7 @@
 					}
 				});
 				list.appendChild(E('label', { class: 'sr-row', style: 'padding:2px 0' }, [
-					input, SR.renderName(s.name), ' (' + s.address + ':' + s.port + ', ' + s.protocol + ', ' + pingLabel(s.tag) + ')'
+					input, SR.renderName(s.name), ' (' + s.address + ':' + s.port + ', ' + s.protocol + ', ' + SR.pingLabel(s.tag, st.pings) + ')'
 				]));
 			});
 			box.appendChild(list);
@@ -137,7 +114,7 @@
 
 			var targetNode;
 			if (p.mode === 'fixed') {
-				targetNode = E('span', {}, [activityDot(p.fixed_server), SR.renderName(serverForTag(p.fixed_server).name)]);
+				targetNode = E('span', {}, [SR.activityDot(p.fixed_server, st.activeTags), SR.renderName(SR.serverForTag(p.fixed_server, st.servers).name)]);
 			} else {
 				var tags = p.servers || [];
 				var currentTag = st.current[p.name] || '';
@@ -145,11 +122,11 @@
 				var toggle = E('a', { href: '#' }, (isOpen ? '▾ ' : '▸ ') + tags.length + ' ' + T('sub_servers_word') + ' (auto)');
 				toggle.addEventListener('click', function (ev) { ev.preventDefault(); st.profileTargetExpanded[p.name] = !st.profileTargetExpanded[p.name]; renderProfilesTable(); });
 				var children = [];
-				if (currentTag) children.push(E('div', { style: 'margin-bottom:3px' }, [activityDot(currentTag), SR.renderName(serverForTag(currentTag).name)]));
+				if (currentTag) children.push(E('div', { style: 'margin-bottom:3px' }, [SR.activityDot(currentTag, st.activeTags), SR.renderName(SR.serverForTag(currentTag, st.servers).name)]));
 				children.push(toggle);
 				if (isOpen) {
 					var list = E('div', { style: 'margin:4px 0 0 8px' });
-					tags.forEach(function (t) { list.appendChild(E('div', { style: 'padding:1px 0' }, [activityDot(t), SR.renderName(serverForTag(t).name)])); });
+					tags.forEach(function (t) { list.appendChild(E('div', { style: 'padding:1px 0' }, [SR.activityDot(t, st.activeTags), SR.renderName(SR.serverForTag(t, st.servers).name)])); });
 					children.push(list);
 				}
 				targetNode = E('span', {}, children);
@@ -263,7 +240,7 @@
 				var tags = existing.mode === 'fixed' ? [existing.fixed_server] : (existing.servers || []);
 				tags.forEach(function (t) {
 					st.picked[t] = true;
-					var s = serverForTag(t);
+					var s = SR.serverForTag(t, st.servers);
 					if (s) st.serverGroupExpanded[s.subscription || ''] = true;
 				});
 				renderServerPicker();

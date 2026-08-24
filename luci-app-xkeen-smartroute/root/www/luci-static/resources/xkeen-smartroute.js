@@ -547,6 +547,51 @@ function srSpinner() {
 	});
 }
 
+// srPingLabel/srServerForTag/srActivityDot/srGroupServersBySubscription:
+// used identically by both profiles.js and doublevpn.js's server pickers --
+// used to be copied into each view object separately (4 definitions in this
+// app alone, another 4 in the gateway panel's own copies). Take their state
+// as an explicit parameter instead of reading `this.pings`/`this.servers`/
+// `this.activeTags` the way the old per-view methods did, so a caller can
+// pass whichever view's own state applies without needing `.call(view, ...)`
+// to fix up `this`. Exported below as pingLabel/serverForTag/activityDot/
+// groupServersBySubscription.
+function srPingLabel(tag, pings) {
+	var ms = (pings || {})[tag];
+	if (ms === null || ms === undefined) return T('ping_timeout');
+	if (typeof ms === 'number') return ms + ' ms';
+	return '—';
+}
+
+function srServerForTag(tag, servers) {
+	return (servers || []).filter(function (x) { return x.tag === tag; })[0] || { tag: tag, name: tag };
+}
+
+// Small colored dot: green + glow while the given outbound tag has carried
+// traffic in the last few seconds (activeTags, refreshed by each page's own
+// pollActivity), grey otherwise. Grey covers both "genuinely idle" and "no
+// data yet" -- there's no third state worth the extra complexity, since the
+// tooltip already explains what green means.
+function srActivityDot(tag, activeTags) {
+	var active = !!(tag && activeTags && activeTags[tag]);
+	return E('span', {
+		'title': T(active ? 'activity_online' : 'activity_idle'),
+		'style': 'display:inline-block;width:.6em;height:.6em;border-radius:50%;margin-right:.4em;' +
+			(active ? 'background:#2ecc71;box-shadow:0 0 4px #2ecc71' : 'background:var(--border-color-medium,#bbb)')
+	});
+}
+
+function srGroupServersBySubscription(servers) {
+	var groups = {};
+	var order = [];
+	servers.forEach(function (s) {
+		var key = s.subscription || '';
+		if (!groups[key]) { groups[key] = []; order.push(key); }
+		groups[key].push(s);
+	});
+	return order.map(function (key) { return { label: key, servers: groups[key] }; });
+}
+
 // srSanitizeDomain: mirrors sanitize_domain() in the rpcd backend exactly
 // (strip URL scheme, path/query/fragment, trailing :port, lowercase) --
 // pasting a full URL you just had open in a browser tab is the obvious
@@ -720,6 +765,10 @@ return L.Class.extend({
 	spinner: srSpinner,
 	sanitizeDomain: srSanitizeDomain,
 	parseIpRanges: srParseIpRanges,
+	pingLabel: srPingLabel,
+	serverForTag: srServerForTag,
+	activityDot: srActivityDot,
+	groupServersBySubscription: srGroupServersBySubscription,
 	CLIENT_PRESETS: CLIENT_PRESETS,
 	DEVICE_OS_OPTIONS: DEVICE_OS_OPTIONS,
 	DEVICE_MODEL_OPTIONS: DEVICE_MODEL_OPTIONS,
