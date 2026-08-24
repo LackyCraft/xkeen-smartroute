@@ -181,18 +181,61 @@ if ! command -v xkeen >/dev/null 2>&1; then
 	# the template instead of fighting version skew between two upstreams.
 	[ -f /opt/etc/xray/configs/02_transport.json ] && echo '{}' > /opt/etc/xray/configs/02_transport.json
 
-	# xkeen's default 04_outbounds.json ships a placeholder "vless-reality"
-	# outbound with empty address/id/publicKey fields, meant to be hand-edited.
-	# Left as-is, Xray refuses to start at all (even once a real subscription
-	# is imported into our own 04_outbounds.smartroute.json) because this
-	# invalid stub is loaded from the same confdir. Replace it with just the
-	# harmless "direct" outbound; real servers come from SmartRoute.
-	echo '{"outbounds":[{"protocol":"freedom","tag":"direct"}]}' > /opt/etc/xray/configs/04_outbounds.json
+	# S24xray runs xray as an unprivileged "xkeen" user via `su`, which needs:
+	# shadow-su (installed above) for `su` itself, a "xkeen" account, and a
+	# real shell in its passwd entry (shadow's su falls back to /bin/bash,
+	# which doesn't exist here — only busybox ash). Some OpenWrt builds also
+	# lack the busybox `adduser` applet entirely, so don't depend on it.
+	if ! id xkeen >/dev/null 2>&1; then
+		command -v adduser >/dev/null 2>&1 && adduser -D -H -u 11111 -g 11111 xkeen 2>/dev/null
+		if ! id xkeen >/dev/null 2>&1; then
+			for f in /etc/passwd /etc/group /opt/etc/passwd /opt/etc/group; do
+				case "$f" in
+					*group) grep -q '^xkeen:' "$f" 2>/dev/null || echo 'xkeen:x:11111:' >> "$f" ;;
+					*passwd) grep -q '^xkeen:' "$f" 2>/dev/null || echo 'xkeen:x:0:11111:::/bin/sh' >> "$f" ;;
+				esac
+			done
+		fi
+	fi
 
-	# Xray's own gRPC API (stats/handler/routing), loopback-only -- SmartRoute's
-	# panel reads live traffic/connection data through it. Off by default;
-	# this is what turns it on.
-	cat > /opt/etc/xray/configs/00_api.smartroute.json <<'XRAY_API_EOF'
+	# xkeen's own restart path writes a KeeneticOS NDM netfilter hook file
+	# and expects to clean up NDM-managed iptables state -- neither applies
+	# on real OpenWrt (xkeen primarily targets KeeneticOS), and the missing
+	# directory alone makes it fail outright; on hardware tested against,
+	# the iptables cleanup step *hung indefinitely* even after creating the
+	# directory, wedging this install with no way back short of an SSH
+	# session and a manual kill. `timeout` bounds the damage to a warning
+	# instead of a stuck installer; SmartRoute's own restart helper
+	# (lib/common.sh, wired up later below) manages the process directly
+	# for everything from here on and never goes through xkeen -restart.
+	mkdir -p /opt/etc/ndm/netfilter.d
+	timeout 30 xkeen -restart >/dev/null 2>&1 || log "ПРЕДУПРЕЖДЕНИЕ: xkeen -restart не завершился штатно (известная проблема на чистом OpenWRT) — это ожидаемо, SmartRoute управляет Xray самостоятельно. / xkeen -restart didn't finish cleanly (known issue on plain OpenWRT) — expected, SmartRoute manages Xray itself from here on."
+else
+	log "xkeen уже установлен: $(xkeen -status 2>/dev/null | head -n1 || echo ok)"
+fi
+
+# Both of these used to live inside the "xkeen not yet installed" branch
+# above -- harmless the first time, but it meant neither ever got redone on
+# a plain reinstall (xkeen already present, so that whole branch is skipped
+# every time after the first). Confirmed live: 00_api.smartroute.json in
+# particular going missing after a reinstall silently took the gateway
+# panel's entire gRPC connection to Xray with it (no stats, no Observatory,
+# no live traffic graph) while check.sh still reported it as "not generated
+# yet" rather than a failure -- both are cheap, idempotent overwrites, so
+# just always redo them.
+#
+# xkeen's default 04_outbounds.json ships a placeholder "vless-reality"
+# outbound with empty address/id/publicKey fields, meant to be hand-edited.
+# Left as-is, Xray refuses to start at all (even once a real subscription
+# is imported into our own 04_outbounds.smartroute.json) because this
+# invalid stub is loaded from the same confdir. Replace it with just the
+# harmless "direct" outbound; real servers come from SmartRoute.
+echo '{"outbounds":[{"protocol":"freedom","tag":"direct"}]}' > /opt/etc/xray/configs/04_outbounds.json
+
+# Xray's own gRPC API (stats/handler/routing), loopback-only -- SmartRoute's
+# panel reads live traffic/connection data through it. Off by default;
+# this is what turns it on.
+cat > /opt/etc/xray/configs/00_api.smartroute.json <<'XRAY_API_EOF'
 {
   "api": {
     "tag": "api",
@@ -233,39 +276,6 @@ if ! command -v xkeen >/dev/null 2>&1; then
   }
 }
 XRAY_API_EOF
-
-	# S24xray runs xray as an unprivileged "xkeen" user via `su`, which needs:
-	# shadow-su (installed above) for `su` itself, a "xkeen" account, and a
-	# real shell in its passwd entry (shadow's su falls back to /bin/bash,
-	# which doesn't exist here — only busybox ash). Some OpenWrt builds also
-	# lack the busybox `adduser` applet entirely, so don't depend on it.
-	if ! id xkeen >/dev/null 2>&1; then
-		command -v adduser >/dev/null 2>&1 && adduser -D -H -u 11111 -g 11111 xkeen 2>/dev/null
-		if ! id xkeen >/dev/null 2>&1; then
-			for f in /etc/passwd /etc/group /opt/etc/passwd /opt/etc/group; do
-				case "$f" in
-					*group) grep -q '^xkeen:' "$f" 2>/dev/null || echo 'xkeen:x:11111:' >> "$f" ;;
-					*passwd) grep -q '^xkeen:' "$f" 2>/dev/null || echo 'xkeen:x:0:11111:::/bin/sh' >> "$f" ;;
-				esac
-			done
-		fi
-	fi
-
-	# xkeen's own restart path writes a KeeneticOS NDM netfilter hook file
-	# and expects to clean up NDM-managed iptables state -- neither applies
-	# on real OpenWrt (xkeen primarily targets KeeneticOS), and the missing
-	# directory alone makes it fail outright; on hardware tested against,
-	# the iptables cleanup step *hung indefinitely* even after creating the
-	# directory, wedging this install with no way back short of an SSH
-	# session and a manual kill. `timeout` bounds the damage to a warning
-	# instead of a stuck installer; SmartRoute's own restart helper
-	# (lib/common.sh, wired up later below) manages the process directly
-	# for everything from here on and never goes through xkeen -restart.
-	mkdir -p /opt/etc/ndm/netfilter.d
-	timeout 30 xkeen -restart >/dev/null 2>&1 || log "ПРЕДУПРЕЖДЕНИЕ: xkeen -restart не завершился штатно (известная проблема на чистом OpenWRT) — это ожидаемо, SmartRoute управляет Xray самостоятельно. / xkeen -restart didn't finish cleanly (known issue on plain OpenWRT) — expected, SmartRoute manages Xray itself from here on."
-else
-	log "xkeen уже установлен: $(xkeen -status 2>/dev/null | head -n1 || echo ok)"
-fi
 
 # Xray's own log directory lives on tmpfs (/tmp/xray-logs, see 01_log.json
 # below) so the on-demand logging toggle never wears the flash -- but tmpfs
@@ -499,6 +509,38 @@ chmod +x /usr/libexec/rpcd/luci.xkeen-smartroute
 [ -x /etc/init.d/rpcd ] && /etc/init.d/rpcd restart >/dev/null 2>&1 || true
 [ -x /etc/init.d/uhttpd ] && /etc/init.d/uhttpd restart >/dev/null 2>&1 || true
 
+# On a reinstall over `uninstall.sh` (without --purge) or any re-run of this
+# script, $SR_ETC_DIR/state's flags/profiles/state/outbounds.json survive on
+# disk, but the actual enforcement they describe (the nftables redirect
+# chain, kill-switch's dnsmasq/firewall UCI sections,
+# 04_outbounds.smartroute.json, routing) does NOT survive -- those live
+# outside $SR_ETC_DIR and only ever get (re)built by an explicit
+# enable/regen call. Confirmed live: after a plain reinstall, check.sh still
+# showed everything "[OK]" except the lines that actually matter, while
+# traffic silently stopped being captured/routed at all -- outbounds/routing
+# still pointed at server tags Xray had no outbound for. Redo those calls
+# now so a reinstall really is idempotent, not just file-copy-idempotent.
+if [ -s "$SR_ETC_DIR/state/outbounds.json" ]; then
+	jq '{outbounds: [.[] | del(.subscription)]}' "$SR_ETC_DIR/state/outbounds.json" \
+		>/opt/etc/xray/configs/04_outbounds.smartroute.json.tmp \
+		&& mv /opt/etc/xray/configs/04_outbounds.smartroute.json.tmp /opt/etc/xray/configs/04_outbounds.smartroute.json
+fi
+if [ "$(cat "$SR_ETC_DIR/state/redirect_enabled" 2>/dev/null)" = "1" ]; then
+	sh "$SR_LIB_DIR/redirect.sh" enable >/dev/null 2>&1 || true
+fi
+for f in "$SR_ETC_DIR/state/killswitch"/*.name; do
+	[ -e "$f" ] || continue
+	sh "$SR_LIB_DIR/killswitch.sh" enable "$(cat "$f")" >/dev/null 2>&1 || true
+done
+# The CLI `regen` verb always does a real, network-bound ping pass per
+# balancer-mode profile (see sr_regen's own comment) -- fine for cron every
+# 3 minutes, but blocking the rest of this installer on it would add minutes
+# to every run on a subscription with several such profiles. Fire it in the
+# background instead of waiting on it here; the crontab entry just installed
+# below picks it up again in 3 minutes either way if this particular run
+# hasn't finished by then.
+sh "$SR_LIB_DIR/genroute.sh" regen >/dev/null 2>&1 &
+
 # ---------------------------------------------------------------------------
 log "Шаг 5/6: smartroute-gateway (живая панель в духе Mihomo, порт $SR_GATEWAY_PORT)"
 
@@ -655,7 +697,19 @@ CRON_REGEN="*/3 * * * * sh $SR_LIB_DIR/genroute.sh regen >/dev/null 2>&1 #xkeen-
 # (see the sequential-vs-concurrent-probing note in genroute.sh for why not
 # more often/parallel on this hardware).
 CRON_PING="0 */2 * * * sh $SR_LIB_DIR/subscription.sh ping >/dev/null 2>&1 #xkeen-smartroute-cron"
-( crontab -l 2>/dev/null | grep -v 'xkeen-smartroute-cron' ; echo "$CRON_GEO" ; echo "$CRON_SUB" ; echo "$CRON_RESTART" ; echo "$CRON_REGEN" ; echo "$CRON_PING" ) | crontab -
+# `grep -v` exits 1 (no lines selected) whenever root has no crontab yet --
+# every first-ever install, and every reinstall after uninstall.sh, which
+# clears out the xkeen-smartroute-cron entries entirely. Under `set -e`,
+# that non-zero status used to abort this whole subshell right after the
+# `crontab -l | grep -v` pipe and before any of the `echo`s below ran --
+# confirmed live: `crontab -` then received empty stdin and silently wrote
+# an empty crontab, taking subscription refresh, domain-list refresh, the
+# nightly Xray restart, and (worst of it) genroute.sh's regen loop with it,
+# the last of which is what actually (re)writes 04_outbounds.smartroute.json
+# and 00_api.smartroute.json from already-imported subscription data -- so
+# a router in this state looked installed (check.sh: everything else [OK])
+# but silently had zero working outbound routing until someone noticed.
+( crontab -l 2>/dev/null | grep -v 'xkeen-smartroute-cron' || true ; echo "$CRON_GEO" ; echo "$CRON_SUB" ; echo "$CRON_RESTART" ; echo "$CRON_REGEN" ; echo "$CRON_PING" ) | crontab -
 /etc/init.d/cron restart >/dev/null 2>&1 || true
 
 # ---------------------------------------------------------------------------
