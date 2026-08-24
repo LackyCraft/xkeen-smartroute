@@ -11,8 +11,16 @@ return view.extend({
 	handleToggle: function (name, ev) {
 		var enabled = ev.target.checked;
 		ev.target.disabled = true;
-		return sr.rpc.killswitchSet(name, enabled).then(function () {
+		return sr.rpc.killswitchSet(name, enabled).then(function (res) {
 			ev.target.disabled = false;
+			// killswitch.sh can genuinely fail to arm (e.g. the system
+			// dnsmasq lacks ipset/nftset support) -- revert the checkbox
+			// and say so instead of leaving it checked as if protection
+			// were actually on.
+			if (res && res.error) {
+				ev.target.checked = !enabled;
+				ui.addNotification(null, E('p', {}, [sr.T('status_action_failed') + ': ' + (res.detail || res.error)]), 'error');
+			}
 		});
 	},
 

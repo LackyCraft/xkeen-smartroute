@@ -20,21 +20,40 @@
 			if (typeof status.ports === 'string') portsInput.value = status.ports;
 		}
 
+		// applyOrRevert: on failure (redirect.sh's rd_write can genuinely
+		// fail its fw4 syntax check and leave the previous firewall state
+		// untouched), put back the checkbox the user just clicked and show
+		// why, instead of applyStatus() blindly reading .enabled etc off
+		// an {error,detail} body (all undefined -> every toggle silently
+		// resets to unchecked with no explanation).
+		function applyOrRevert(ev, wasChecked, status) {
+			if (status && status.error) {
+				ev.target.checked = wasChecked;
+				SR.toast(T('prot_save_failed') + ': ' + (status.detail || status.error), 'error');
+				return;
+			}
+			applyStatus(status);
+		}
+
 		enabledToggle.addEventListener('change', function (ev) {
+			var wasChecked = !ev.target.checked;
 			ev.target.disabled = true;
-			api.redirectSetEnabled(ev.target.checked).then(function (status) { ev.target.disabled = false; applyStatus(status); });
+			api.redirectSetEnabled(ev.target.checked).then(function (status) { ev.target.disabled = false; applyOrRevert(ev, wasChecked, status); });
 		});
 		dnsToggle.addEventListener('change', function (ev) {
+			var wasChecked = !ev.target.checked;
 			ev.target.disabled = true;
-			api.redirectSetDnsProtect(ev.target.checked).then(function (status) { ev.target.disabled = false; applyStatus(status); });
+			api.redirectSetDnsProtect(ev.target.checked).then(function (status) { ev.target.disabled = false; applyOrRevert(ev, wasChecked, status); });
 		});
 		ipv6Toggle.addEventListener('change', function (ev) {
+			var wasChecked = !ev.target.checked;
 			ev.target.disabled = true;
-			api.redirectSetIpv6Protect(ev.target.checked).then(function (status) { ev.target.disabled = false; applyStatus(status); });
+			api.redirectSetIpv6Protect(ev.target.checked).then(function (status) { ev.target.disabled = false; applyOrRevert(ev, wasChecked, status); });
 		});
 		quicToggle.addEventListener('change', function (ev) {
+			var wasChecked = !ev.target.checked;
 			ev.target.disabled = true;
-			api.redirectSetQuicProtect(ev.target.checked).then(function (status) { ev.target.disabled = false; applyStatus(status); });
+			api.redirectSetQuicProtect(ev.target.checked).then(function (status) { ev.target.disabled = false; applyOrRevert(ev, wasChecked, status); });
 		});
 
 		var savePortsBtn = E('button', { class: 'sr-btn sr-btn-sm' }, T('prot_ports_save'));

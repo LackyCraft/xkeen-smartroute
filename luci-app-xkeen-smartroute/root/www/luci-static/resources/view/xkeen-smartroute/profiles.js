@@ -393,7 +393,11 @@ return view.extend({
 	},
 
 	handleDeleteProfile: function (name) {
-		return sr.rpc.deleteProfile(name).then(L.bind(function () {
+		return sr.rpc.deleteProfile(name).then(L.bind(function (res) {
+			if (res && res.error) {
+				ui.addNotification(null, E('p', {}, [sr.T('status_action_failed') + ': ' + (res.detail || res.error)]), 'error');
+				return;
+			}
 			return this.reloadProfilesTable();
 		}, this));
 	},

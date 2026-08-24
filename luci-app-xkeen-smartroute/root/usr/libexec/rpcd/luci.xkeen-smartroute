@@ -148,8 +148,11 @@ EOF
 			delete_profile)
 				name="$(echo "$args" | jq -r '.name // empty')"
 				[ -n "$name" ] || { json_err "missing_name"; exit 0; }
-				sh "$LIB_DIR/genroute.sh" delete "$name" >/tmp/sr_del.log 2>&1
-				jq -n '{ok:true}'
+				if sh "$LIB_DIR/genroute.sh" delete "$name" >/tmp/sr_del.log 2>&1; then
+					jq -n '{ok:true}'
+				else
+					jq -n --arg log "$(cat /tmp/sr_del.log)" '{error:"delete_failed", detail:$log}'
+				fi
 				;;
 			add_custom_domain)
 				display_name="$(echo "$args" | jq -r '.list_name // empty')"
@@ -283,12 +286,12 @@ EOF
 				name="$(echo "$args" | jq -r '.name // empty')"
 				enabled="$(echo "$args" | jq -r '.enabled // false')"
 				[ -n "$name" ] || { json_err "missing_name"; exit 0; }
-				if [ "$enabled" = "true" ]; then
-					sh "$LIB_DIR/killswitch.sh" enable "$name" >/tmp/sr_ks.log 2>&1
+				ks_action="disable"; [ "$enabled" = "true" ] && ks_action="enable"
+				if sh "$LIB_DIR/killswitch.sh" "$ks_action" "$name" >/tmp/sr_ks.log 2>&1; then
+					jq -n '{ok:true}'
 				else
-					sh "$LIB_DIR/killswitch.sh" disable "$name" >/tmp/sr_ks.log 2>&1
+					jq -n --arg log "$(cat /tmp/sr_ks.log)" '{error:"killswitch_failed", detail:$log}'
 				fi
-				jq -n '{ok:true}'
 				;;
 			list_killswitch_enabled)
 				wrap_array names "$(sh "$LIB_DIR/killswitch.sh" list-enabled 2>/dev/null)"
@@ -371,8 +374,11 @@ EOF
 				;;
 			set_auto_refresh_enabled)
 				enabled="$(echo "$args" | jq -r '.enabled // false')"
-				sh "$LIB_DIR/subscription.sh" set-auto-refresh-enabled "$enabled" >/tmp/sr_autorefresh.log 2>&1
-				jq -n '{ok:true}'
+				if sh "$LIB_DIR/subscription.sh" set-auto-refresh-enabled "$enabled" >/tmp/sr_autorefresh.log 2>&1; then
+					jq -n '{ok:true}'
+				else
+					jq -n --arg log "$(cat /tmp/sr_autorefresh.log)" '{error:"save_failed", detail:$log}'
+				fi
 				;;
 			get_observatory_period)
 				m="$(sh "$LIB_DIR/genroute.sh" get-observatory-period 2>/dev/null)"
@@ -395,8 +401,11 @@ EOF
 				;;
 			set_doublevpn_enabled)
 				enabled="$(echo "$args" | jq -r '.enabled // false')"
-				sh "$LIB_DIR/genroute.sh" set-doublevpn-enabled "$enabled" >/tmp/sr_doublevpn.log 2>&1
-				jq -n '{ok:true}'
+				if sh "$LIB_DIR/genroute.sh" set-doublevpn-enabled "$enabled" >/tmp/sr_doublevpn.log 2>&1; then
+					jq -n '{ok:true}'
+				else
+					jq -n --arg log "$(cat /tmp/sr_doublevpn.log)" '{error:"save_failed", detail:$log}'
+				fi
 				;;
 			set_doublevpn_servers)
 				servers="$(echo "$args" | jq -r '.servers // "[]"')"
@@ -416,8 +425,11 @@ EOF
 				;;
 			set_log_enabled)
 				enabled="$(echo "$args" | jq -r '.enabled // false')"
-				sh "$LIB_DIR/genroute.sh" set-log-enabled "$enabled" >/tmp/sr_log_enabled.log 2>&1
-				jq -n '{ok:true}'
+				if sh "$LIB_DIR/genroute.sh" set-log-enabled "$enabled" >/tmp/sr_log_enabled.log 2>&1; then
+					jq -n '{ok:true}'
+				else
+					jq -n --arg log "$(cat /tmp/sr_log_enabled.log)" '{error:"save_failed", detail:$log}'
+				fi
 				;;
 			set_log_level)
 				level="$(echo "$args" | jq -r '.level // empty')"
@@ -436,8 +448,11 @@ EOF
 				fi
 				;;
 			clear_logs)
-				sh "$LIB_DIR/genroute.sh" clear-logs >/tmp/sr_log_clear.log 2>&1
-				jq -n '{ok:true}'
+				if sh "$LIB_DIR/genroute.sh" clear-logs >/tmp/sr_log_clear.log 2>&1; then
+					jq -n '{ok:true}'
+				else
+					jq -n --arg log "$(cat /tmp/sr_log_clear.log)" '{error:"clear_failed", detail:$log}'
+				fi
 				;;
 			redirect_status)
 				out="$(sh "$LIB_DIR/redirect.sh" status 2>/dev/null)"
@@ -446,12 +461,12 @@ EOF
 				;;
 			redirect_set_enabled)
 				enabled="$(echo "$args" | jq -r '.enabled // false')"
-				if [ "$enabled" = "true" ]; then
-					sh "$LIB_DIR/redirect.sh" enable >/tmp/sr_redirect.log 2>&1
+				rd_action="disable"; [ "$enabled" = "true" ] && rd_action="enable"
+				if sh "$LIB_DIR/redirect.sh" "$rd_action" >/tmp/sr_redirect.log 2>&1; then
+					sh "$LIB_DIR/redirect.sh" status 2>/dev/null
 				else
-					sh "$LIB_DIR/redirect.sh" disable >/tmp/sr_redirect.log 2>&1
+					jq -n --arg log "$(cat /tmp/sr_redirect.log)" '{error:"redirect_failed", detail:$log}'
 				fi
-				sh "$LIB_DIR/redirect.sh" status 2>/dev/null
 				;;
 			redirect_set_ports)
 				ports="$(echo "$args" | jq -r '.ports // empty')"
@@ -464,18 +479,27 @@ EOF
 				;;
 			redirect_set_dns_protect)
 				enabled="$(echo "$args" | jq -r '.enabled // false')"
-				sh "$LIB_DIR/redirect.sh" dns-protect "$([ "$enabled" = "true" ] && echo on || echo off)" >/tmp/sr_redirect.log 2>&1
-				sh "$LIB_DIR/redirect.sh" status 2>/dev/null
+				if sh "$LIB_DIR/redirect.sh" dns-protect "$([ "$enabled" = "true" ] && echo on || echo off)" >/tmp/sr_redirect.log 2>&1; then
+					sh "$LIB_DIR/redirect.sh" status 2>/dev/null
+				else
+					jq -n --arg log "$(cat /tmp/sr_redirect.log)" '{error:"redirect_failed", detail:$log}'
+				fi
 				;;
 			redirect_set_ipv6_protect)
 				enabled="$(echo "$args" | jq -r '.enabled // false')"
-				sh "$LIB_DIR/redirect.sh" ipv6-protect "$([ "$enabled" = "true" ] && echo on || echo off)" >/tmp/sr_redirect.log 2>&1
-				sh "$LIB_DIR/redirect.sh" status 2>/dev/null
+				if sh "$LIB_DIR/redirect.sh" ipv6-protect "$([ "$enabled" = "true" ] && echo on || echo off)" >/tmp/sr_redirect.log 2>&1; then
+					sh "$LIB_DIR/redirect.sh" status 2>/dev/null
+				else
+					jq -n --arg log "$(cat /tmp/sr_redirect.log)" '{error:"redirect_failed", detail:$log}'
+				fi
 				;;
 			redirect_set_quic_protect)
 				enabled="$(echo "$args" | jq -r '.enabled // false')"
-				sh "$LIB_DIR/redirect.sh" quic-protect "$([ "$enabled" = "true" ] && echo on || echo off)" >/tmp/sr_redirect.log 2>&1
-				sh "$LIB_DIR/redirect.sh" status 2>/dev/null
+				if sh "$LIB_DIR/redirect.sh" quic-protect "$([ "$enabled" = "true" ] && echo on || echo off)" >/tmp/sr_redirect.log 2>&1; then
+					sh "$LIB_DIR/redirect.sh" status 2>/dev/null
+				else
+					jq -n --arg log "$(cat /tmp/sr_redirect.log)" '{error:"redirect_failed", detail:$log}'
+				fi
 				;;
 			list_subscriptions)
 				wrap_array subscriptions "$(sh "$LIB_DIR/subscription.sh" list-subscriptions 2>/dev/null)"
@@ -483,8 +507,11 @@ EOF
 			delete_subscription)
 				label="$(echo "$args" | jq -r '.label // empty')"
 				[ -n "$label" ] || { json_err "missing_label"; exit 0; }
-				sh "$LIB_DIR/subscription.sh" delete-subscription "$label" >/tmp/sr_delsub.log 2>&1
-				jq -n '{ok:true}'
+				if sh "$LIB_DIR/subscription.sh" delete-subscription "$label" >/tmp/sr_delsub.log 2>&1; then
+					jq -n '{ok:true}'
+				else
+					jq -n --arg log "$(cat /tmp/sr_delsub.log)" '{error:"delete_failed", detail:$log}'
+				fi
 				;;
 			refresh_subscription)
 				# Backgrounded, same as refresh_now: a subscription's own
@@ -522,21 +549,26 @@ EOF
 				service="$(echo "$args" | jq -r '.service // empty')"
 				action="$(echo "$args" | jq -r '.action // empty')"
 				case "$action" in start|stop|restart) ;; *) json_err "invalid_action"; exit 0 ;; esac
+				svc_log="/tmp/sr_svc_${service}.log"
 				case "$service" in
 					xray)
 						( . "$LIB_DIR/common.sh"; case "$action" in
 							start) sr_start_xray ;; stop) sr_stop_xray ;; restart) sr_restart_xray ;;
-						esac ) >/tmp/sr_svc_xray.log 2>&1
+						esac ) >"$svc_log" 2>&1
 						;;
 					xkeen-ui)
-						/opt/etc/init.d/S99xkeen-ui "$action" >/tmp/sr_svc_xkeenui.log 2>&1
+						/opt/etc/init.d/S99xkeen-ui "$action" >"$svc_log" 2>&1
 						;;
 					gateway)
-						/opt/etc/init.d/S98smartroute-gateway "$action" >/tmp/sr_svc_gateway.log 2>&1
+						/opt/etc/init.d/S98smartroute-gateway "$action" >"$svc_log" 2>&1
 						;;
 					*) json_err "unknown_service"; exit 0 ;;
 				esac
-				jq -n '{ok:true}'
+				if [ $? -eq 0 ]; then
+					jq -n '{ok:true}'
+				else
+					jq -n --arg log "$(cat "$svc_log" 2>/dev/null)" '{error:"service_control_failed", detail:$log}'
+				fi
 				;;
 			list_lan_devices)
 				# Device-based routing (Policy-Based Routing by device, not

@@ -10,43 +10,61 @@ return view.extend({
 		return sr.rpc.redirectStatus();
 	},
 
+	// applyOrRevert: shared by all four toggles below -- on success, sync
+	// every toggle's checked state to what the backend actually applied
+	// (not just the one the user clicked, since e.g. a failed fw4 syntax
+	// check can leave other flags at their previous value too); on
+	// failure, put back the checkbox the user just clicked (ev.target) and
+	// surface why, matching handleSavePorts' already-correct pattern
+	// instead of blindly trusting a toggle that may not have taken effect
+	// (redirect.sh's rd_write can genuinely fail its fw4 syntax check and
+	// leave the previous firewall state untouched).
+	applyOrRevert: function (ev, wasChecked, status) {
+		if (status && status.error) {
+			ev.target.checked = wasChecked;
+			ui.addNotification(null, E('p', {}, [sr.T('prot_save_failed') + ': ' + (status.detail || status.error)]), 'error');
+			return;
+		}
+		this.applyStatus(status);
+	},
+
 	handleEnabledToggle: function (ev) {
 		var view = this;
-		var enabled = ev.target.checked;
+		var wasChecked = !ev.target.checked;
 		ev.target.disabled = true;
-		return sr.rpc.redirectSetEnabled(enabled).then(function (status) {
+		return sr.rpc.redirectSetEnabled(ev.target.checked).then(function (status) {
 			ev.target.disabled = false;
-			view.applyStatus(status);
+			view.applyOrRevert(ev, wasChecked, status);
 		});
 	},
 
 	handleDnsToggle: function (ev) {
 		var view = this;
-		var enabled = ev.target.checked;
+		var wasChecked = !ev.target.checked;
 		ev.target.disabled = true;
-		return sr.rpc.redirectSetDnsProtect(enabled).then(function (status) {
+		return sr.rpc.redirectSetDnsProtect(ev.target.checked).then(function (status) {
 			ev.target.disabled = false;
-			view.applyStatus(status);
+			view.applyOrRevert(ev, wasChecked, status);
 		});
 	},
 
 	handleIpv6Toggle: function (ev) {
 		var view = this;
-		var enabled = ev.target.checked;
+		var wasChecked = !ev.target.checked;
 		ev.target.disabled = true;
-		return sr.rpc.redirectSetIpv6Protect(enabled).then(function (status) {
+		return sr.rpc.redirectSetIpv6Protect(ev.target.checked).then(function (status) {
 			ev.target.disabled = false;
-			view.applyStatus(status);
+			view.applyOrRevert(ev, wasChecked, status);
 		});
 	},
 
 	handleQuicToggle: function (ev) {
 		var view = this;
-		var enabled = ev.target.checked;
+		var wasChecked = !ev.target.checked;
 		ev.target.disabled = true;
-		return sr.rpc.redirectSetQuicProtect(enabled).then(function (status) {
+		return sr.rpc.redirectSetQuicProtect(ev.target.checked).then(function (status) {
 			ev.target.disabled = false;
-			view.applyStatus(status);
+			view.applyOrRevert(ev, wasChecked, status);
 		});
 	},
 

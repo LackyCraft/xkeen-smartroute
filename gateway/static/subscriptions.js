@@ -125,7 +125,10 @@
 	}
 	function handleDeleteSubscription(label) {
 		if (!confirm(T('sub_delete_confirm').replace('%s', label))) return;
-		api.deleteSubscription(label).then(reloadAll);
+		api.deleteSubscription(label).then(function (res) {
+			if (res && res.error) { SR.toast(T('status_action_failed') + ': ' + (res.detail || res.error), 'error'); return; }
+			return reloadAll();
+		});
 	}
 
 	function handleImport(ev) {

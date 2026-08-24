@@ -148,8 +148,13 @@ return view.extend({
 		var enabled = ev.target.checked;
 		var view = this;
 		ev.target.disabled = true;
-		return sr.rpc.setDoublevpnEnabled(enabled).then(function () {
+		return sr.rpc.setDoublevpnEnabled(enabled).then(function (res) {
 			ev.target.disabled = false;
+			if (res && res.error) {
+				ev.target.checked = !enabled;
+				ui.addNotification(null, E('p', {}, [sr.T('status_action_failed') + ': ' + (res.detail || res.error)]), 'error');
+				return;
+			}
 			ui.addNotification(null, E('p', {}, sr.T('dv_toggle_saved_ok')), 'info');
 			return view.reload();
 		});

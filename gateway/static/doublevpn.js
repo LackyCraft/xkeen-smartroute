@@ -115,8 +115,13 @@
 	function handleToggleEnabled(ev) {
 		var enabled = ev.target.checked;
 		ev.target.disabled = true;
-		api.setDoublevpnEnabled(enabled).then(function () {
+		api.setDoublevpnEnabled(enabled).then(function (res) {
 			ev.target.disabled = false;
+			if (res && res.error) {
+				ev.target.checked = !enabled;
+				SR.toast(T('status_action_failed') + ': ' + (res.detail || res.error), 'error');
+				return;
+			}
 			SR.toast(T('dv_toggle_saved_ok'), 'info');
 			return reload();
 		});

@@ -159,7 +159,14 @@
 				E('td', {}, p.name), E('td', {}, domainsParts.join(' · ')), E('td', {}, targetNode),
 				E('td', { class: 'sr-row' }, [
 					E('button', { class: 'sr-btn sr-btn-sm', click: function () { handleEditProfile(p.name); } }, T('edit_btn')),
-					E('button', { class: 'sr-btn sr-btn-sm sr-btn-remove', click: function () { api.deleteProfile(p.name).then(reloadProfilesTable); } }, T('delete_btn'))
+					E('button', {
+						class: 'sr-btn sr-btn-sm sr-btn-remove', click: function () {
+							api.deleteProfile(p.name).then(function (res) {
+								if (res && res.error) { SR.toast(T('status_action_failed') + ': ' + (res.detail || res.error), 'error'); return; }
+								return reloadProfilesTable();
+							});
+						}
+					}, T('delete_btn'))
 				])
 			]));
 

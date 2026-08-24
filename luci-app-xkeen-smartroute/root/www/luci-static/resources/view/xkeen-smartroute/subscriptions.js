@@ -180,7 +180,11 @@ return view.extend({
 	handleDeleteSubscription: function (label) {
 		if (!confirm(sr.T('sub_delete_confirm').replace('%s', label))) return;
 		var view = this;
-		return sr.rpc.deleteSubscription(label).then(function () {
+		return sr.rpc.deleteSubscription(label).then(function (res) {
+			if (res && res.error) {
+				ui.addNotification(null, E('p', {}, [sr.T('status_action_failed') + ': ' + (res.detail || res.error)]), 'error');
+				return;
+			}
 			return view.reloadAll();
 		});
 	},
