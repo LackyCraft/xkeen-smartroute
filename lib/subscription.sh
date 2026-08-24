@@ -407,8 +407,16 @@ sr_import() {
 
 	tmp_outbounds="$(mktemp)"
 	tmp_servers="$(mktemp)"
-	echo '[]' >"$tmp_outbounds"
-	echo '[]' >"$tmp_servers"
+	# One small file per parsed node below, merged in a single `jq -s` pass
+	# after the loop -- not appended to a growing array on every single
+	# line. The append-in-place version re-read, re-parsed, and rewrote the
+	# *entire* accumulated array on every iteration (jq --argjson ob '. +
+	# [$ob]' "$tmp_outbounds" > ...), real O(n^2) work for a subscription
+	# in the 150-190 server range this project actually sees, on hardware
+	# slow enough that it measurably added to import time. Writing one file
+	# per node is O(1) each; the final slurp is one O(n) pass over all of
+	# them.
+	tmp_dir="$(mktemp -d)"
 
 	label_slug="$(slugify "$label")"
 	i=0
@@ -496,12 +504,23 @@ sr_import() {
 
 		ob="$(build_outbound "$proto" "$secret" "$host" "$port" "$query" "" "$tag")" || { skipped=$((skipped + 1)); continue; }
 		ob="$(printf '%s' "$ob" | jq --arg sub "$label" '. + {subscription:$sub}')"
-		jq --argjson ob "$ob" '. + [$ob]' "$tmp_outbounds" >"$tmp_outbounds.new" && mv "$tmp_outbounds.new" "$tmp_outbounds"
+		printf '%s' "$ob" >"$tmp_dir/ob_$i.json"
 		jq -n --arg tag "$tag" --arg name "$name" --arg address "$host" --argjson port "$port" --arg proto "$proto" --arg sub "$label" --arg mkey "$match_key" \
 			'{tag:$tag, name:$name, address:$address, port:$port, protocol:$proto, subscription:$sub, match_key:$mkey}' \
-			>"$tmp_servers.one"
-		jq --argjson s "$(cat "$tmp_servers.one")" '. + [$s]' "$tmp_servers" >"$tmp_servers.new" && mv "$tmp_servers.new" "$tmp_servers"
+			>"$tmp_dir/sv_$i.json"
 	done
+
+	if ls "$tmp_dir"/ob_*.json >/dev/null 2>&1; then
+		jq -s '.' "$tmp_dir"/ob_*.json >"$tmp_outbounds"
+	else
+		echo '[]' >"$tmp_outbounds"
+	fi
+	if ls "$tmp_dir"/sv_*.json >/dev/null 2>&1; then
+		jq -s '.' "$tmp_dir"/sv_*.json >"$tmp_servers"
+	else
+		echo '[]' >"$tmp_servers"
+	fi
+	rm -rf "$tmp_dir"
 
 	# A fetch that "succeeds" (curl exit 0) but returns an empty body, an
 	# error page, or a body with zero parseable vless://trojan:// lines
@@ -512,7 +531,7 @@ sr_import() {
 	parsed_count="$(jq 'length' "$tmp_servers")"
 	if [ "$parsed_count" -eq 0 ]; then
 		sr_log "import '$label' fetched 0 usable server(s) (empty/invalid response?) -- keeping existing data untouched"
-		rm -f "$tmp_outbounds" "$tmp_servers" "$tmp_servers.one" "$tmp_outbounds.new" "$tmp_servers.new" 2>/dev/null || true
+		rm -f "$tmp_outbounds" "$tmp_servers" 2>/dev/null || true
 		return 1
 	fi
 
