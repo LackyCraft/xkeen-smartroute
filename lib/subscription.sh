@@ -517,10 +517,23 @@ sr_import() {
 
 		ob="$(build_outbound "$proto" "$secret" "$host" "$port" "$query" "" "$tag")" || { skipped=$((skipped + 1)); continue; }
 		ob="$(printf '%s' "$ob" | jq --arg sub "$label" '. + {subscription:$sub}')"
-		printf '%s' "$ob" >"$tmp_dir/ob_$i.json"
+		# Zero-padded, not "$i" bare: the merge below globs these filenames
+		# and relies on shell glob expansion's lexicographic (string) sort to
+		# reconstruct encounter order -- confirmed live as a real regression,
+		# not hypothetical: with a bare counter, "sv_10.json" sorts before
+		# "sv_2.json", so every subscription with 10+ servers (this project's
+		# own test subscription runs 150-190) came out of a refresh with a
+		# scrambled order instead of the original one, even though the
+		# order-preserving dedup right below this loop (sort_by the original
+		# index) was written assuming encounter order was already intact.
+		# Users rely on this order to keep specific servers positioned first
+		# in the list. 6 digits covers any subscription size this project
+		# will plausibly ever see.
+		i_padded="$(printf '%06d' "$i")"
+		printf '%s' "$ob" >"$tmp_dir/ob_$i_padded.json"
 		jq -n --arg tag "$tag" --arg name "$name" --arg address "$host" --argjson port "$port" --arg proto "$proto" --arg sub "$label" --arg mkey "$match_key" \
 			'{tag:$tag, name:$name, address:$address, port:$port, protocol:$proto, subscription:$sub, match_key:$mkey}' \
-			>"$tmp_dir/sv_$i.json"
+			>"$tmp_dir/sv_$i_padded.json"
 	done
 
 	if ls "$tmp_dir"/ob_*.json >/dev/null 2>&1; then
