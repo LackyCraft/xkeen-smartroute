@@ -423,6 +423,23 @@ sr_regen() {
 	catchall='{"type":"field","inboundTag":["redirect","tproxy"],"outboundTag":"direct"}'
 	rules="$(echo "$rules" | jq --argjson r "$catchall" '. + [$r]')"
 
+	# Same class of problem as the catchall above, found the same way (a real
+	# leak, not a hypothetical): 00_api.smartroute.json's own routing rule
+	# (inboundTag:["api"] -> outboundTag:"api", the only thing that makes
+	# Xray's internal gRPC API service on 127.0.0.1:10085 actually reachable
+	# through its dokodemo-door inbound) never survives Xray's confdir merge
+	# once this file also defines a "routing" key -- confirmed live via
+	# `xray run -test -confdir ... -dump`: the merged config's routing.rules
+	# only ever contains what THIS file emits, 00_api.smartroute.json's own
+	# routing block is gone without a trace, no error anywhere. Symptom was
+	# nasty precisely because nothing crashes: Xray runs, proxies traffic
+	# fine, and only the gateway panel's gRPC connection to it breaks --
+	# "error reading server preface: EOF" on every call, health/Observatory/
+	# traffic-graph data silently going stale. Emit it here instead, in the
+	# one file that's actually guaranteed to win.
+	api_rule='{"type":"field","inboundTag":["api"],"outboundTag":"api"}'
+	rules="$(echo "$rules" | jq --argjson r "$api_rule" '. + [$r]')"
+
 	new_routing="$(jq -n --argjson rules "$rules" '{routing:{domainStrategy:"IPIfNonMatch", rules:$rules}}')"
 
 	# No routing.balancers anymore -- see sr_pick_top1's comment above for

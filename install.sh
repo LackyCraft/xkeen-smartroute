@@ -264,18 +264,20 @@ cat > /opt/etc/xray/configs/00_api.smartroute.json <<'XRAY_API_EOF'
       "protocol": "dokodemo-door",
       "settings": { "address": "127.0.0.1" }
     }
-  ],
-  "routing": {
-    "rules": [
-      {
-        "type": "field",
-        "inboundTag": ["api"],
-        "outboundTag": "api"
-      }
-    ]
-  }
+  ]
 }
 XRAY_API_EOF
+# No "routing" block above on purpose, even though the inbound needs one
+# (inboundTag:["api"] -> outboundTag:"api") to actually be reachable --
+# confirmed live via `xray run -test -confdir ... -dump`: once ANY other
+# confdir file also defines a top-level "routing" key, this file's own
+# "routing" block loses the merge with no error logged anywhere, and Xray
+# quietly runs with no route to its own API service (gateway panel's gRPC
+# calls fail with "error reading server preface: EOF" -- health/Observatory/
+# traffic data goes stale, everything else keeps working). genroute.sh emits
+# this exact rule itself now, in 05_routing.smartroute.json, the one file
+# that's actually guaranteed to win that merge -- see its own comment next
+# to the redirect/tproxy catch-all it already had to do the same thing for.
 
 # Xray's own log directory lives on tmpfs (/tmp/xray-logs, see 01_log.json
 # below) so the on-demand logging toggle never wears the flash -- but tmpfs
@@ -410,9 +412,21 @@ cat > /opt/etc/xray/configs/06_policy.json <<'XRAY_POLICY_EOF'
       "statsOutboundUplink": true,
       "statsOutboundDownlink": true
     }
-  }
+  },
+  "stats": {}
 }
 XRAY_POLICY_EOF
+# "stats": {} above is not decorative -- without a top-level "stats" block
+# (separate from "policy", which only configures *what* gets counted once
+# the stats app is actually running), Xray never enables its app/stats
+# feature at all, and QueryStats fails with "QueryStats only works its own
+# stats.Manager" on every call -- confirmed live, and a known upstream
+# report (XTLS/Xray-core#2296, and the same fix independently confirmed in
+# XTLS/Xray-core#4509's own discussion). GetSysStats/lsrules/lso all worked
+# fine throughout, which is what made this one non-obvious -- only the
+# per-outbound/per-user QueryStats path needs the real stats.Manager this
+# unlocks. That's the gateway panel's traffic graph and the "online now"
+# dot's data source (see gateway/xray.go's queryOutboundTrafficByTag).
 
 # ---------------------------------------------------------------------------
 log "Шаг 3/6: xkeen-UI (веб-панель, порт 1000)"
