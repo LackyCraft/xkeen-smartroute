@@ -335,6 +335,7 @@ var DICT = {
 	saving: { ru: 'Сохраняю…', en: 'Saving…' },
 	saved_ok: { ru: 'Сохранено, xray перезапущен', en: 'Saved, xray restarted' },
 	save_failed: { ru: 'Не удалось сохранить профиль', en: 'Failed to save profile' },
+	profile_deleted_ok: { ru: 'Удалено, xray перезапущен', en: 'Deleted, xray restarted' },
 	delete_btn: { ru: 'Удалить', en: 'Delete' },
 	edit_btn: { ru: 'Изменить', en: 'Edit' },
 	edit_loaded_note: { ru: 'Профиль загружен в форму выше — измените и сохраните', en: 'Profile loaded into the form above — change it and save' },

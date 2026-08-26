@@ -387,6 +387,7 @@ return view.extend({
 				ui.addNotification(null, E('p', {}, [sr.T('status_action_failed') + ': ' + (res.detail || res.error)]), 'error');
 				return;
 			}
+			ui.addNotification(null, E('p', {}, sr.T('profile_deleted_ok')), 'info');
 			return this.reloadProfilesTable();
 		}, this));
 	},

@@ -141,6 +141,7 @@
 							if (!confirm(T('profile_delete_confirm').replace('%s', p.name))) return;
 							api.deleteProfile(p.name).then(function (res) {
 								if (res && res.error) { SR.toast(T('status_action_failed') + ': ' + (res.detail || res.error), 'error'); return; }
+								SR.toast(T('profile_deleted_ok'), 'info');
 								return reloadProfilesTable();
 							});
 						}

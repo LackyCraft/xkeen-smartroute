@@ -135,6 +135,7 @@ var DICT = {
 	saving: { ru: 'Сохраняю…', en: 'Saving…' },
 	saved_ok: { ru: 'Сохранено, xray перезапущен', en: 'Saved, xray restarted' },
 	save_failed: { ru: 'Не удалось сохранить профиль', en: 'Failed to save profile' },
+	profile_deleted_ok: { ru: 'Удалено, xray перезапущен', en: 'Deleted, xray restarted' },
 	auto_refresh_toggle_label: { ru: 'Автообновление подписок', en: 'Subscription auto-refresh' },
 	auto_refresh_warning: { ru: '⚠️ Если состав подписки изменится, серверы профилей сверяются автоматически (тот же узел под новым адресом/параметрами — переносится), но если провайдер реально удалит сервер — он пропадёт и из профиля, где был выбран.',
 	                       en: "⚠️ If the subscription's server list changes, profile selections are reconciled automatically (the same node under a new address/params carries over) — but if the provider genuinely removes a server, it disappears from any profile that had it selected too." },
