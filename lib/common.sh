@@ -324,6 +324,16 @@ _sr_xray_launch() {
 		# (confirmed live: checking right away read "0" every time, before
 		# any log line had been flushed) -- give it a few short beats to
 		# actually get there before concluding a file was really dropped.
+		#
+		# Every check below is a plain `if`, deliberately not a `[ cond ] &&
+		# cmd` one-liner: this whole function runs under callers' `set -eu`
+		# (genroute.sh sources common.sh), and confirmed live on this
+		# router's busybox ash, a failing left-hand side of a bare `&&`
+		# outside an `if`/`while` condition aborted the function right there
+		# -- silently turning a normal "not ready yet, keep polling" check
+		# into "genroute.sh delete/save just failed outright" for the
+		# caller, with no error message at all. `if`'s condition is exempt
+		# from `set -e` in every POSIX shell, no ambiguity.
 		got=0
 		j=0
 		while [ "$j" -lt 5 ]; do
@@ -333,8 +343,26 @@ _sr_xray_launch() {
 			# from the fallback and leave $got as the two-line string "0\n0"
 			# -- confirmed live, that broke the numeric comparison below
 			# outright ("bad number") rather than just misjudging the count.
-			[ -f "$SR_STATE_DIR/xray-launch.log" ] && got="$(grep -c 'Reading config' "$SR_STATE_DIR/xray-launch.log" 2>/dev/null)"
-			[ "$got" -ge "$expected" ] && return 0
+			# `|| true` INSIDE the substitution, not `got="$(...)" || echo 0`
+			# outside it (that shape is what caused the "0\n0" bug the
+			# comment above describes). This one guards a different, worse
+			# trap: confirmed live with `sh -x` that `got="$(grep -c ...)"`
+			# on its own -- even sitting inside this `if`'s *body* -- still
+			# aborted the whole function the moment grep -c found zero
+			# matches. `if` only exempts its own *condition* from `set -e`;
+			# a plain assignment inside the then-branch is just another
+			# simple command, and `var="$(cmd)"` takes on cmd's exit status
+			# like any other. This is what was actually behind the
+			# intermittent, silent save_profile/delete_profile failures (no
+			# log line at all -- the abort happened before any sr_log call
+			# downstream could run), not the `&&`-chain issue above; a
+			# second, worse instance of the same underlying trap.
+			if [ -f "$SR_STATE_DIR/xray-launch.log" ]; then
+				got="$(grep -c 'Reading config' "$SR_STATE_DIR/xray-launch.log" 2>/dev/null || true)"
+			fi
+			if [ "$got" -ge "$expected" ]; then
+				return 0
+			fi
 			sleep 1
 			j=$((j + 1))
 		done
