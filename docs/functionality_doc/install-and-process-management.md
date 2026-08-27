@@ -86,19 +86,25 @@ _sr_xray_validate() {
 
 ```sh
 _sr_xray_launch() {
-	(
-		trap '' HUP
-		ulimit -SHn 1000000
-		exec su -c "XRAY_LOCATION_ASSET='$XRAY_ASSET_DIR' xray run -confdir '$XKEEN_CONFIGS_DIR'" "$XRAY_RUN_USER" >"$SR_STATE_DIR/xray-launch.log" 2>&1 </dev/null
-	) &
-	i=0
-	while ! pgrep -x xray >/dev/null 2>&1 && [ "$i" -lt 10 ]; do sleep 1; i=$((i + 1)); done
+	attempt=1
+	while :; do
+		(
+			trap '' HUP
+			ulimit -SHn 1000000
+			exec su -c "XRAY_LOCATION_ASSET='$XRAY_ASSET_DIR' xray run -confdir '$XKEEN_CONFIGS_DIR'" "$XRAY_RUN_USER" >"$SR_STATE_DIR/xray-launch.log" 2>&1 </dev/null
+		) &
+		i=0
+		while ! pgrep -x xray >/dev/null 2>&1 && [ "$i" -lt 10 ]; do sleep 1; i=$((i + 1)); done
+
+		expected="$(find "$XKEEN_CONFIGS_DIR" -maxdepth 1 -name '*.json' 2>/dev/null | wc -l)"
+		...
+	done
 }
 ```
 
-([`lib/common.sh:230-253`](../../lib/common.sh#L230-L253))
+([`lib/common.sh:268-379`](../../lib/common.sh#L268-L379))
 
-Два момента, оба найдены вживую, не теоретически:
+Три момента, все найдены вживую, не теоретически:
 
 - **`-confdir` флаг, а не переменная окружения.** Реальный, но
   малоизвестный факт про Xray: `XRAY_LOCATION_CONFDIR` **не
@@ -119,6 +125,21 @@ _sr_xray_launch() {
   `setsid` — без ловушки на HUP процесс Xray получил бы SIGHUP и
   завершился бы в момент, когда запустивший его shell (rpcd-вызов,
   cron-задача) сам завершается.
+- **Даже с правильным `-confdir` Xray иногда сам теряет один файл при
+  слиянии** — отдельный, независимый баг самого движка (не связан с
+  env-var-мифом выше), воспроизведён вживую до 5 раз из 10 подряд, тоже
+  без единой ошибки в логе. Функция теперь после каждого запуска сверяет
+  число `Reading config` строк в `xray-launch.log` с реальным числом
+  `*.json`-файлов в confdir и, если они не совпали, убивает процесс и
+  запускает заново — до 10 попыток. Подробный разбор симптома (со стороны
+  панели он выглядит как "gRPC к Xray стабильно не работает") —
+  [gateway-telemetry.md](gateway-telemetry.md#когда-grpc-соединение-стабильно-рвётся-два-бага-самого-xray-core).
+  Этот же участок кода однажды сам стал жертвой `set -e`: `got="$(grep -c
+  ...)"` внутри тела `if` всё равно наследует код возврата `grep` (у
+  `if` от `set -e` защищено только условие, не тело) — `grep -c` при
+  нуле совпадений возвращает ненулевой код, даже напечатав корректный
+  "0", и это молча обрывало `save_profile`/`delete_profile` без единой
+  строки в логе, пока не нашли через `sh -x`.
 
 ## Boot-порядок: два независимых механизма автозапуска
 
