@@ -3,6 +3,17 @@
 'require ui';
 'require xkeen-smartroute as sr';
 
+// A big subscription's refresh/ping can genuinely take minutes (sequential
+// per-server probing, see lib/subscription.sh) -- the previous 8x4s/10x3s
+// windows (24-40s total) stopped polling long before a slow run actually
+// finished, which read as "refresh looks broken" even though it was still
+// working in the background the whole time. The gateway panel's own copy
+// of this same poll already carries the real fix (60x5s = 5 minutes); this
+// just ports the same window here instead of leaving LuCI on the shorter,
+// already-known-insufficient one.
+var BACKGROUND_POLL_TIMES = 60;
+var BACKGROUND_POLL_INTERVAL_MS = 5000; // 60 * 5s = 5 minutes
+
 return view.extend({
 	load: function () {
 		return Promise.all([
@@ -114,7 +125,7 @@ return view.extend({
 		view.renderSubscriptions();
 		return sr.rpc.refreshNow().then(function () {
 			ui.addNotification(null, E('p', {}, sr.T('refresh_now_started')), 'info');
-			return view.pollAndRerender(8, 4000).then(function () {
+			return view.pollAndRerender(BACKGROUND_POLL_TIMES, BACKGROUND_POLL_INTERVAL_MS).then(function () {
 				view.refreshingAll = false;
 				btn.disabled = false;
 				btn.textContent = sr.T('refresh_now_btn');
@@ -132,7 +143,7 @@ return view.extend({
 		view.renderSubscriptions();
 		return sr.rpc.pingServers().then(function () {
 			ui.addNotification(null, E('p', {}, sr.T('sub_ping_started')), 'info');
-			return view.pollAndRerender(10, 3000).then(function () {
+			return view.pollAndRerender(BACKGROUND_POLL_TIMES, BACKGROUND_POLL_INTERVAL_MS).then(function () {
 				view.pingingAll = false;
 				btn.disabled = false;
 				btn.textContent = sr.T('sub_ping_all_btn');
@@ -150,7 +161,7 @@ return view.extend({
 		view.refreshingLabels[label] = true;
 		view.renderSubscriptions();
 		return sr.rpc.refreshSubscription(label).then(function () {
-			return view.pollAndRerender(8, 4000).then(function () {
+			return view.pollAndRerender(BACKGROUND_POLL_TIMES, BACKGROUND_POLL_INTERVAL_MS).then(function () {
 				delete view.refreshingLabels[label];
 				btn.disabled = false;
 				btn.textContent = sr.T('refresh_btn');
@@ -168,7 +179,7 @@ return view.extend({
 		view.pingingLabels[label] = true;
 		view.renderSubscriptions();
 		return sr.rpc.pingSubscription(label).then(function () {
-			return view.pollAndRerender(8, 3000).then(function () {
+			return view.pollAndRerender(BACKGROUND_POLL_TIMES, BACKGROUND_POLL_INTERVAL_MS).then(function () {
 				delete view.pingingLabels[label];
 				btn.disabled = false;
 				btn.textContent = sr.T('ping_btn');
@@ -180,7 +191,11 @@ return view.extend({
 	handleDeleteSubscription: function (label) {
 		if (!confirm(sr.T('sub_delete_confirm').replace('%s', label))) return;
 		var view = this;
-		return sr.rpc.deleteSubscription(label).then(function () {
+		return sr.rpc.deleteSubscription(label).then(function (res) {
+			if (res && res.error) {
+				ui.addNotification(null, E('p', {}, [sr.T('status_action_failed') + ': ' + (res.detail || res.error)]), 'error');
+				return;
+			}
 			return view.reloadAll();
 		});
 	},
@@ -195,8 +210,21 @@ return view.extend({
 	// poll the cheap read-only endpoints a handful of times and re-render as
 	// data arrives, then stop. Good enough feedback without blocking the UI
 	// on an operation that (for a big subscription) can take minutes.
+	//
+	// Not label-scoped: every caller (refresh-all, ping-all, one
+	// subscription's own refresh/ping button) polls the exact same four
+	// global endpoints and writes the exact same view.subscriptions/
+	// servers/pings/health, so two overlapping calls (e.g. "refresh all"
+	// clicked while one subscription's own refresh is still polling) used
+	// to run two fully independent timer chains hitting the router twice
+	// as often for no benefit -- both converge on the same shared state
+	// regardless. Only one poll loop ever runs at a time now; a second
+	// caller just attaches its own .then() to the one already in flight
+	// instead of starting a redundant one (each caller's own .then() below
+	// still clears its own specific flag correctly either way).
 	pollAndRerender: function (times, intervalMs) {
 		var view = this;
+		if (view._activePoll) return view._activePoll;
 		var i = 0;
 		function tick() {
 			return Promise.all([sr.rpc.listSubscriptions(), sr.rpc.listServers(), sr.rpc.getPings(), sr.rpc.getHealth()]).then(function (data) {
@@ -206,11 +234,12 @@ return view.extend({
 				view.health = data[3] || {};
 				view.renderSubscriptions();
 				i++;
-				if (i >= times) return;
+				if (i >= times) { view._activePoll = null; return; }
 				return new Promise(function (resolve) { setTimeout(resolve, intervalMs); }).then(tick);
 			});
 		}
-		return tick();
+		view._activePoll = tick().catch(function (err) { view._activePoll = null; throw err; });
+		return view._activePoll;
 	},
 
 	reloadAll: function () {

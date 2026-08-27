@@ -50,6 +50,8 @@ SR_GEOSITE_CACHE_DIR="$SR_LISTS_DIR/geosite-resolved"
 GEOSITE_SRC_BASE="https://raw.githubusercontent.com/v2fly/domain-list-community/master/data"
 GEOSITE_CACHE_MAX_AGE_DAYS=7
 IPSET_NAME="sr_killswitch"
+FW_IPSET_SECTION="sr_killswitch_ipset" # firewall `config ipset` -- creates the actual nftables set
+DHCP_IPSET_SECTION="sr_killswitch"     # dhcp `config ipset` -- tells dnsmasq which domains feed it
 FW_RULE_NAME="xkeen_smartroute_killswitch"
 
 # resolve_geosite_domains <category> [_seen-categories]
@@ -100,15 +102,13 @@ resolve_geosite_domains() {
 
 ks_rebuild_dnsmasq() {
 	mkdir -p "$SR_KS_FLAG_DIR"
-	# Drop the whole ipset list option in one operation and rebuild it from
-	# scratch below. The previous approach called `uci get` + `uci del_list`
-	# once per existing entry -- fine for a handful of custom-list domains,
-	# but a single geosite category can resolve to 100+ domains, and each
-	# get/del round-trip re-parses the whole UCI config file, so removing them
-	# one at a time took minutes instead of the expected instant. `uci delete`
-	# on the option itself is a single O(1) operation regardless of length.
-	uci -q delete dhcp.@dnsmasq[0].ipset 2>/dev/null || true
+	# Named section (not @ipset[n]) so removing a stale one is a single O(1)
+	# `uci delete` by name, same reasoning that replaced the old per-domain
+	# del_list churn -- a geosite category can resolve to 100+ domains and
+	# each get/del round-trip used to re-parse the whole UCI file.
+	uci -q delete dhcp.$DHCP_IPSET_SECTION 2>/dev/null || true
 
+	domains_file="$(mktemp)"
 	any=0
 	for f in "$SR_KS_FLAG_DIR"/*.name; do
 		[ -e "$f" ] || continue
@@ -119,20 +119,46 @@ ks_rebuild_dnsmasq() {
 		if [ "$src_type" = "custom" ]; then
 			list_file="$SR_LISTS_DIR/$(jq -r '.domain_source.file' "$pf")"
 			[ -f "$list_file" ] || continue
-			domains="$(grep -v '^#' "$list_file" | grep -v '^$' | tr '\n' '/' | sed 's#/$##')"
+			grep -v '^#' "$list_file" | grep -v '^$' >>"$domains_file"
 		elif [ "$src_type" = "geosite" ]; then
 			category="$(jq -r '.domain_source.value' "$pf")"
-			domains="$(resolve_geosite_domains "$category" | tr '\n' '/' | sed 's#/$##')"
+			resolve_geosite_domains "$category" >>"$domains_file"
 		else
 			continue
 		fi
-		[ -n "$domains" ] || continue
-		uci add_list dhcp.@dnsmasq[0].ipset="/${domains}/${IPSET_NAME}"
 		any=1
 	done
+
+	# dhcp-side `config ipset`: tells dnsmasq's own init script which
+	# domains feed the set. It auto-emits either the legacy `ipset=`
+	# directive or the modern `nftset=` one into dnsmasq.conf depending on
+	# what this build's dnsmasq binary was actually compiled with (see
+	# `dnsmasq --version`) -- we don't have to pick between them ourselves.
+	if [ "$any" = "1" ] && [ -s "$domains_file" ]; then
+		uci set dhcp.$DHCP_IPSET_SECTION="ipset"
+		uci add_list dhcp.$DHCP_IPSET_SECTION.name="$IPSET_NAME"
+		sort -u "$domains_file" | while IFS= read -r d; do
+			[ -n "$d" ] || continue
+			uci add_list dhcp.$DHCP_IPSET_SECTION.domain="$d"
+		done
+	else
+		any=0
+	fi
+	rm -f "$domains_file"
 	uci commit dhcp
 
 	if [ "$any" = "1" ]; then
+		# firewall-side `config ipset`: this is what actually creates the
+		# native nftables set the REJECT rule below references. It was
+		# missing entirely before -- the rule existed and looked armed, but
+		# `ipset=$IPSET_NAME` pointed at a set fw4 had never been told to
+		# create, so nothing was ever actually blocked.
+		uci set firewall.$FW_IPSET_SECTION="ipset"
+		uci set firewall.$FW_IPSET_SECTION.name="$IPSET_NAME"
+		uci set firewall.$FW_IPSET_SECTION.match="dst_ip"
+		uci set firewall.$FW_IPSET_SECTION.family="4"
+		uci set firewall.$FW_IPSET_SECTION.timeout="-1"
+
 		# Always on from the moment a profile has kill-switch enabled -- not
 		# toggled by polling xray's liveness. Properly redirected traffic
 		# (xkeen's PREROUTING REDIRECT to xray's local inbound) never reaches
@@ -153,15 +179,44 @@ ks_rebuild_dnsmasq() {
 		uci commit firewall
 	else
 		uci -q delete firewall.$FW_RULE_NAME 2>/dev/null || true
+		uci -q delete firewall.$FW_IPSET_SECTION 2>/dev/null || true
 		uci commit firewall
 	fi
 
 	/etc/init.d/dnsmasq restart >/dev/null 2>&1 || true
 	/etc/init.d/firewall reload >/dev/null 2>&1 || true
+
+	# `firewall reload` rebuilds rules/sets that are still in the config but
+	# does NOT prune a set that's no longer configured -- confirmed live: an
+	# `ipset` UCI section removed above still leaves its nftables set (and
+	# whatever IPs were already resolved into it) sitting in the live
+	# ruleset untouched. Left alone, that stale set either lingers
+	# unreferenced (harmless but untidy) or, worse, gets silently reused the
+	# next time *any* profile re-enables kill-switch (same set name/type),
+	# carrying IPs resolved for a since-disabled or since-edited profile's
+	# domains into a REJECT rule that has nothing to do with them --
+	# over-blocking traffic that was never supposed to be in scope. Flush
+	# (still armed) or delete (nothing armed) the live set explicitly so it
+	# only ever reflects the domain list just written, never a previous one.
+	if [ "$any" = "1" ]; then
+		nft flush set inet fw4 "$IPSET_NAME" >/dev/null 2>&1 || true
+	else
+		nft delete set inet fw4 "$IPSET_NAME" >/dev/null 2>&1 || true
+	fi
+}
+
+ks_check_dnsmasq_capability() {
+	dnsmasq --version 2>/dev/null | grep -q ' ipset\| nftset' \
+		|| sr_die "system dnsmasq lacks ipset/nftset support -- install dnsmasq-full (opkg remove dnsmasq && opkg install dnsmasq-full) to use the hard kill-switch"
 }
 
 ks_enable() {
 	name="${1:?profile name required}"
+	# name becomes a filename below ($SR_KS_FLAG_DIR/$name.name) -- same
+	# path-escape guard as lib/genroute.sh's save/delete (a literal "/" is
+	# the only thing that can turn this into a path outside the flag dir).
+	case "$name" in */*) sr_die "profile name cannot contain '/'" ;; esac
+	ks_check_dnsmasq_capability
 	mkdir -p "$SR_KS_FLAG_DIR"
 	echo "$name" >"$SR_KS_FLAG_DIR/$name.name"
 	ks_rebuild_dnsmasq
@@ -170,6 +225,7 @@ ks_enable() {
 
 ks_disable() {
 	name="${1:?profile name required}"
+	case "$name" in */*) sr_die "profile name cannot contain '/'" ;; esac
 	rm -f "$SR_KS_FLAG_DIR/$name.name"
 	ks_rebuild_dnsmasq
 	sr_log "kill-switch disabled for profile '$name'"

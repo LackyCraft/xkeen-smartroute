@@ -148,22 +148,46 @@ TCP/TLS, когда попытка по UDP просто не получает �
 ## rd_write: полная пересборка + проверка синтаксиса перед применением
 
 ```sh
+had_previous=0
+if [ -f "$NFT_FILE" ]; then
+	cp "$NFT_FILE" "$NFT_FILE.bak"
+	had_previous=1
+fi
+
+{ ... } > "$NFT_FILE"
+
 if command -v fw4 >/dev/null 2>&1 && ! fw4 check >/dev/null 2>&1; then
-	sr_log "ERROR: generated nftables redirect rules failed fw4's syntax check, leaving the previous firewall state untouched"
-	rm -f "$NFT_FILE"
+	sr_log "ERROR: generated nftables redirect rules failed fw4's syntax check, restoring the previous firewall state"
+	if [ "$had_previous" = "1" ]; then
+		mv "$NFT_FILE.bak" "$NFT_FILE"
+	else
+		rm -f "$NFT_FILE"
+	fi
 	return 1
 fi
+rm -f "$NFT_FILE.bak"
+
 /etc/init.d/firewall reload >/dev/null 2>&1 || /sbin/fw4 reload >/dev/null 2>&1 || true
 ```
 
-([`lib/redirect.sh:145-151`](../../lib/redirect.sh#L145-L151))
+([`lib/redirect.sh:63-172`](../../lib/redirect.sh#L63-L172))
 
 Перед тем как перезагрузить firewall, сгенерированный файл проверяется
 `fw4 check` — тот же принцип "не применять то, что не прошло проверку",
 что и `_sr_xray_validate()` у Xray-конфига
-([gateway-architecture.md](gateway-architecture.md)): если проверка не
-прошла, файл удаляется (не остаётся битым на диске) и функция
-возвращает ошибку, не трогая уже работающее состояние firewall.
+([gateway-architecture.md](gateway-architecture.md)). `fw4 check`
+проверяет **всю** директорию `/etc/nftables.d/` разом, а не один
+изолированный файл — то есть протестировать новое содержимое, не
+положив его сперва прямо в `$NFT_FILE`, физически нельзя. Из-за этого
+раньше здесь был реальный баг: лог уже писал "leaving the previous
+firewall state untouched", но код делал ровно обратное — `rm -f
+"$NFT_FILE"` **удалял** файл целиком на неудачной проверке, оставляя
+роутер без единого управляемого redirect/leak-protection правила до
+следующего успешного тоггла, молча. Исправлено: перед перезаписью
+файл бэкапится (`$NFT_FILE.bak`), и на неудачной проверке именно этот
+бэкап возвращается на место (`mv`), а не удаляется — старое состояние
+firewall теперь действительно переживает неудачную проверку, как лог
+и утверждает.
 
 Каждый флаг (`enabled`/`dns_protect`/`ipv6_protect`/`quic_protect`/
 `ports`) хранится отдельным файлом в `$SR_STATE_DIR` и читается через

@@ -60,6 +60,21 @@ rd_write() {
 	ports="$(rd_flag "$FLAG_PORTS" "$DEFAULT_PORTS")"
 	tcp_ports="$(printf '%s' "$ports" | tr ',' ' ')"
 
+	# Back up whatever was already live before overwriting it in place --
+	# fw4 check (below) validates the *whole* /etc/nftables.d/ directory
+	# together, not one isolated file, so there's no way to test the new
+	# content without it actually being at $NFT_FILE first. Confirmed this
+	# used to just delete $NFT_FILE outright on a failed check, despite the
+	# log line right below claiming "leaving the previous firewall state
+	# untouched" -- deleting it is not that: a previously-working redirect/
+	# leak-protection config is gone until the next successful toggle,
+	# silently, rather than staying armed.
+	had_previous=0
+	if [ -f "$NFT_FILE" ]; then
+		cp "$NFT_FILE" "$NFT_FILE.bak"
+		had_previous=1
+	fi
+
 	{
 		echo "## Managed by XKeen SmartRoute (lib/redirect.sh) -- do not edit by hand,"
 		echo "## changes get overwritten on the next enable/disable/regen."
@@ -143,10 +158,15 @@ rd_write() {
 	} > "$NFT_FILE"
 
 	if command -v fw4 >/dev/null 2>&1 && ! fw4 check >/dev/null 2>&1; then
-		sr_log "ERROR: generated nftables redirect rules failed fw4's syntax check, leaving the previous firewall state untouched"
-		rm -f "$NFT_FILE"
+		sr_log "ERROR: generated nftables redirect rules failed fw4's syntax check, restoring the previous firewall state"
+		if [ "$had_previous" = "1" ]; then
+			mv "$NFT_FILE.bak" "$NFT_FILE"
+		else
+			rm -f "$NFT_FILE"
+		fi
 		return 1
 	fi
+	rm -f "$NFT_FILE.bak"
 
 	/etc/init.d/firewall reload >/dev/null 2>&1 || /sbin/fw4 reload >/dev/null 2>&1 || true
 }

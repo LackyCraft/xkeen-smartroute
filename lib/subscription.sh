@@ -100,6 +100,22 @@ sr_fetch_sub() {
 	curl "$@" "$url"
 }
 
+# redact_url: scheme://host/path only -- strips everything from the first
+# "?" onward. Subscription URLs carry their access secret as a query-string
+# token (e.g. ?token=...); logging the URL verbatim on a fetch failure put
+# that token in syslog (sr_die -> sr_log -> `logger`, readable by anyone
+# with router access, and plausibly the exact thing a user pastes into a
+# support request) and in the RPC error response's own .detail field
+# (returned straight to the browser, see import_subscription in the rpcd
+# script). Keeping host/path lets a failure still be diagnosed ("which
+# subscription, which host") without the secret.
+redact_url() {
+	case "$1" in
+		*\?*) printf '%s***' "${1%%\?*}" ;;
+		*) printf '%s' "$1" ;;
+	esac
+}
+
 urldecode() {
 	# percent-decode + turn '+' into space, POSIX-portable (no bash-isms)
 	printf '%b' "$(printf '%s' "$1" | sed 's/+/ /g; s/%\(..\)/\\x\1/g')"
@@ -382,7 +398,7 @@ sr_import() {
 	done
 	trap 'rm -rf "$lock_dir"' EXIT INT TERM
 
-	raw="$(sr_fetch_sub "$client" "$url" "$os_ov" "$locale_ov" "$model_ov" "$ver_ov" "$hwid_ov")" || sr_die "failed to fetch subscription: $url"
+	raw="$(sr_fetch_sub "$client" "$url" "$os_ov" "$locale_ov" "$model_ov" "$ver_ov" "$hwid_ov")" || sr_die "failed to fetch subscription: $(redact_url "$url")"
 	decoded="$(printf '%s' "$raw" | base64 -d 2>/dev/null || true)"
 	case "$decoded" in
 		*"://"*) body="$decoded" ;;
@@ -391,8 +407,16 @@ sr_import() {
 
 	tmp_outbounds="$(mktemp)"
 	tmp_servers="$(mktemp)"
-	echo '[]' >"$tmp_outbounds"
-	echo '[]' >"$tmp_servers"
+	# One small file per parsed node below, merged in a single `jq -s` pass
+	# after the loop -- not appended to a growing array on every single
+	# line. The append-in-place version re-read, re-parsed, and rewrote the
+	# *entire* accumulated array on every iteration (jq --argjson ob '. +
+	# [$ob]' "$tmp_outbounds" > ...), real O(n^2) work for a subscription
+	# in the 150-190 server range this project actually sees, on hardware
+	# slow enough that it measurably added to import time. Writing one file
+	# per node is O(1) each; the final slurp is one O(n) pass over all of
+	# them.
+	tmp_dir="$(mktemp -d)"
 
 	label_slug="$(slugify "$label")"
 	i=0
@@ -419,6 +443,19 @@ sr_import() {
 		hostport="${userhostport#*@}"
 		host="${hostport%:*}"
 		port="${hostport##*:}"
+		# Bracketed IPv6 literal ("[2001:db8::1]:443", RFC 3986 -- how a URI
+		# has to encode an IPv6 host, since a bare literal's own colons
+		# would be indistinguishable from the ":port" separator). The %:*
+		# split above correctly finds the port after the closing bracket
+		# (shortest match from the end lands on the last colon either way),
+		# but leaves the brackets themselves inside $host; Xray's own
+		# outbound "address" field wants the bare literal, not URI bracket
+		# syntax, so a real IPv6 server would silently fail to connect
+		# (address "[2001:db8::1]" is not a valid address, just a mangled
+		# one) without this.
+		case "$host" in
+			\[*\]) host="${host#\[}"; host="${host%\]}" ;;
+		esac
 		name="$(urldecode "$frag_raw")"; [ -n "$name" ] || name="$host:$port"
 
 		i=$((i + 1))
@@ -480,12 +517,36 @@ sr_import() {
 
 		ob="$(build_outbound "$proto" "$secret" "$host" "$port" "$query" "" "$tag")" || { skipped=$((skipped + 1)); continue; }
 		ob="$(printf '%s' "$ob" | jq --arg sub "$label" '. + {subscription:$sub}')"
-		jq --argjson ob "$ob" '. + [$ob]' "$tmp_outbounds" >"$tmp_outbounds.new" && mv "$tmp_outbounds.new" "$tmp_outbounds"
+		# Zero-padded, not "$i" bare: the merge below globs these filenames
+		# and relies on shell glob expansion's lexicographic (string) sort to
+		# reconstruct encounter order -- confirmed live as a real regression,
+		# not hypothetical: with a bare counter, "sv_10.json" sorts before
+		# "sv_2.json", so every subscription with 10+ servers (this project's
+		# own test subscription runs 150-190) came out of a refresh with a
+		# scrambled order instead of the original one, even though the
+		# order-preserving dedup right below this loop (sort_by the original
+		# index) was written assuming encounter order was already intact.
+		# Users rely on this order to keep specific servers positioned first
+		# in the list. 6 digits covers any subscription size this project
+		# will plausibly ever see.
+		i_padded="$(printf '%06d' "$i")"
+		printf '%s' "$ob" >"$tmp_dir/ob_$i_padded.json"
 		jq -n --arg tag "$tag" --arg name "$name" --arg address "$host" --argjson port "$port" --arg proto "$proto" --arg sub "$label" --arg mkey "$match_key" \
 			'{tag:$tag, name:$name, address:$address, port:$port, protocol:$proto, subscription:$sub, match_key:$mkey}' \
-			>"$tmp_servers.one"
-		jq --argjson s "$(cat "$tmp_servers.one")" '. + [$s]' "$tmp_servers" >"$tmp_servers.new" && mv "$tmp_servers.new" "$tmp_servers"
+			>"$tmp_dir/sv_$i_padded.json"
 	done
+
+	if ls "$tmp_dir"/ob_*.json >/dev/null 2>&1; then
+		jq -s '.' "$tmp_dir"/ob_*.json >"$tmp_outbounds"
+	else
+		echo '[]' >"$tmp_outbounds"
+	fi
+	if ls "$tmp_dir"/sv_*.json >/dev/null 2>&1; then
+		jq -s '.' "$tmp_dir"/sv_*.json >"$tmp_servers"
+	else
+		echo '[]' >"$tmp_servers"
+	fi
+	rm -rf "$tmp_dir"
 
 	# A fetch that "succeeds" (curl exit 0) but returns an empty body, an
 	# error page, or a body with zero parseable vless://trojan:// lines
@@ -496,7 +557,7 @@ sr_import() {
 	parsed_count="$(jq 'length' "$tmp_servers")"
 	if [ "$parsed_count" -eq 0 ]; then
 		sr_log "import '$label' fetched 0 usable server(s) (empty/invalid response?) -- keeping existing data untouched"
-		rm -f "$tmp_outbounds" "$tmp_servers" "$tmp_servers.one" "$tmp_outbounds.new" "$tmp_servers.new" 2>/dev/null || true
+		rm -f "$tmp_outbounds" "$tmp_servers" 2>/dev/null || true
 		return 1
 	fi
 
@@ -608,6 +669,11 @@ sr_save_subscription_meta() {
 		'{url:$url, label:$label, client:$client, os:$os, locale:$locale, model:$model, ver:$ver, hwid:$hwid}')"
 	jq --arg lbl "$label" --argjson e "$entry" '[.[] | select(.label != $lbl)] + [$e]' "$SR_SUBS_META_FILE" >"$SR_SUBS_META_FILE.new"
 	mv "$SR_SUBS_META_FILE.new" "$SR_SUBS_META_FILE"
+	# Contains each subscription's raw URL, secret token included -- same
+	# tier as gateway_password_hash, which this project already stores
+	# 0600. Re-asserted on every write since `mv` from a freshly-written
+	# .new file doesn't inherit any prior chmod, just the default umask.
+	chmod 600 "$SR_SUBS_META_FILE" 2>/dev/null || true
 }
 
 sr_get_refresh_hours() {
@@ -663,6 +729,11 @@ sr_do_refresh() {
 	now="$(date +%s)"
 	count="$(jq 'length' "$SR_SUBS_META_FILE")"
 	sr_log "refresh: re-importing $count saved subscription(s)"
+	# Marker file, not a plain shell variable -- ok_count="$((ok_count+1))"
+	# set inside a `cmd | while read` pipeline lives in a subshell and never
+	# survives back to this scope; a file write does.
+	ok_marker="$(mktemp)"
+	rm -f "$ok_marker"
 	jq -c '.[]' "$SR_SUBS_META_FILE" | while IFS= read -r entry; do
 		u="$(printf '%s' "$entry" | jq -r '.url')"
 		l="$(printf '%s' "$entry" | jq -r '.label')"
@@ -675,9 +746,25 @@ sr_do_refresh() {
 		# subshell: sr_import calls sr_die (exit) on a fetch failure, which
 		# would otherwise abort this whole while loop on the first bad
 		# subscription instead of moving on to the next one
-		( sr_import "$u" "$l" "$c" "$o" "$lo" "$m" "$v" "$h" ) || sr_log "refresh: failed to re-import '$l'"
+		if ( sr_import "$u" "$l" "$c" "$o" "$lo" "$m" "$v" "$h" ); then
+			: >"$ok_marker"
+		else
+			sr_log "refresh: failed to re-import '$l'"
+		fi
 	done
-	sr_restart_xray
+	# Restarting Xray is not free (drops the current connection briefly,
+	# and resets Observatory's in-memory health data, which can take the
+	# better part of an hour to fully re-cover for a large subscription --
+	# see failover.go's persistHealth comment) -- doing it unconditionally
+	# even when every single label failed to re-import (a transient outage
+	# on the provider side, nothing about the router's own state actually
+	# changed) traded a real, visible cost for zero benefit.
+	if [ -f "$ok_marker" ]; then
+		sr_restart_xray
+	else
+		sr_log "refresh: every subscription failed to re-import, skipping xray restart"
+	fi
+	rm -f "$ok_marker"
 	jq -n --arg now "$now" '{last: ($now|tonumber)}' >"$SR_REFRESH_STATE_FILE"
 }
 
@@ -730,6 +817,11 @@ sr_delete_subscription() {
 	[ -s "$SR_SUBS_META_FILE" ] || echo '[]' >"$SR_SUBS_META_FILE"
 	jq --arg lbl "$label" '[.[] | select(.label != $lbl)]' "$SR_SUBS_META_FILE" >"$SR_SUBS_META_FILE.new"
 	mv "$SR_SUBS_META_FILE.new" "$SR_SUBS_META_FILE"
+	# Contains each subscription's raw URL, secret token included -- same
+	# tier as gateway_password_hash, which this project already stores
+	# 0600. Re-asserted on every write since `mv` from a freshly-written
+	# .new file doesn't inherit any prior chmod, just the default umask.
+	chmod 600 "$SR_SUBS_META_FILE" 2>/dev/null || true
 
 	sr_restart_xray || true
 	sr_log "subscription '$label' deleted"

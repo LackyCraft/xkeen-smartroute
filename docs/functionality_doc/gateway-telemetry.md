@@ -8,6 +8,7 @@
 ## Содержание
 
 - [gRPC-клиент: три сервиса Xray](#grpc-клиент-три-сервиса-xray)
+- [Когда gRPC-соединение стабильно рвётся: два бага самого Xray-core](#когда-grpc-соединение-стабильно-рвётся-два-бага-самого-xray-core)
 - [failover.go: балансер-reconciliation отключена](#failover-go-балансер-reconciliation-отключена)
 - [health.json: устойчивость данных между рестартами](#healthjson-устойчивость-данных-между-рестартами)
 - [Точка "online now": activity.go](#точка-online-now-activityго)
@@ -42,6 +43,44 @@ type xrayClient struct {
   для управления Xray-балансером. Обёрнуты в `xray.go` (`getBalancerInfo`/
   `overrideBalancer`), но их единственный вызывающий код сейчас
   закомментирован — см. ниже.
+
+## Когда gRPC-соединение стабильно рвётся: два бага самого Xray-core
+
+Найдено вживую, когда рестарты Xray стали происходить регулярно (после
+того, как ночной cron наконец заработал — см.
+[install-and-process-management.md](install-and-process-management.md)):
+статус здоровья серверов застрял на 46 часов, при этом Xray работал и
+проксировал трафик нормально. Причина — два независимых бага Xray-core
+26.2.6 на этой платформе, не связанных с этим проектом:
+
+1. **`xray run -confdir` может молча потерять один файл конфига при
+   слиянии** — воспроизведено вживую до 5 раз из 10 подряд, без единой
+   строки в логе запуска Xray. `sr_restart_xray`
+   ([`lib/common.sh`](../../lib/common.sh)'s `_sr_xray_launch`) теперь
+   сверяет число `Reading config` строк в логе запуска с реальным числом
+   `*.json`-файлов в confdir и перезапускает Xray заново (до 10 раз),
+   пока они не совпадут.
+2. **Собственное правило маршрутизации `inboundTag:["api"] →
+   outboundTag:"api"` (без него gRPC-инбаунд Xray в принципе недостижим)
+   никогда не переживало это слияние** — не гонка, а стабильно
+   воспроизводимый факт: как только confdir читает ещё один файл с ключом
+   `routing`, тот побеждает целиком. Правило теперь эмитит `genroute.sh`
+   в файл, который уже надёжно побеждает при слиянии — подробности в
+   [routing-generation.md](routing-generation.md#правило-для-grpc-api-панели--тот-же-трюк-найденный-тем-же-способом).
+
+Оба бага давали один и тот же симптом на стороне gateway — постоянный
+`error reading server preface: EOF` на каждом вызове `queryOutboundHealth`/
+`queryOutboundTrafficByTag`, при полностью рабочем прокси-трафике.
+
+Третий, отдельный баг — уже про сам вызов `QueryStats`, не про
+достижимость API: без верхнеуровневого блока `"stats": {}` (не путать с
+флагами внутри `"policy"`, которые лишь настраивают, что именно считать,
+когда сбор уже включён) Xray отвечает `QueryStats only works its own
+stats.Manager` на каждый запрос трафика по outbound'ам — известный пробел
+апстрима, независимо подтверждён в
+[XTLS/Xray-core#2296](https://github.com/XTLS/Xray-core/issues/2296) и
+[XTLS/Xray-core#4509](https://github.com/XTLS/Xray-core/discussions/4509).
+Блок добавлен в `install.sh`'s `06_policy.json`.
 
 ## failover.go: балансер-reconciliation отключена
 
@@ -96,7 +135,7 @@ reconcileBalancer(...) }` внутри `runFailoverTick()`, который пр�
 логировал неудачу и ничего не менял каждые 20 секунд для каждого
 `balancer`-режим профиля, **закомментирован** — не удалён, а именно
 закомментирован, вместе с самой функцией `reconcileBalancer()`
-([`gateway/failover.go:67-155`](../../gateway/failover.go#L67-L155)):
+([`gateway/failover.go:113-186`](../../gateway/failover.go#L113-L186)):
 
 ```go
 // reconcileBalancer (below, commented out) is currently dead: ...
@@ -116,6 +155,15 @@ reconcileBalancer(...) }` внутри `runFailoverTick()`, который пр�
 код и вызывал) уже на месте, синтаксически корректен и снят одним
 раскомментированием — без переписывания заново.
 
+**`queryOutboundHealth()` не всегда успешен** — на установке без
+единого `balancer`-режим профиля `07_observatory.smartroute.json` не
+пишется вовсе, и Observatory отвечать нечем; `runFailoverTick()`
+принимает и возвращает `wasFailing bool`, логируя ошибку только на
+переходе успех→отказ (и восстановление отказ→успех), а не на каждом из
+~4300 тиков в сутки, как раньше — исправлено вживую после того, как
+это было найдено реально забивающим лог на пустом install
+([`gateway/failover.go:61-111`](../../gateway/failover.go#L61-L111)).
+
 ## health.json: устойчивость данных между рестартами
 
 `persistHealth()` **мёржит**, а не перезаписывает — Xray-шный
@@ -124,7 +172,14 @@ Observatory сбрасывает весь прогресс прощупыван�
 (~20-30с на сервер). Простая перезапись стёрла бы вердикт по каждому
 ещё не переопрошенному тегу немедленно на рестарте — именно тогда,
 когда `sr_pick_top1` и колонка Observatory на UI в нём больше всего
-нуждаются:
+нуждаются. Но мёрж без противоположной чистки только растёт —
+подтверждено вживую, файл никогда не уменьшался: сервер, которого
+подписка больше не содержит, оставался в `health.json` навсегда, по
+одной устаревшей записи на каждый вычищенный сервер за всё время жизни
+роутера. `persistHealth()` теперь удаляет только те теги, которых
+`loadServers()` вообще не знает — не трогая теги, которые просто ещё не
+переопрошены с последнего рестарта (это разные вещи, путать их обратно
+свело бы на нет весь смысл мержа выше):
 
 ```go
 func persistHealth(health map[string]outboundHealth) {
@@ -135,14 +190,32 @@ func persistHealth(health map[string]outboundHealth) {
 	for tag, h := range health {
 		merged[tag] = h
 	}
+
+	if servers, err := loadServers(); err == nil {
+		live := make(map[string]struct{}, len(servers))
+		for _, s := range servers {
+			live[s.Tag] = struct{}{}
+		}
+		for tag := range merged {
+			if _, ok := live[tag]; !ok {
+				delete(merged, tag)
+			}
+		}
+	}
+
 	...
 	tmp := healthStateFile + ".tmp"
-	os.WriteFile(tmp, b, 0o644)
-	os.Rename(tmp, healthStateFile)
+	if err := os.WriteFile(tmp, b, 0o644); err != nil {
+		log.Printf("persistHealth: write %s: %v", tmp, err)
+		return
+	}
+	if err := os.Rename(tmp, healthStateFile); err != nil {
+		log.Printf("persistHealth: rename %s -> %s: %v", tmp, healthStateFile, err)
+	}
 }
 ```
 
-([`gateway/failover.go:151-178`](../../gateway/failover.go#L151-L178))
+([`gateway/failover.go:188-242`](../../gateway/failover.go#L188-L242))
 
 Атомарная запись через временный файл + `rename` — не случайная
 предосторожность: этот код пишет файл каждые 20 секунд весь день;
@@ -150,7 +223,8 @@ func persistHealth(health map[string]outboundHealth) {
 записи, оставила бы битый файл, а `json.Unmarshal` на следующем старте
 тихо проглотил бы ошибку (`_ = json.Unmarshal(...)`) и код счёл бы это
 "старых данных нет", переписав файл почти пустым — вживую найденная и
-исправленная проблема.
+исправленная проблема. Ошибки записи/переименования теперь тоже
+логируются, а не проглатываются молча.
 
 ## Точка "online now": activity.go
 

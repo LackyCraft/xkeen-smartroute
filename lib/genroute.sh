@@ -328,6 +328,19 @@ sr_regen() {
 
 	for pf in "$SR_PROFILES_DIR"/*.json; do
 		[ -e "$pf" ] || continue
+		# A profile file that isn't valid JSON (a partial write from a crash
+		# mid-save, a corrupted flash sector, anything) used to abort this
+		# entire loop right here: under `set -e`, `name="$(jq ... "$pf")"`
+		# failing aborts sr_regen (and, upstream, whatever rpcd call
+		# triggered it) with no message -- every OTHER profile, not just
+		# this broken one, silently stopped getting routing rules from that
+		# point on, and list_profiles' own `jq -s` (below) would fail the
+		# exact same way for the whole list. Skip just the broken file and
+		# say so, instead of taking every profile down with it.
+		if ! jq -e . "$pf" >/dev/null 2>&1; then
+			sr_log "profile file '$pf' is not valid JSON, skipping it"
+			continue
+		fi
 		name="$(jq -r '.name' "$pf")"
 		mode="$(jq -r '.mode' "$pf")"
 		field_list="$(build_rule_list "$pf")"
@@ -409,6 +422,23 @@ sr_regen() {
 	# genuinely outside every profile.
 	catchall='{"type":"field","inboundTag":["redirect","tproxy"],"outboundTag":"direct"}'
 	rules="$(echo "$rules" | jq --argjson r "$catchall" '. + [$r]')"
+
+	# Same class of problem as the catchall above, found the same way (a real
+	# leak, not a hypothetical): 00_api.smartroute.json's own routing rule
+	# (inboundTag:["api"] -> outboundTag:"api", the only thing that makes
+	# Xray's internal gRPC API service on 127.0.0.1:10085 actually reachable
+	# through its dokodemo-door inbound) never survives Xray's confdir merge
+	# once this file also defines a "routing" key -- confirmed live via
+	# `xray run -test -confdir ... -dump`: the merged config's routing.rules
+	# only ever contains what THIS file emits, 00_api.smartroute.json's own
+	# routing block is gone without a trace, no error anywhere. Symptom was
+	# nasty precisely because nothing crashes: Xray runs, proxies traffic
+	# fine, and only the gateway panel's gRPC connection to it breaks --
+	# "error reading server preface: EOF" on every call, health/Observatory/
+	# traffic-graph data silently going stale. Emit it here instead, in the
+	# one file that's actually guaranteed to win.
+	api_rule='{"type":"field","inboundTag":["api"],"outboundTag":"api"}'
+	rules="$(echo "$rules" | jq --argjson r "$api_rule" '. + [$r]')"
 
 	new_routing="$(jq -n --argjson rules "$rules" '{routing:{domainStrategy:"IPIfNonMatch", rules:$rules}}')"
 
@@ -525,6 +555,14 @@ case "${1:-}" in
 		[ -n "${2:-}" ] && [ -f "$2" ] || sr_die "profile json file required"
 		name="$(jq -r '.name' "$2")"
 		[ -n "$name" ] && [ "$name" != "null" ] || sr_die "profile json must have a .name"
+		# name becomes a filename below ($SR_PROFILES_DIR/$name.json) --
+		# reject anything that could escape that directory (a literal "/"
+		# is the only thing that can, since a name with no "/" at all can
+		# never resolve to "..") rather than silently mangling it, so a
+		# legitimate name (spaces, unicode, whatever) round-trips exactly
+		# as typed everywhere else this same string is compared against
+		# (kill-switch's flag file, current.json, etc).
+		case "$name" in */*) sr_die "profile name cannot contain '/'" ;; esac
 
 		# A profile matching by none of domain, device, or ip_ranges would
 		# generate a rule matching every domain from every device --
@@ -566,6 +604,7 @@ case "${1:-}" in
 		;;
 	delete)
 		[ -n "${2:-}" ] || sr_die "profile name required"
+		case "$2" in */*) sr_die "profile name cannot contain '/'" ;; esac
 		rm -f "$SR_PROFILES_DIR/$2.json"
 		sr_regen 1
 		;;
@@ -573,7 +612,21 @@ case "${1:-}" in
 	list)
 		sr_ensure_dirs
 		if ls "$SR_PROFILES_DIR"/*.json >/dev/null 2>&1; then
-			jq -s '.' "$SR_PROFILES_DIR"/*.json
+			# `jq -s` (slurp) on *.json directly fails its whole output the
+			# instant any ONE file isn't valid JSON -- same failure mode
+			# sr_regen's loop above used to have, just for the read side:
+			# every other real profile disappears from the list along with
+			# the broken one, with no error surfaced anywhere. Filter to
+			# files that actually parse first; skipping the rest here
+			# mirrors sr_regen already skipping them for routing purposes,
+			# so "shows up in the list" and "gets routing rules" agree.
+			out="[]"
+			for pf in "$SR_PROFILES_DIR"/*.json; do
+				[ -e "$pf" ] || continue
+				jq -e . "$pf" >/dev/null 2>&1 || { sr_log "profile file '$pf' is not valid JSON, omitting it from the list"; continue; }
+				out="$(printf '%s' "$out" | jq --slurpfile p "$pf" '. + $p')"
+			done
+			printf '%s' "$out"
 		else
 			echo '[]'
 		fi

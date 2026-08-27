@@ -76,7 +76,7 @@ sh <(wget -O - https://raw.githubusercontent.com/LackyCraft/xkeen-smartroute/mas
 - **Subscription auto-refresh** on a schedule, without losing already-saved servers on a transient failure → [subscription-update.md](docs/functionality_doc/subscription-update.md).
 - **Ping + Observatory** — a real liveness check for every server, not just a bare TCP connect.
 - **Your own domain lists on the fly** + ready-made lists for what's missing from geosite (Character.AI, Grok/x.ai, npm) → [domain-lists.md](docs/functionality_doc/domain-lists.md).
-- **Kill-switch with zero time gap** — a permanently armed firewall rule, not once-a-minute polling.
+- **Kill-switch with zero time gap** — a permanently armed firewall rule, not once-a-minute polling; `install.sh` installs `dnsmasq-full` itself, needed for the hard layer.
 - **Double VPN** — relays all traffic through one chosen gateway server, gets around an ISP's per-server blocking → [doublevpn.md](docs/functionality_doc/doublevpn.md).
 - **Leak protection** — DNS, IPv6, QUIC.
 - **Resilient Xray restarts** — config validated before every restart, a broken subscription node can't take the proxy down.
@@ -100,6 +100,8 @@ Full step-by-step breakdown — [routing-generation.md](docs/functionality_doc/r
 4. **Kill-Switch** → enable protection for a profile.
 5. Live panel: `http://<router-ip>:1001/`.
 6. Service tasks (router logs, manual config, core updates): `http://<router-ip>:1000/` (xkeen-UI).
+
+By default the panel (`:1001`) and xkeen-UI (`:1000`) listen on all router interfaces — reachable from the whole LAN, same as the router's own admin panel. Both `install.sh` and the panel's Status tab let you set a password — see the warning in [License and disclaimer](#license-and-disclaimer) before exposing the panel outside your LAN.
 
 ## System requirements
 
@@ -133,7 +135,7 @@ Checks OpenWrt/Entware/xkeen/the xray process/xkeen-UI/config validity/the ubus 
 | Refreshed the subscription, server count didn't change | Refresh runs in the background, a couple minutes on a large subscription — wait and reload; then check the gateway's log |
 | Profile saved, traffic didn't switch | `sh check.sh` — is `05_routing.smartroute.json` valid; check logs via the panel (`:1001` → Status → enable logs) or xkeen-UI (`:1000`) |
 | Not enough space installing Entware | Attach a USB drive, re-run `install.sh` |
-| Panel on port 1001 won't open | `pgrep -f smartroute-gateway`; empty — `/opt/etc/init.d/S98smartroute-gateway restart`, log at `/etc/xkeen-smartroute/state/gateway.log` |
+| Panel on port 1001 won't open | `pgrep -f /opt/share/xkeen-smartroute/gateway` (the full path — the short `smartroute-gateway` doesn't match the real process); empty — `/opt/etc/init.d/S98smartroute-gateway restart`, log at `/etc/xkeen-smartroute/state/gateway.log` |
 | Panel log shows a Xray API connection error | gRPC API listens on `127.0.0.1:10085`, enabled by `00_api.smartroute.json` — `sh check.sh` shows whether it's in place |
 | Forgot the panel or xkeen-UI password | Panel: `rm /etc/xkeen-smartroute/state/gateway_password_hash && /opt/etc/init.d/S98smartroute-gateway restart` — set a new one from Status. For xkeen-UI — see its own docs |
 
@@ -210,3 +212,5 @@ SmartRoute's author also runs their own projects: the [@GussiTrade](https://t.me
 The code is distributed under the [MIT](LICENSE) license.
 
 This project is a tool for managing *your own* VPN subscription and *your own* router. Complying with your country's laws around VPN use and traffic routing choices is your own responsibility.
+
+**On exposing the panel/xkeen-UI to the internet.** Opening panel access to the internet (port forwarding, DMZ, etc.) without proper security measures can lead to your router being compromised or data leaking. The project author is not liable for these consequences.

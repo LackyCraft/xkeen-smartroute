@@ -32,10 +32,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"os/exec"
+	"strings"
 	"sync"
 	"time"
 )
@@ -53,6 +55,15 @@ type rpcBridge struct {
 	mu          sync.RWMutex
 	methods     map[string]struct{}
 	lastRefresh time.Time
+
+	// refreshMu serializes refreshMethods itself (separate from mu, which
+	// only protects the map/timestamp) -- allowed() below used to let every
+	// concurrent cache-miss call refreshMethods independently, N concurrent
+	// misses meaning N parallel `sh script list` execs against the same
+	// script at once. Holding this for the whole refresh means the 2nd..Nth
+	// caller blocks, then (after acquiring it) re-checks the now-current
+	// state before ever considering its own redundant exec.
+	refreshMu sync.Mutex
 }
 
 func newRPCBridge(script string) *rpcBridge {
@@ -65,11 +76,21 @@ func (b *rpcBridge) refreshMethods() {
 	out, err := exec.Command("sh", b.script, "list").Output()
 	if err != nil {
 		log.Printf("rpc bridge: could not read method list from %s: %v", b.script, err)
+		// Still bump lastRefresh -- otherwise a script that's temporarily
+		// broken/unreachable makes every single call see "stale" forever,
+		// each one re-triggering its own exec attempt instead of backing
+		// off for refreshCooldown like a normal failure would.
+		b.mu.Lock()
+		b.lastRefresh = time.Now()
+		b.mu.Unlock()
 		return
 	}
 	var schema map[string]json.RawMessage
 	if err := json.Unmarshal(out, &schema); err != nil {
 		log.Printf("rpc bridge: method list from %s is not valid JSON: %v", b.script, err)
+		b.mu.Lock()
+		b.lastRefresh = time.Now()
+		b.mu.Unlock()
 		return
 	}
 	methods := make(map[string]struct{}, len(schema))
@@ -91,6 +112,19 @@ func (b *rpcBridge) allowed(method string) bool {
 	if ok || !stale {
 		return ok
 	}
+
+	b.refreshMu.Lock()
+	defer b.refreshMu.Unlock()
+	// Another goroutine may have already refreshed while this one was
+	// waiting for refreshMu -- re-check before doing a redundant exec.
+	b.mu.RLock()
+	_, ok = b.methods[method]
+	stillStale := time.Since(b.lastRefresh) > refreshCooldown
+	b.mu.RUnlock()
+	if ok || !stillStale {
+		return ok
+	}
+
 	b.refreshMethods()
 	b.mu.RLock()
 	_, ok = b.methods[method]
@@ -122,8 +156,20 @@ func (b *rpcBridge) allowed(method string) bool {
 // method this needs to accommodate -- worst case ~150 servers x 3s.
 const callTimeout = 10 * time.Minute
 
-func (b *rpcBridge) call(ctx context.Context, method string, args json.RawMessage) (json.RawMessage, error) {
-	ctx, cancel := context.WithTimeout(ctx, callTimeout)
+// call deliberately roots its context in context.Background(), never in the
+// HTTP request's own r.Context() -- confirmed live: a client that closes the
+// tab, navigates away, or just loses the LAN link mid subscription-refresh
+// cancels r.Context() the instant the connection drops, and that used to
+// propagate straight into this exec.CommandContext, SIGKILLing the shell for
+// the exact same reason callTimeout above was widened from 30s: the script's
+// own EXIT trap (its import lock cleanup) never runs on SIGKILL, leaving
+// servers.json and 04_outbounds.smartroute.json inconsistent until the
+// lock's 300s staleness timeout expires. A dropped connection is not a
+// reason to abort a write that's already in progress -- the script runs to
+// completion either way, bounded only by callTimeout; handleRPC below simply
+// finds it has no live connection left to write the response to.
+func (b *rpcBridge) call(method string, args json.RawMessage) (json.RawMessage, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), callTimeout)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, "sh", b.script, "call", method)
@@ -134,6 +180,18 @@ func (b *rpcBridge) call(ctx context.Context, method string, args json.RawMessag
 	}
 	out, err := cmd.Output()
 	if err != nil {
+		// cmd.Output() does capture stderr into err.(*exec.ExitError).Stderr,
+		// but err.Error() alone never includes it -- just "exit status N",
+		// completely undiagnosable for exactly the methods most likely to
+		// fail in an interesting way (refresh/import/save, the long-running
+		// ones handleRPC exists to bridge in the first place). handlers.go's
+		// saveProfile already surfaces its own script's stderr via
+		// CombinedOutput; do the same here, just without mixing stderr into
+		// the stdout bytes returned on the success path above (those have
+		// to stay clean JSON).
+		if ee, ok := err.(*exec.ExitError); ok && len(ee.Stderr) > 0 {
+			return nil, fmt.Errorf("%v: %s", err, strings.TrimSpace(string(ee.Stderr)))
+		}
 		return nil, err
 	}
 	return json.RawMessage(out), nil
@@ -159,7 +217,7 @@ func handleRPC(b *rpcBridge) http.HandlerFunc {
 				args = json.RawMessage(body)
 			}
 		}
-		out, err := b.call(r.Context(), method, args)
+		out, err := b.call(method, args)
 		if err != nil {
 			writeErr(w, http.StatusBadGateway, "rpc_failed: "+err.Error())
 			return

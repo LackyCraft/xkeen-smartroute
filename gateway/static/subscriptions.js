@@ -48,16 +48,27 @@
 		});
 	}
 
+	// Not label-scoped: every caller (refresh-all, ping-all, one
+	// subscription's own refresh/ping button) polls the same global state
+	// via reloadAll(), so two overlapping calls used to run two fully
+	// independent timer chains hitting the router twice as often for no
+	// benefit -- both converge on the same shared state regardless. Only
+	// one poll loop ever runs at a time now; a second caller just attaches
+	// its own .then() to the one already in flight (each caller's own
+	// .then() still clears its own specific flag correctly either way).
+	var activePoll = null;
 	function pollAndRerender(times, intervalMs) {
+		if (activePoll) return activePoll;
 		var i = 0;
 		function tick() {
 			return reloadAll().then(function () {
 				i++;
-				if (i >= times) return;
+				if (i >= times) { activePoll = null; return; }
 				return new Promise(function (r) { setTimeout(r, intervalMs); }).then(tick);
 			});
 		}
-		return tick();
+		activePoll = tick().catch(function (err) { activePoll = null; throw err; });
+		return activePoll;
 	}
 
 	function renderList() {
@@ -125,7 +136,10 @@
 	}
 	function handleDeleteSubscription(label) {
 		if (!confirm(T('sub_delete_confirm').replace('%s', label))) return;
-		api.deleteSubscription(label).then(reloadAll);
+		api.deleteSubscription(label).then(function (res) {
+			if (res && res.error) { SR.toast(T('status_action_failed') + ': ' + (res.detail || res.error), 'error'); return; }
+			return reloadAll();
+		});
 	}
 
 	function handleImport(ev) {

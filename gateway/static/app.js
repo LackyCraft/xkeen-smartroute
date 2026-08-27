@@ -4,10 +4,22 @@
  * lib/*.sh (via smartroute-gateway's POST /api/call/{method}, which execs
  * the exact same rpcd script LuCI's ubus backend calls -- one source of
  * truth for subscriptions/profiles/kill-switch/leak-protection, not a
- * second copy), the RU/EN dictionary (deliberately the same keys/strings as
+ * second copy), the RU/EN dictionary (meant to carry the same text as
  * luci-app-xkeen-smartroute/root/www/luci-static/resources/xkeen-smartroute.js
- * so the two UIs never say something different for the same concept), a
- * tiny DOM-builder (E), and the section router driving the sidebar.
+ * for every key both dictionaries share, so the two UIs don't say something
+ * different for the same concept), a tiny DOM-builder (E), and the section
+ * router driving the sidebar.
+ *
+ * "Meant to", not guaranteed: this is two separate files with no shared
+ * source and nothing checking they agree -- confirmed live, 19 shared keys
+ * had quietly drifted apart (one side gaining a more complete explanation
+ * over time, the other never getting the update) before being resynced.
+ * Each dictionary also carries keys the other has no use for at all (this
+ * one's login/password/log-viewer strings, LuCI's own device-picker/status
+ * strings) -- that's expected, not drift; only a key that exists in BOTH
+ * dictionaries needs to actually match. There's no automated check for
+ * this yet, so re-verify by hand (or write one) before assuming either
+ * copy is still in sync after editing shared-concept text in just one file.
  */
 
 // --- tiny DOM builder, same shape as LuCI's own E() so tab modules ported
@@ -41,11 +53,9 @@ function E(tag, attrs, children) {
 // --- i18n ---
 
 var DICT = {
-	app_name: { ru: 'XKeen SmartRoute', en: 'XKeen SmartRoute' },
-	app_by: { ru: 'DanyByLC', en: 'DanyByLC' },
 	nav_home: { ru: 'Статус', en: 'Status' },
 	nav_subscriptions: { ru: 'Подписки', en: 'Subscriptions' },
-	nav_profiles: { ru: 'Профили', en: 'Profiles' },
+	nav_profiles:        { ru: 'Профили маршрутизации', en: 'Routing profiles' },
 	nav_doublevpn: { ru: 'Double VPN', en: 'Double VPN' },
 	nav_domains: { ru: 'Домены', en: 'Domains' },
 	nav_killswitch: { ru: 'Kill-Switch', en: 'Kill-Switch' },
@@ -104,7 +114,7 @@ var DICT = {
 	refresh_interval_label: { ru: 'Обновлять каждые (часов)', en: 'Refresh every (hours)' },
 	refresh_save_btn: { ru: 'Сохранить', en: 'Save' },
 	refresh_now_btn: { ru: 'Обновить все подписки сейчас', en: 'Refresh all subscriptions now' },
-	refresh_now_started: { ru: 'Обновление запущено в фоне — для большой подписки может занять несколько минут', en: 'Refresh started in the background -- may take a few minutes for a large subscription' },
+	refresh_now_started: { ru: 'Обновление запущено в фоне — обновите список серверов через несколько секунд', en: 'Refresh started in the background — reload the server list in a few seconds' },
 	sub_background_note: { ru: 'Выполняется в фоне — для большой подписки может занять несколько минут. Список обновится сам, когда закончится.', en: 'Running in the background -- may take a few minutes for a large subscription. The list will update itself once it finishes.' },
 	refresh_saved_ok: { ru: 'Интервал сохранён', en: 'Interval saved' },
 	observatory_period_title: { ru: 'Период проверки живости серверов (Observatory)', en: 'Server liveness check period (Observatory)' },
@@ -114,7 +124,7 @@ var DICT = {
 	sub_subscriptions_title: { ru: 'Ваши подписки', en: 'Your subscriptions' },
 	sub_servers_word: { ru: 'серверов', en: 'servers' },
 	sub_ping_all_btn: { ru: 'Проверить пинг всех', en: 'Ping all' },
-	sub_ping_started: { ru: 'Проверка пинга запущена в фоне — для большой подписки может занять несколько минут', en: 'Ping check started in the background -- may take a few minutes for a large subscription' },
+	sub_ping_started: { ru: 'Проверка пинга запущена в фоне (по очереди, может занять время)', en: 'Ping check started in the background (one at a time, may take a while)' },
 	sub_no_subscriptions: { ru: 'Подписок пока нет — добавьте выше.', en: 'No subscriptions yet — add one above.' },
 	sub_delete_confirm: { ru: 'Удалить подписку «%s» и все её сервера?', en: 'Delete subscription "%s" and all its servers?' },
 	sub_refreshing_one: { ru: 'Обновляю…', en: 'Refreshing…' },
@@ -125,14 +135,15 @@ var DICT = {
 	saving: { ru: 'Сохраняю…', en: 'Saving…' },
 	saved_ok: { ru: 'Сохранено, xray перезапущен', en: 'Saved, xray restarted' },
 	save_failed: { ru: 'Не удалось сохранить профиль', en: 'Failed to save profile' },
+	profile_deleted_ok: { ru: 'Удалено, xray перезапущен', en: 'Deleted, xray restarted' },
 	auto_refresh_toggle_label: { ru: 'Автообновление подписок', en: 'Subscription auto-refresh' },
-	auto_refresh_warning: { ru: '⚠️ Если провайдер удалит сервер, он пропадёт и из профиля, где был выбран.',
-		en: '⚠️ If the provider genuinely removes a server, it disappears from any profile that had it selected.' },
+	auto_refresh_warning: { ru: '⚠️ Если состав подписки изменится, серверы профилей сверяются автоматически (тот же узел под новым адресом/параметрами — переносится), но если провайдер реально удалит сервер — он пропадёт и из профиля, где был выбран.',
+	                       en: "⚠️ If the subscription's server list changes, profile selections are reconciled automatically (the same node under a new address/params carries over) — but if the provider genuinely removes a server, it disappears from any profile that had it selected too." },
 	profile_removed_servers_label: { ru: 'пропали при обновлении подписки', en: 'removed by a subscription refresh' },
 
 	add_profile_title: { ru: 'Добавить профиль', en: 'Add a profile' },
-	profiles_intro: { ru: 'Профиль — это правило: «эти домены → на эти сервера». Можно направить список на один конкретный сервер (fixed) или на группу — тогда SmartRoute сам будет постоянно выбирать самый быстрый живой сервер из группы.',
-		en: 'A profile is a rule: "these domains → these servers". Point a list at one specific server (fixed), or at a group — SmartRoute continuously picks the fastest healthy server from the group itself.' },
+	profiles_intro: { ru: 'Профиль — это правило: «эти домены → на эти сервера». Можно направить список на один конкретный сервер (fixed) или на группу — тогда SmartRoute сам будет постоянно выбирать самый быстрый живой сервер из группы (по пингу и собственному Observatory, не встроенный leastPing Xray — см. README).',
+	                   en: 'A profile is a rule: "these domains → these servers". Point a list at one specific server (fixed), or at a group — SmartRoute will then continuously pick the fastest healthy server from the group itself (by ping + its own Observatory data, not Xray\'s built-in leastPing — see README).' },
 	profile_name: { ru: 'Название профиля', en: 'Profile name' },
 	profile_name_placeholder: { ru: 'например: youtube', en: 'e.g. youtube' },
 	activity_online: { ru: 'Сейчас активен — идёт трафик', en: 'Active now — traffic is flowing' },
@@ -150,6 +161,7 @@ var DICT = {
 	need_servers_first: { ru: 'Сначала импортируйте подписку на вкладке «Подписки».', en: 'Import a subscription on the Subscriptions tab first.' },
 	existing_profiles: { ru: 'Существующие профили', en: 'Existing profiles' },
 	no_profiles: { ru: 'Профилей ещё нет.', en: 'No profiles yet.' },
+	profile_delete_confirm: { ru: 'Удалить профиль «%s»?', en: 'Delete profile "%s"?' },
 	col_domains: { ru: 'Домены', en: 'Domains' },
 	col_target: { ru: 'Куда', en: 'Target' },
 
@@ -168,58 +180,58 @@ var DICT = {
 	dv_gateway_badge: { ru: 'текущий шлюз', en: 'current gateway' },
 
 	devices_title: { ru: 'Устройства (необязательно)', en: 'Devices (optional)' },
-	devices_intro: { ru: 'Ограничьте профиль конкретными устройствами — например, «только телевизор».',
-		en: 'Restrict this profile to specific devices — e.g. "only the TV".' },
+	devices_intro: { ru: 'Ограничьте профиль конкретными устройствами — например, «только телевизор» вместо всей сети. Можно оставить пустым (профиль сработает для всех устройств) или сочетать со списком доменов выше — например, «только телевизор, только для YouTube».',
+	                 en: "Restrict this profile to specific devices — e.g. \"only the TV\" instead of the whole network. Leave empty for all devices, or combine with the domain list above — e.g. \"only the TV, only for YouTube\"." },
 	devices_no_domain_warning: { ru: 'Ни домены, ни устройства, ни IP-диапазоны не выбраны — профиль ничего не будет матчить.', en: 'No domains, devices, or IP ranges are selected — this profile would match nothing.' },
 	devices_manual_placeholder: { ru: '192.168.1.50 или 192.168.1.0/24', en: '192.168.1.50 or 192.168.1.0/24' },
 	devices_manual_add: { ru: 'Добавить', en: 'Add' },
 	devices_manual_invalid: { ru: 'Введите IPv4-адрес или CIDR, например 192.168.1.50 или 192.168.1.0/24', en: 'Enter an IPv4 address or CIDR, e.g. 192.168.1.50 or 192.168.1.0/24' },
-	devices_none_detected: { ru: 'Устройства не найдены (проверьте DHCP-аренды роутера).', en: "No devices found (check the router's DHCP leases)." },
+	devices_none_detected: { ru: 'Устройства не найдены (проверьте DHCP-аренды роутера).', en: 'No devices found (check the router\'s DHCP leases).' },
 
 	ip_ranges_title: { ru: 'IP-диапазоны (необязательно)', en: 'IP ranges (optional)' },
-	ip_ranges_intro: { ru: 'Для приложений вроде Telegram, чей основной трафик не резолвится по домену. IP/CIDR по одному на строку или через запятую — либо вставьте/загрузите список в формате .bat (Keenetic Routes, "route ADD сеть MASK маска шлюз"), распознаётся автоматически.',
-		en: 'For apps like Telegram whose core traffic isn\'t routed by domain. One IP/CIDR per line or comma-separated -- or paste/load a Keenetic Routes .bat list ("route ADD network MASK mask gateway"), detected automatically.' },
+	ip_ranges_intro: { ru: 'Некоторые приложения не используют домены для основного трафика — например, Telegram на телефоне/десктопе соединяется по MTProto напрямую по IP дата-центров, без SNI/Host, поэтому geosite:telegram (список доменов) их не ловит — только веб-версию. Впишите сюда известные IP-диапазоны такого сервиса (по одному на строку или через запятую) — они добавят отдельное правило маршрутизации в дополнение к списку доменов выше. Поддерживается и формат .bat со статическими маршрутами Keenetic ("route ADD сеть MASK маска шлюз") — вставьте или загрузите файлом, распознаётся автоматически.',
+	                  en: "Some apps don't route their core traffic by domain at all — e.g. Telegram's phone/desktop apps talk MTProto straight to datacenter IPs with no SNI/Host, so geosite:telegram (a domain list) only ever catches the web version. Paste that service's known IP ranges here (one per line or comma-separated) — they add a separate routing rule alongside the domain list above. Keenetic's exported static-route .bat format (\"route ADD network MASK mask gateway\") is also supported — paste or load it as a file, detected automatically." },
 	ip_ranges_placeholder: { ru: '91.108.56.0/22\n149.154.160.0/20\nroute ADD 147.75.208.0 MASK 255.255.240.0 172.16.0.2\n...', en: '91.108.56.0/22\n149.154.160.0/20\nroute ADD 147.75.208.0 MASK 255.255.240.0 172.16.0.2\n...' },
 	ip_ranges_invalid: { ru: 'Некорректная строка/IP/CIDR', en: 'Invalid line/IP/CIDR' },
 	ip_ranges_load_bat_btn: { ru: 'Загрузить .bat (Keenetic Routes)', en: 'Load .bat (Keenetic Routes)' },
 
 	custom_domain_title: { ru: 'Добавить свой домен(ы)', en: 'Add your own domain(s)' },
-	custom_domain_intro: { ru: 'Если нужного сайта нет ни в geosite, ни в готовых списках — впишите домены через запятую.',
-		en: "If a site isn't in geosite or the bundled lists — type domains separated by commas." },
+	custom_domain_intro: { ru: 'Если нужного сайта нет ни в geosite, ни в готовых списках — впишите домены через запятую, мы сложим их в свой список и он сразу появится в выборе выше.',
+	                        en: "If a site isn't in geosite or in the bundled lists — type domains separated by commas, we'll save them as a list that immediately appears in the picker above." },
 	custom_list_name_placeholder: { ru: 'например: my-site', en: 'e.g. my-site' },
 	custom_domains_placeholder: { ru: 'example.com, cdn.example.com', en: 'example.com, cdn.example.com' },
 	domains_manage_title: { ru: 'Управление списками доменов', en: 'Domain list management' },
 	domains_no_lists: { ru: 'Собственных списков пока нет — добавьте выше.', en: 'No custom lists yet — add one above.' },
 	domains_add_domain_placeholder: { ru: 'example.com', en: 'example.com' },
 	domains_delete_list_confirm: { ru: 'Удалить список «%s» целиком?', en: 'Delete list "%s" entirely?' },
-	domains_list_already_exists: { ru: 'Список с таким именем уже есть — добавьте домен в него ниже.', en: 'A list with that name already exists — add the domain to it below instead.' },
+	domains_list_already_exists: { ru: 'Список с таким именем уже есть — добавьте домен в него ниже вместо создания нового.', en: "A list with that name already exists — add the domain to it below instead of creating a new one." },
 	domains_sanitized_note: { ru: 'Сохранён только домен (без адреса страницы): ', en: 'Only the domain was saved (page address stripped): ' },
 
-	ks_intro: { ru: 'Жёсткий kill-switch: если процесс xray упадёт, домены профиля будут заблокированы файрволом полностью — вместо риска уйти в интернет напрямую в обход VPN. Правило включается сразу и постоянно, без зазора по времени. Для geosite-категорий покрытие неполное — учитываются только domain:/full: записи, keyword:/regexp: не переносятся.',
-		en: "Hard kill-switch: if xray dies, the profile's domains get fully blocked by the firewall instead of risking a direct route around the VPN. Armed immediately and stays on, no time gap. geosite coverage is partial — only domain:/full: entries translate to a literal block." },
-	ks_geosite_note: { ru: '(частичное покрытие для geosite)', en: '(partial coverage for geosite)' },
+	ks_intro: { ru: 'Жёсткий kill-switch: если процесс xray упадёт (или его правила перехвата трафика пропадут), домены профиля будут заблокированы файрволом полностью — вместо риска уйти в интернет напрямую в обход VPN. Правило включается сразу и постоянно, без опроса раз в минуту — зазора по времени нет. Работает для geosite- и custom-профилей; для geosite-категорий покрытие неполное — учитываются только записи domain:/full: из исходного списка geosite, а keyword:/regexp: (их нет как буквальных доменов) не переносятся.',
+	           en: "Hard kill-switch: if the xray process dies (or its traffic-capture rules disappear), the profile's domains get fully blocked by the firewall instead of risking a direct route around the VPN. The rule is armed immediately and stays on — no once-a-minute polling, so there's no time gap. Works for both geosite and custom profiles; geosite coverage is partial — only the domain:/full: entries from the category's source list translate to a literal block, keyword:/regexp: entries have no literal-domain equivalent and aren't covered." },
+	ks_geosite_note: { ru: '(частичное покрытие для geosite — см. пояснение выше)', en: '(partial coverage for geosite — see note above)' },
 
-	prot_intro: { ru: 'Перехват LAN-трафика: без него ни один профиль/kill-switch не видит реальные пакеты устройств. Выключайте только для диагностики.',
-		en: "LAN traffic capture: without it, no profile/kill-switch ever sees real device packets. Only turn it off for diagnostics." },
+	prot_intro: { ru: 'Перехват LAN-трафика: без него ни один профиль/kill-switch не видит реальные пакеты устройств — это включает сам механизм, через который SmartRoute вообще может что-то маршрутизировать (свой nftables-редирект, не сломанный xkeen -ap на OpenWrt/nftables). Выключайте только для диагностики.',
+	            en: "LAN traffic capture: without it, no profile/kill-switch ever sees real device packets — this is the mechanism SmartRoute routing depends on in the first place (our own nftables redirect, not xkeen's broken -ap on OpenWrt/nftables). Only turn it off for diagnostics." },
 	prot_redirect_enabled: { ru: 'Перехват трафика включён', en: 'Traffic capture enabled' },
 	prot_ports_label: { ru: 'Порты перехвата (через запятую)', en: 'Captured ports (comma-separated)' },
 	prot_ports_placeholder: { ru: '80,443', en: '80,443' },
 	prot_ports_save: { ru: 'Сохранить порты', en: 'Save ports' },
 	prot_dns_title: { ru: 'Защита от утечек DNS', en: 'DNS leak protection' },
-	prot_dns_intro: { ru: 'Принудительно заворачивает все DNS-запросы (порт 53) с LAN на этот роутер.',
-		en: 'Forces every LAN DNS query (port 53) through this router.' },
+	prot_dns_intro: { ru: 'Принудительно заворачивает все DNS-запросы (порт 53) с LAN на этот роутер, даже если устройство прописано на сторонний DNS (8.8.8.8 и т.п.). Без этого запросы могут уходить напрямую мимо VPN и раскрывать, какие сайты вы посещаете, а kill-switch не увидит домены для блокировки.',
+	              en: "Forces every LAN DNS query (port 53) through this router, even if a device is hardcoded to a third-party DNS (8.8.8.8, etc). Without this, queries can leave directly, bypassing the VPN and revealing which sites you visit — and the kill-switch never sees the domains to block." },
 	prot_ipv6_title: { ru: 'Защита от утечек IPv6', en: 'IPv6 leak protection' },
-	prot_ipv6_intro: { ru: 'Блокирует весь LAN→WAN IPv6-трафик, чтобы такие соединения не утекали в обход VPN.',
-		en: 'Blocks all LAN→WAN IPv6 traffic so those connections cannot leak around the VPN.' },
+	prot_ipv6_intro: { ru: 'Наш перехват работает только для IPv4 — сайт, доступный по IPv6, может открыться напрямую через провайдера в обход VPN и всех правил/kill-switch. Эта опция полностью блокирует LAN→WAN IPv6-трафик, чтобы такие соединения падали и уходили через IPv4 (уже защищённый) вместо утечки.',
+	               en: "Our redirect is IPv4-only — a site reachable over IPv6 could load directly through your ISP, bypassing the VPN and every rule/kill-switch. This option blocks all LAN→WAN IPv6 traffic outright, so those connections fail closed and fall back to IPv4 (which is covered) instead of leaking." },
 	prot_quic_title: { ru: 'Защита от утечек через QUIC/HTTP3', en: 'QUIC/HTTP3 leak protection' },
-	prot_quic_intro: { ru: 'Блокирует исходящий UDP на перехватываемых портах — браузеры откатываются на обычный TCP/TLS.',
-		en: 'Blocks outbound UDP on captured ports — browsers fall back to plain TCP/TLS.' },
+	prot_quic_intro: { ru: 'Наш перехват ловит только TCP-трафик. Сайты, объявляющие поддержку HTTP/3 (заголовок Alt-Svc: h3), браузер может открыть по QUIC — это тот же порт 443, но по UDP, и он проходит мимо перехвата целиком, в обход VPN и правил. Подтверждено на практике. Эта опция блокирует исходящий UDP на перехватываемых портах с LAN — браузеры при этом просто откатываются на обычный TCP/TLS, без потери функциональности.',
+	                en: "Our redirect only catches TCP traffic. A site that advertises HTTP/3 support (Alt-Svc: h3 header) may get requested over QUIC — the same port 443, but over UDP — which bypasses the redirect entirely, VPN and rules included. Confirmed in practice. This option blocks outbound UDP on the captured ports from the LAN; browsers just fall back to plain TCP/TLS cleanly, no functionality lost." },
 	prot_saved_ok: { ru: 'Применено', en: 'Applied' },
 	prot_save_failed: { ru: 'Не удалось применить', en: 'Failed to apply' },
 
 	status_services_title: { ru: 'Сервисы', en: 'Services' },
 	status_service_xray: { ru: 'Xray', en: 'Xray' },
-	status_service_gateway: { ru: 'Панель SmartRoute', en: 'SmartRoute panel' },
+	status_service_gateway: { ru: 'Панель SmartRoute (gateway)', en: 'SmartRoute panel (gateway)' },
 	status_service_xkeenui: { ru: 'xkeen-UI', en: 'xkeen-UI' },
 	status_svc_running: { ru: 'работает', en: 'running' },
 	status_svc_stopped: { ru: 'остановлен', en: 'stopped' },
@@ -232,11 +244,11 @@ var DICT = {
 	status_overview_title: { ru: 'Обзор', en: 'Overview' },
 	status_subscriptions_col_label: { ru: 'Подписка', en: 'Subscription' },
 	status_subscriptions_col_servers: { ru: 'Серверов', en: 'Servers' },
-	status_subscriptions_none: { ru: 'Подписок пока нет.', en: 'No subscriptions yet.' },
+	status_subscriptions_none: { ru: 'Подписок пока нет — добавьте на вкладке «Подписки».', en: 'No subscriptions yet — add one on the Subscriptions tab.' },
 	status_traffic_title: { ru: 'Трафик (реальное время)', en: 'Traffic (live)' },
 	status_traffic_up: { ru: 'Отдача', en: 'Upload' },
 	status_traffic_down: { ru: 'Приём', en: 'Download' },
-	status_traffic_disconnected: { ru: 'нет соединения с панелью', en: 'not connected to the panel' },
+	status_traffic_disconnected: { ru: 'нет соединения с панелью (порт 1001)', en: 'not connected to the panel (port 1001)' },
 	status_metrics_title: { ru: 'Здоровье серверов и Observatory', en: 'Server health and Observatory' },
 	status_metrics_alive: { ru: 'Живых серверов', en: 'Alive servers' },
 	status_metrics_dead: { ru: 'Мёртвых серверов', en: 'Dead servers' },
@@ -262,7 +274,6 @@ var DICT = {
 	logs_cap_save: { ru: 'Сохранить', en: 'Save' },
 	logs_cap_free: { ru: 'свободно', en: 'free' },
 	logs_cap_rejected: { ru: 'Слишком много — превышает половину свободной памяти', en: 'Too large — exceeds half of free memory' },
-	logs_empty: { ru: 'Пока пусто — включите логи выше.', en: 'Empty so far — enable logging above.' },
 	logs_tmpfs_note: { ru: 'Хранятся в ОЗУ (tmpfs), не на флеше — пропадают при перезагрузке, ограничены заданным лимитом.',
 		en: 'Stored in RAM (tmpfs), not flash — cleared on reboot, bounded by the cap above.' },
 
@@ -279,12 +290,31 @@ function T(key) {
 
 // --- RPC bridge: POST /api/call/{method} {args...} -> the exact JSON the
 // rpcd script itself would have returned to LuCI ---
+//
+// A 401 here only ever means one thing -- requireAuth (gateway/auth.go)
+// rejected the request because the session cookie is missing/expired/
+// revoked; handleRPC itself never returns 401 for any other reason. Left
+// unhandled, that response body ({"success":false,"error":"unauthorized"})
+// used to flow straight into each api.* wrapper's own `.then(r => r.foo ||
+// [])` below, which silently resolved to an empty list/object -- a session
+// that died mid-visit (7-day TTL elapsed, a password change elsewhere,
+// this process restarting and dropping in-memory sessions) rendered as
+// "you have no servers/profiles/subscriptions" instead of "please log back
+// in". Catch it here, once, and send the user to the login screen instead
+// of letting every call site downstream have to guess why its data
+// vanished.
 function apiCall(method, args) {
 	return fetch('/api/call/' + encodeURIComponent(method), {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json' },
 		body: JSON.stringify(args || {})
-	}).then(function (r) { return r.json(); });
+	}).then(function (r) {
+		if (r.status === 401) {
+			showLogin();
+			return Promise.reject(new Error('unauthorized'));
+		}
+		return r.json();
+	});
 }
 
 var api = {
@@ -362,9 +392,11 @@ var CLIENT_PRESETS = [
 	{ key: 'flclash', label: 'FlClash' },
 	{ key: 'incy', label: 'Incy' }
 ];
-var DEVICE_OS_OPTIONS = ['XKeen SmartRoute', 'iOS', 'Android', 'Windows', 'macOS', 'Linux'];
-var DEVICE_MODEL_OPTIONS = ['iPhone 15 Pro', 'iPhone16,1', 'iPhone 14', 'Pixel 8', 'Pixel 9 Pro', 'Samsung Galaxy S24', 'ELP-NX1', 'PC', 'MacBook Pro 16'];
-var DEVICE_VER_OPTIONS = ['17.5', '17.0', '16.6', '15', '14', '10', '11', '13.0'];
+// DEVICE_OS_OPTIONS/DEVICE_MODEL_OPTIONS/DEVICE_VER_OPTIONS (LuCI's device-
+// header override datalists) don't exist here -- this panel's own
+// subscriptions.js uses plain text inputs for those fields, not a
+// <datalist>, so the three arrays were dead weight, defined and exported
+// but never actually read anywhere in this codebase.
 
 // --- flag-emoji rendering (Windows never renders regional-indicator pairs
 // as flags -- swap for a Twemoji SVG, same fix as the LuCI app) ---
@@ -460,6 +492,38 @@ function spinner() {
 	return E('span', { class: 'sr-spinner' });
 }
 
+// pingLabel/serverForTag/activityDot/groupServersBySubscription: used
+// identically by both profiles.js and doublevpn.js's server pickers here --
+// used to be copied into each page separately (2 definitions in this panel,
+// another 2 in LuCI's own copies). Take their state as an explicit
+// parameter rather than reading module-local `st`, so both callers can pass
+// whichever state applies.
+function pingLabel(tag, pings) {
+	var ms = (pings || {})[tag];
+	if (ms === null || ms === undefined) return T('ping_timeout');
+	if (typeof ms === 'number') return ms + ' ms';
+	return '—';
+}
+
+function serverForTag(tag, servers) {
+	return (servers || []).filter(function (x) { return x.tag === tag; })[0] || { tag: tag, name: tag };
+}
+
+function activityDot(tag, activeTags) {
+	var active = !!(tag && activeTags && activeTags[tag]);
+	return E('span', { title: T(active ? 'activity_online' : 'activity_idle'), class: 'sr-dot ' + (active ? 'sr-dot-ok' : '') });
+}
+
+function groupServersBySubscription(servers) {
+	var groups = {}, order = [];
+	servers.forEach(function (s) {
+		var key = s.subscription || '';
+		if (!groups[key]) { groups[key] = []; order.push(key); }
+		groups[key].push(s);
+	});
+	return order.map(function (key) { return { label: key, servers: groups[key] }; });
+}
+
 // relTime: epoch seconds or an ISO8601 string -> "Xm ago"/never
 function relTime(v) {
 	if (!v) return T('status_metrics_never');
@@ -473,11 +537,28 @@ function relTime(v) {
 	return hr + (srLang() === 'en' ? 'h ago' : 'ч назад');
 }
 
-function fmtBytes(n) {
+// fmtBytes: one locale-aware byte formatter for the whole panel --
+// previously three separate copies here and in status.js (fmtBytes,
+// fmtTrafficBytes, fmtBytesPlain), all hardcoded to Russian units
+// regardless of the selected language, plus a fourth (fmtFree, log-cap
+// free space) hardcoded to English units instead, and a fifth (this
+// function's own original body) that was never even called from anywhere.
+// rate=true appends a "per second" suffix (for live throughput); omit/false
+// for a plain size (a file, a cap, free space).
+var BYTE_UNITS = {
+	ru: ['Б', 'КБ', 'МБ', 'ГБ'],
+	en: ['B', 'KB', 'MB', 'GB']
+};
+function fmtBytes(n, rate) {
 	n = n || 0;
-	if (n < 1024) return n + ' Б/с';
-	if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' КБ/с';
-	return (n / (1024 * 1024)).toFixed(2) + ' МБ/с';
+	var units = BYTE_UNITS[srLang()] || BYTE_UNITS.en;
+	var suffix = rate ? '/' + (srLang() === 'en' ? 's' : 'с') : '';
+	var value, unit;
+	if (n < 1024) { value = n; unit = units[0]; }
+	else if (n < 1024 * 1024) { value = (n / 1024).toFixed(1); unit = units[1]; }
+	else if (n < 1024 * 1024 * 1024) { value = (n / (1024 * 1024)).toFixed(rate ? 2 : 1); unit = units[2]; }
+	else { value = (n / (1024 * 1024 * 1024)).toFixed(2); unit = units[3]; }
+	return value + ' ' + unit + suffix;
 }
 
 // --- toasts (replaces LuCI's ui.addNotification) ---
@@ -496,12 +577,34 @@ function toast(msg, kind) {
 // --- wiring exported globally for tab modules (no bundler in this
 // project -- plain <script> tags, same as gateway/static/index.html
 // always was) ---
+// sectionVisible: true only while both the browser tab itself is in the
+// foreground (not document.hidden -- backgrounded/minimized) AND this
+// specific section is the one currently shown. activateSection (below)
+// never removes a section from the DOM, only toggles its `hidden`
+// attribute, so checking *existence* (a pattern status.js used to lean on
+// via its own now-fixed isGone()) can never actually detect "navigated
+// away" -- the element is always still there. Every page's own
+// setTimeout-chained poll loop (status.js's traffic/logs/metrics/activity
+// polling, profiles.js's and doublevpn.js's activity polling) checks this
+// before doing any real work, so switching tabs/sections -- or just
+// backgrounding the browser tab -- stops the router from fielding a fresh
+// `sh`-exec of the 26KB rpcd script every few seconds for a page nobody is
+// looking at; the loop keeps re-checking cheaply (no network call) and
+// resumes real polling the moment the section/tab is visible again.
+function sectionVisible(name) {
+	if (document.hidden) return false;
+	var el = document.getElementById('sr-section-' + name);
+	return !!el && !el.hidden;
+}
+
 window.SR = {
 	E: E, T: T, api: api, lang: srLang, setLang: srSetLang,
 	renderName: renderName, sanitizeDomain: sanitizeDomain, spinner: spinner,
 	relTime: relTime, fmtBytes: fmtBytes, toast: toast, parseIpRanges: parseIpRanges,
-	CLIENT_PRESETS: CLIENT_PRESETS, DEVICE_OS_OPTIONS: DEVICE_OS_OPTIONS,
-	DEVICE_MODEL_OPTIONS: DEVICE_MODEL_OPTIONS, DEVICE_VER_OPTIONS: DEVICE_VER_OPTIONS
+	sectionVisible: sectionVisible,
+	pingLabel: pingLabel, serverForTag: serverForTag, activityDot: activityDot,
+	groupServersBySubscription: groupServersBySubscription,
+	CLIENT_PRESETS: CLIENT_PRESETS
 };
 
 // --- modal (used by the Profiles tab for add/edit) ---

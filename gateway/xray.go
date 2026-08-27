@@ -49,34 +49,30 @@ type trafficTotals struct {
 	Up, Down int64
 }
 
-// queryTraffic sums every "outbound>>>*>>>traffic>>>uplink/downlink" counter
-// Xray tracks (enabled by the "system" block in 00_api.smartroute.json's
-// policy) into one up/down pair -- good enough for the dashboard's live
-// speed graph, which is the only thing that reads this today.
+// queryTraffic sums queryOutboundTrafficByTag's per-tag breakdown into one
+// up/down pair -- good enough for the dashboard's live speed graph, which is
+// the only thing that reads this today. Deliberately not its own independent
+// QueryStats call + parse loop: this and queryOutboundTrafficByTag used to
+// each parse the identical "outbound>>>*>>>traffic>>>uplink/downlink" stat
+// names separately, two copies of the same parsing logic for the same data.
 func (x *xrayClient) queryTraffic(ctx context.Context) (trafficTotals, error) {
-	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
-	resp, err := x.stats.QueryStats(ctx, &statscmd.QueryStatsRequest{Pattern: "outbound>>>", Reset_: false})
+	byTag, err := x.queryOutboundTrafficByTag(ctx)
 	if err != nil {
 		return trafficTotals{}, err
 	}
 	var t trafficTotals
-	for _, s := range resp.GetStat() {
-		name := s.GetName()
-		switch {
-		case strings.HasSuffix(name, ">>>traffic>>>uplink"):
-			t.Up += s.GetValue()
-		case strings.HasSuffix(name, ">>>traffic>>>downlink"):
-			t.Down += s.GetValue()
-		}
+	for _, v := range byTag {
+		t.Up += v.Up
+		t.Down += v.Down
 	}
 	return t, nil
 }
 
-// queryOutboundTrafficByTag is queryTraffic's per-tag breakdown instead of a
-// single summed total -- activity.go diffs this against the previous tick to
-// tell which specific outbounds have actually carried traffic recently, which
-// a single grand total can't answer.
+// queryOutboundTrafficByTag is the one place that actually calls
+// StatsService and parses its response -- activity.go diffs this against
+// the previous tick to tell which specific outbounds have actually carried
+// traffic recently, which a single grand total (queryTraffic above) can't
+// answer.
 func (x *xrayClient) queryOutboundTrafficByTag(ctx context.Context) (map[string]trafficTotals, error) {
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()

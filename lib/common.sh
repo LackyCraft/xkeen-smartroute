@@ -266,28 +266,116 @@ _sr_xray_validate() {
 # `nohup` nor `setsid`, hence the subshell + `trap '' HUP` to survive the
 # launching shell exiting.
 _sr_xray_launch() {
-	(
-		trap '' HUP
-		ulimit -SHn 1000000
-		# XRAY_LOCATION_CONFDIR is not a real Xray environment variable --
-		# confirmed for real on this project's own test router: a process
-		# launched this way (env var only, no -confdir flag) starts up fine
-		# and serves traffic, but silently never actually loads the routing
-		# rules or balancers (xray api lsrules/bi report them as simply not
-		# existing), while outbounds/inbounds/api DO load correctly. It's a
-		# genuinely confusing partial failure -- nothing crashes, nothing
-		# logs an error, Xray just quietly runs with an empty rule table and
-		# falls back to its documented "no rule matched -> first outbound"
-		# behavior for every single connection. _sr_xray_validate below
-		# already uses the real mechanism (the -confdir flag) for its dry
-		# run; this only ever differed for the actual launch. Passing the
-		# flag through `su -c` as part of the command string (not a
-		# separately-exported env var, which some `su` implementations don't
-		# forward to the child shell at all) is what actually works.
-		exec su -c "XRAY_LOCATION_ASSET='$XRAY_ASSET_DIR' xray run -confdir '$XKEEN_CONFIGS_DIR'" "$XRAY_RUN_USER" >"$SR_STATE_DIR/xray-launch.log" 2>&1 </dev/null
-	) &
-	i=0
-	while ! pgrep -x xray >/dev/null 2>&1 && [ "$i" -lt 10 ]; do sleep 1; i=$((i + 1)); done
+	attempt=1
+	while :; do
+		(
+			trap '' HUP
+			ulimit -SHn 1000000
+			# XRAY_LOCATION_CONFDIR is not a real Xray environment variable --
+			# confirmed for real on this project's own test router: a process
+			# launched this way (env var only, no -confdir flag) starts up fine
+			# and serves traffic, but silently never actually loads the routing
+			# rules or balancers (xray api lsrules/bi report them as simply not
+			# existing), while outbounds/inbounds/api DO load correctly. It's a
+			# genuinely confusing partial failure -- nothing crashes, nothing
+			# logs an error, Xray just quietly runs with an empty rule table and
+			# falls back to its documented "no rule matched -> first outbound"
+			# behavior for every single connection. _sr_xray_validate below
+			# already uses the real mechanism (the -confdir flag) for its dry
+			# run; this only ever differed for the actual launch. Passing the
+			# flag through `su -c` as part of the command string (not a
+			# separately-exported env var, which some `su` implementations don't
+			# forward to the child shell at all) is what actually works.
+			exec su -c "XRAY_LOCATION_ASSET='$XRAY_ASSET_DIR' xray run -confdir '$XKEEN_CONFIGS_DIR'" "$XRAY_RUN_USER" >"$SR_STATE_DIR/xray-launch.log" 2>&1 </dev/null
+		) &
+		i=0
+		while ! pgrep -x xray >/dev/null 2>&1 && [ "$i" -lt 10 ]; do sleep 1; i=$((i + 1)); done
+
+		# A second, different confdir problem from the env-var mixup above --
+		# confirmed live, reproduced on demand, on Xray-core 26.2.6 on this
+		# hardware: `xray run -confdir` silently drops exactly one file from
+		# its own merge, no error or warning logged anywhere, "Reading
+		# config" just never appears for it. Which file gets dropped varies,
+		# but losing 05_routing.smartroute.json (profile routing) or
+		# 00_api.smartroute.json's own internal API-service routing rule are
+		# the two that actually bite: the first sends every profile's traffic
+		# through Xray's documented "no rule matched -> first outbound"
+		# fallback instead of the intended server; the second breaks the
+		# gateway panel's entire gRPC connection to Xray (health/Observatory/
+		# traffic graph all silently stop updating) until someone restarts
+		# the gateway too and still gets the same broken Xray underneath.
+		# This is a genuine race inside Xray's own directory read, not
+		# something a config change on our side can prevent -- but retrying
+		# the launch (a fresh process, fresh directory read) does resolve it.
+		# The bad news from live testing: it's not the rare ~1-in-2 shot it
+		# first looked like -- back-to-back restarts here needed anywhere
+		# from 1 to 5 attempts to land clean, i.e. comfortably above 50%
+		# failure per single attempt some of the time. 10 attempts (below)
+		# is deliberately generous, not just enough to cover the average
+		# case -- each retry only costs a few seconds, and the failure mode
+		# being guarded against is "silently no working routing/gRPC until
+		# someone happens to notice days later," so it's worth overpaying in
+		# restart time for a very low residual failure chance. Cheap to
+		# check for: every *.json file actually sitting in the confdir right
+		# now should show up as its own "Reading config" line in this
+		# launch's own log.
+		expected="$(find "$XKEEN_CONFIGS_DIR" -maxdepth 1 -name '*.json' 2>/dev/null | wc -l)"
+		# pgrep seeing the process doesn't mean it's done reading confdir yet
+		# (confirmed live: checking right away read "0" every time, before
+		# any log line had been flushed) -- give it a few short beats to
+		# actually get there before concluding a file was really dropped.
+		#
+		# Every check below is a plain `if`, deliberately not a `[ cond ] &&
+		# cmd` one-liner: this whole function runs under callers' `set -eu`
+		# (genroute.sh sources common.sh), and confirmed live on this
+		# router's busybox ash, a failing left-hand side of a bare `&&`
+		# outside an `if`/`while` condition aborted the function right there
+		# -- silently turning a normal "not ready yet, keep polling" check
+		# into "genroute.sh delete/save just failed outright" for the
+		# caller, with no error message at all. `if`'s condition is exempt
+		# from `set -e` in every POSIX shell, no ambiguity.
+		got=0
+		j=0
+		while [ "$j" -lt 5 ]; do
+			got=0
+			# Not `grep -c ... || echo 0`: grep -c prints "0" (correctly) and
+			# still exits 1 on zero matches, which would append a second "0"
+			# from the fallback and leave $got as the two-line string "0\n0"
+			# -- confirmed live, that broke the numeric comparison below
+			# outright ("bad number") rather than just misjudging the count.
+			# `|| true` INSIDE the substitution, not `got="$(...)" || echo 0`
+			# outside it (that shape is what caused the "0\n0" bug the
+			# comment above describes). This one guards a different, worse
+			# trap: confirmed live with `sh -x` that `got="$(grep -c ...)"`
+			# on its own -- even sitting inside this `if`'s *body* -- still
+			# aborted the whole function the moment grep -c found zero
+			# matches. `if` only exempts its own *condition* from `set -e`;
+			# a plain assignment inside the then-branch is just another
+			# simple command, and `var="$(cmd)"` takes on cmd's exit status
+			# like any other. This is what was actually behind the
+			# intermittent, silent save_profile/delete_profile failures (no
+			# log line at all -- the abort happened before any sr_log call
+			# downstream could run), not the `&&`-chain issue above; a
+			# second, worse instance of the same underlying trap.
+			if [ -f "$SR_STATE_DIR/xray-launch.log" ]; then
+				got="$(grep -c 'Reading config' "$SR_STATE_DIR/xray-launch.log" 2>/dev/null || true)"
+			fi
+			if [ "$got" -ge "$expected" ]; then
+				return 0
+			fi
+			sleep 1
+			j=$((j + 1))
+		done
+		if [ "$attempt" -ge 10 ]; then
+			sr_log "WARNING: xray's -confdir merge only read $got/$expected config files after $attempt attempts -- routing may be incomplete, check $SR_STATE_DIR/xray-launch.log"
+			return 0
+		fi
+		sr_log "xray's -confdir merge only read $got/$expected config files (known Xray-core confdir race), retrying ($attempt/10)"
+		for pid in $(pgrep -x xray 2>/dev/null); do kill "$pid" 2>/dev/null || true; done
+		i=0
+		while pgrep -x xray >/dev/null 2>&1 && [ "$i" -lt 10 ]; do sleep 1; i=$((i + 1)); done
+		attempt=$((attempt + 1))
+	done
 }
 
 sr_restart_xray() {

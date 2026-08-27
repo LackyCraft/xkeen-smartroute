@@ -54,6 +54,18 @@ rpcd: голый JSON-массив на верхнем уровне резуль
 (поэтому `install.sh` рестартует `rpcd` после каждого обновления
 скрипта/ACL).
 
+Раньше ACL заодно выдавал LuCI-сессии 5 методов логирования
+(`get_log_config`/`set_log_enabled`/`set_log_level`/`set_log_cap_mb` и
+деструктивный `clear_logs`) — не нужных ей вообще: у LuCI нет вьюера
+логов, это фича только панели gateway, которая до этого ACL не
+дотрагивается (обращается к скрипту напрямую, не через ubus). Ни одна
+JS-страница LuCI ни разу не вызывала ни один из пяти методов —
+подтверждено grep'ом. Все пять убраны — лишняя поверхность привилегий, в
+том числе для деструктивного метода, без единого легитимного
+вызывающего. Заодно исправлено собственное описание ACL-файла — раньше
+утверждало "Grant UCI access", хотя выдаёт доступ к ubus-объекту
+`luci.xkeen-smartroute`, а не к UCI-конфигу напрямую.
+
 ## gateway/rpc.go: тот же скрипт, другой транспорт
 
 Панель на порту 1001 — это **не** второй набор бизнес-логики. Вместо
@@ -61,8 +73,8 @@ rpcd: голый JSON-массив на верхнем уровне резуль
 CRUD на Go, `rpc.go` просто **exec'ает тот же самый скрипт**:
 
 ```go
-func (b *rpcBridge) call(ctx context.Context, method string, args json.RawMessage) (json.RawMessage, error) {
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+func (b *rpcBridge) call(method string, args json.RawMessage) (json.RawMessage, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), callTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "sh", b.script, "call", method)
 	if len(args) > 0 {
@@ -76,7 +88,23 @@ func (b *rpcBridge) call(ctx context.Context, method string, args json.RawMessag
 }
 ```
 
-([`gateway/rpc.go:66-84`](../../gateway/rpc.go#L66-L84))
+([`gateway/rpc.go:171-198`](../../gateway/rpc.go#L171-L198))
+
+`callTimeout` is 10 minutes, not the 30s this originally shipped with —
+a real `refresh_subscription`/`import_subscription`/`ping_servers` on a
+150-200 server subscription routinely runs well past 30s on this
+hardware. The context is deliberately rooted in `context.Background()`,
+never in the HTTP request's own `r.Context()`: a client that closes the
+tab or loses the LAN link mid-refresh used to cancel the request context
+the instant the connection dropped, which propagated into
+`exec.CommandContext` as a SIGKILL mid-write between `servers.json` and
+`04_outbounds.smartroute.json` — confirmed live, this orphaned
+`lib/subscription.sh`'s own import lock (its `EXIT` trap never runs on
+SIGKILL) until the lock's 300s staleness timeout let a later attempt
+reclaim it. A dropped connection isn't a reason to abort a write already
+in progress; the script now always runs to completion, bounded only by
+`callTimeout`, regardless of whether anyone is still listening for the
+response.
 
 `POST /api/call/{method}` в `main.go` — единственная точка входа для
 всей функциональности подписок/профилей/kill-switch/защиты от утечек в
@@ -102,7 +130,7 @@ func (b *rpcBridge) refreshMethods() {
 }
 ```
 
-([`gateway/rpc.go:42-59`](../../gateway/rpc.go#L42-L59))
+([`gateway/rpc.go:75-105`](../../gateway/rpc.go#L75-L105))
 
 При старте gateway один раз вызывает `sh <script> list` и строит
 allow-list методов прямо из реальной схемы скрипта — не хардкодит
@@ -111,6 +139,19 @@ allow-list методов прямо из реальной схемы скрип
 этой схеме, отклоняется на уровне HTTP-хендлера (`404 unknown_method`)
 ещё до вызова `exec` — тот же эффект, что дал бы явный allow-list, без
 второй копии для поддержки.
+
+`allowed()` ([`gateway/rpc.go:107-133`](../../gateway/rpc.go#L107-L133))
+самолечится: промах по кэшу запускает один повторный вызов `list`
+(ограничено `refreshCooldown`, чтобы клиент, долбящий заведомо
+несуществующим именем метода, не превратил это в поток `exec`).
+Сам повторный вызов сериализован отдельным `refreshMu` — без этого N
+параллельных промахов запускали бы N параллельных `sh script list`
+одновременно (thundering herd, подтверждено вживую); теперь второй и
+последующие вызовы просто ждут первый и перепроверяют состояние вместо
+собственного избыточного `exec`. `lastRefresh` обновляется независимо
+от того, успешным ли был рефреш — иначе временно недоступный скрипт
+заставлял бы каждый вызов видеть "устарело" бесконечно, вместо
+нормального отката на `refreshCooldown`.
 
 ## Почему это безопасно без своего ACL на стороне gateway
 

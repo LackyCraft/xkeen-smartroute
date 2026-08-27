@@ -3,46 +3,28 @@
 	var E = SR.E, T = SR.T, api = SR.api;
 	var st = {
 		servers: [], profiles: [], pings: {}, lanDevices: [], current: {}, activeTags: {},
-		serverGroupExpanded: {}, profileTargetExpanded: {}
+		serverGroupExpanded: {}, profileTargetExpanded: {}, picked: {}
 	};
 
-	function pingLabel(tag) {
-		var ms = st.pings[tag];
-		if (ms === null || ms === undefined) return T('ping_timeout');
-		if (typeof ms === 'number') return ms + ' ms';
-		return '—';
-	}
+	// pingLabel/serverForTag/activityDot/groupServersBySubscription now live
+	// in the shared app.js module (SR.*) -- see its own comment for why.
 
-	function serverForTag(tag) {
-		return st.servers.filter(function (x) { return x.tag === tag; })[0] || { tag: tag, name: tag };
-	}
-
-	function activityDot(tag) {
-		var active = !!(tag && st.activeTags[tag]);
-		return E('span', { title: T(active ? 'activity_online' : 'activity_idle'), class: 'sr-dot ' + (active ? 'sr-dot-ok' : '') });
-	}
-
-	function groupServersBySubscription(servers) {
-		var groups = {}, order = [];
-		servers.forEach(function (s) {
-			var key = s.subscription || '';
-			if (!groups[key]) { groups[key] = []; order.push(key); }
-			groups[key].push(s);
-		});
-		return order.map(function (key) { return { label: key, servers: groups[key] }; });
-	}
-
+	// Reads/writes st.picked, never the DOM -- the picker only renders
+	// <input> elements for currently-expanded subscription groups, so a
+	// server checked in a group the user has since collapsed has no
+	// element left to query at the next re-render or at save time.
+	// st.picked is kept in sync by each checkbox's own change event below
+	// regardless of which groups are open, so it's the only complete
+	// source of truth (same pattern doublevpn.js uses for its pool picker).
 	function renderServerPicker() {
 		var box = document.getElementById('sr-server-picker');
 		if (!box) return;
-		var previouslyChecked = {};
-		box.querySelectorAll('input[name="sr-server-choice"]:checked').forEach(function (i) { previouslyChecked[i.value] = true; });
 		box.innerHTML = '';
 		var mode = document.getElementById('sr-mode') ? document.getElementById('sr-mode').value : 'fixed';
 
 		if (!st.servers.length) { box.appendChild(E('p', { class: 'sr-desc' }, T('need_servers_first'))); return; }
 
-		groupServersBySubscription(st.servers).forEach(function (g) {
+		SR.groupServersBySubscription(st.servers).forEach(function (g) {
 			var isOpen = !!st.serverGroupExpanded[g.label];
 			var toggle = E('a', { href: '#', style: 'font-weight:700;display:block;margin:6px 0 3px' },
 				(isOpen ? '▾ ' : '▸ ') + (g.label || T('sub_no_subscriptions')) + ' — ' + g.servers.length + ' ' + T('sub_servers_word'));
@@ -52,9 +34,22 @@
 			var list = E('div', { style: 'margin:0 0 6px 8px' });
 			g.servers.forEach(function (s) {
 				var input = E('input', { type: mode === 'fixed' ? 'radio' : 'checkbox', name: 'sr-server-choice', value: s.tag });
-				input.checked = !!previouslyChecked[s.tag];
+				input.checked = !!st.picked[s.tag];
+				input.addEventListener('change', function () {
+					if (mode === 'fixed') {
+						// Only one fixed_server is ever saved -- reset
+						// rather than accumulate, so a later save can't
+						// pick up a stale tag from a since-collapsed group.
+						st.picked = {};
+						if (input.checked) st.picked[s.tag] = true;
+					} else if (input.checked) {
+						st.picked[s.tag] = true;
+					} else {
+						delete st.picked[s.tag];
+					}
+				});
 				list.appendChild(E('label', { class: 'sr-row', style: 'padding:2px 0' }, [
-					input, SR.renderName(s.name), ' (' + s.address + ':' + s.port + ', ' + s.protocol + ', ' + pingLabel(s.tag) + ')'
+					input, SR.renderName(s.name), ' (' + s.address + ':' + s.port + ', ' + s.protocol + ', ' + SR.pingLabel(s.tag, st.pings) + ')'
 				]));
 			});
 			box.appendChild(list);
@@ -119,7 +114,7 @@
 
 			var targetNode;
 			if (p.mode === 'fixed') {
-				targetNode = E('span', {}, [activityDot(p.fixed_server), SR.renderName(serverForTag(p.fixed_server).name)]);
+				targetNode = E('span', {}, [SR.activityDot(p.fixed_server, st.activeTags), SR.renderName(SR.serverForTag(p.fixed_server, st.servers).name)]);
 			} else {
 				var tags = p.servers || [];
 				var currentTag = st.current[p.name] || '';
@@ -127,11 +122,11 @@
 				var toggle = E('a', { href: '#' }, (isOpen ? '▾ ' : '▸ ') + tags.length + ' ' + T('sub_servers_word') + ' (auto)');
 				toggle.addEventListener('click', function (ev) { ev.preventDefault(); st.profileTargetExpanded[p.name] = !st.profileTargetExpanded[p.name]; renderProfilesTable(); });
 				var children = [];
-				if (currentTag) children.push(E('div', { style: 'margin-bottom:3px' }, [activityDot(currentTag), SR.renderName(serverForTag(currentTag).name)]));
+				if (currentTag) children.push(E('div', { style: 'margin-bottom:3px' }, [SR.activityDot(currentTag, st.activeTags), SR.renderName(SR.serverForTag(currentTag, st.servers).name)]));
 				children.push(toggle);
 				if (isOpen) {
 					var list = E('div', { style: 'margin:4px 0 0 8px' });
-					tags.forEach(function (t) { list.appendChild(E('div', { style: 'padding:1px 0' }, [activityDot(t), SR.renderName(serverForTag(t).name)])); });
+					tags.forEach(function (t) { list.appendChild(E('div', { style: 'padding:1px 0' }, [SR.activityDot(t, st.activeTags), SR.renderName(SR.serverForTag(t, st.servers).name)])); });
 					children.push(list);
 				}
 				targetNode = E('span', {}, children);
@@ -141,7 +136,16 @@
 				E('td', {}, p.name), E('td', {}, domainsParts.join(' · ')), E('td', {}, targetNode),
 				E('td', { class: 'sr-row' }, [
 					E('button', { class: 'sr-btn sr-btn-sm', click: function () { handleEditProfile(p.name); } }, T('edit_btn')),
-					E('button', { class: 'sr-btn sr-btn-sm sr-btn-remove', click: function () { api.deleteProfile(p.name).then(reloadProfilesTable); } }, T('delete_btn'))
+					E('button', {
+						class: 'sr-btn sr-btn-sm sr-btn-remove', click: function () {
+							if (!confirm(T('profile_delete_confirm').replace('%s', p.name))) return;
+							api.deleteProfile(p.name).then(function (res) {
+								if (res && res.error) { SR.toast(T('status_action_failed') + ': ' + (res.detail || res.error), 'error'); return; }
+								SR.toast(T('profile_deleted_ok'), 'info');
+								return reloadProfilesTable();
+							});
+						}
+					}, T('delete_btn'))
 				])
 			]));
 
@@ -169,6 +173,7 @@
 		Promise.all([api.listCategories(), api.listCustomCategories()]).then(function (data) {
 			var categories = data[0] || [], customCategories = data[1] || [];
 			st.serverGroupExpanded = {};
+			st.picked = {};
 
 			var domainSourceSelect = E('select', { class: 'sr-select', id: 'sr-domain-source' }, [E('option', { value: 'any::' }, T('domain_source_any'))]);
 			domainSourceSelect.appendChild(E('optgroup', { label: T('domain_source_geosite') },
@@ -181,6 +186,14 @@
 			]);
 			modeSelect.addEventListener('change', function () {
 				document.getElementById('sr-server-picker-label').textContent = modeSelect.value === 'fixed' ? T('pick_server') : T('pick_servers');
+				// Switching to "fixed" only ever saves one server
+				// (chosen[0]) -- trim any carried-over multi-selection
+				// down to one now, so the single radio left checked after
+				// render matches what save would actually use.
+				if (modeSelect.value === 'fixed') {
+					var keys = Object.keys(st.picked);
+					if (keys.length > 1) { st.picked = {}; st.picked[keys[0]] = true; }
+				}
 				renderServerPicker();
 			});
 
@@ -227,14 +240,11 @@
 
 				var tags = existing.mode === 'fixed' ? [existing.fixed_server] : (existing.servers || []);
 				tags.forEach(function (t) {
-					var s = serverForTag(t);
+					st.picked[t] = true;
+					var s = SR.serverForTag(t, st.servers);
 					if (s) st.serverGroupExpanded[s.subscription || ''] = true;
 				});
 				renderServerPicker();
-				tags.forEach(function (t) {
-					var input = document.querySelector('input[name="sr-server-choice"][value="' + CSS.escape(t) + '"]');
-					if (input) input.checked = true;
-				});
 
 				(existing.devices || []).forEach(function (d) { addDeviceCheckbox(d, d, true); });
 				document.getElementById('sr-ip-ranges').value = (existing.ip_ranges || []).join('\n');
@@ -246,7 +256,7 @@
 		var name = document.getElementById('sr-profile-name').value.trim();
 		var mode = document.getElementById('sr-mode').value;
 		var srcRaw = document.getElementById('sr-domain-source').value;
-		var chosen = Array.prototype.slice.call(document.querySelectorAll('input[name="sr-server-choice"]:checked')).map(function (i) { return i.value; });
+		var chosen = Object.keys(st.picked);
 		var devices = Array.prototype.slice.call(document.querySelectorAll('input[name="sr-device-choice"]:checked')).map(function (i) { return i.value; });
 		var ipRangesRaw = document.getElementById('sr-ip-ranges').value;
 		var parsedRanges = SR.parseIpRanges(ipRangesRaw);
@@ -327,7 +337,15 @@
 
 				renderProfilesTable();
 
+				// Skips the real getCurrent/getActivity fetch (each an
+				// api.* call -> a fresh `sh`-exec of the 26KB rpcd script)
+				// while this section isn't the visible one or the browser
+				// tab itself is backgrounded -- the "online now" dot has no
+				// reason to stay live for a page nobody can see. Always
+				// reschedules regardless, so the very next tick notices on
+				// its own once visible again, no separate resume needed.
 				(function pollLoop() {
+					if (!SR.sectionVisible('profiles')) { setTimeout(pollLoop, 3000); return; }
 					pollActivity().then(function () { setTimeout(pollLoop, 3000); }, function () { setTimeout(pollLoop, 3000); });
 				})();
 			});

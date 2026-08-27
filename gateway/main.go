@@ -75,7 +75,23 @@ func main() {
 	}
 
 	log.Printf("smartroute-gateway listening on %s (xray api %s, static %q, rpcd %q)", listenAddr, xrayAddr, staticDir, rpcdScript)
-	log.Fatal(http.ListenAndServe(listenAddr, corsWrap(requireAuth(mux))))
+	// Bare http.ListenAndServe has no ReadHeaderTimeout/IdleTimeout/
+	// MaxHeaderBytes at all -- a slowloris-style client that trickles
+	// request headers a byte at a time, or just opens connections and
+	// leaves them idle, can hold them open indefinitely with nothing to
+	// evict them, real exposure on hardware this constrained. None of the
+	// three apply once a connection is hijacked for a WebSocket upgrade
+	// (/traffic, /logs) -- they only govern the plain-HTTP phase before
+	// that, which is exactly what wsKeepalive's own read/write deadlines
+	// (main.go/logs.go) pick up afterward.
+	srv := &http.Server{
+		Addr:              listenAddr,
+		Handler:           corsWrap(requireAuth(mux)),
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    1 << 20, // 1MB
+	}
+	log.Fatal(srv.ListenAndServe())
 }
 
 // noCacheStatic forces every static asset to revalidate with the server on
@@ -162,6 +178,43 @@ var upgrader = websocket.Upgrader{
 	},
 }
 
+// WebSocket keepalive tuning, shared by every WS handler in this binary
+// (/traffic here, /logs in logs.go). Neither handler used to read from its
+// connection at all -- gorilla/websocket only processes incoming control
+// frames (pong, close) while something is actively calling ReadMessage, so
+// with no read pump a client whose TCP connection drops without a clean
+// FIN/RST (a phone leaving wifi mid-session, a laptop sleeping, a NAT
+// timeout -- not rare events) left conn.WriteJSON with nothing to fail
+// against until the OS's own TCP retransmission timeout gave up, which can
+// take minutes. That kept the handler's goroutine, ticker, and (for
+// /traffic) per-second Xray API polling alive the whole time for a peer
+// that was already gone -- real drain on a router with 256MB total RAM.
+// wsKeepalive adds the standard heartbeat: a read pump (the only way to
+// ever see a pong) plus a read deadline only a fresh pong pushes back, so a
+// genuinely dead peer is noticed within wsPongWait instead of however long
+// bare TCP takes.
+const (
+	wsWriteWait  = 10 * time.Second
+	wsPongWait   = 30 * time.Second
+	wsPingPeriod = (wsPongWait * 8) / 10
+)
+
+func wsKeepalive(conn *websocket.Conn, cancel context.CancelFunc) {
+	conn.SetReadDeadline(time.Now().Add(wsPongWait))
+	conn.SetPongHandler(func(string) error {
+		conn.SetReadDeadline(time.Now().Add(wsPongWait))
+		return nil
+	})
+	go func() {
+		defer cancel()
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	}()
+}
+
 // trafficWSHandler pushes {"up":N,"down":N} once a second -- bytes/sec deltas
 // computed from Xray's cumulative counters, matching what Clash-API clients
 // expect from GET /traffic (a streaming endpoint, not a snapshot).
@@ -175,16 +228,24 @@ func trafficWSHandler(xc *xrayClient) http.HandlerFunc {
 
 		ctx, cancel := context.WithCancel(r.Context())
 		defer cancel()
+		wsKeepalive(conn, cancel)
 
 		var last trafficTotals
 		haveLast := false
 		ticker := time.NewTicker(1 * time.Second)
 		defer ticker.Stop()
+		pingTicker := time.NewTicker(wsPingPeriod)
+		defer pingTicker.Stop()
 
 		for {
 			select {
 			case <-ctx.Done():
 				return
+			case <-pingTicker.C:
+				conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
+				if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+					return
+				}
 			case <-ticker.C:
 				cur, err := xc.queryTraffic(ctx)
 				if err != nil {
@@ -195,6 +256,7 @@ func trafficWSHandler(xc *xrayClient) http.HandlerFunc {
 					up, down = diffNonNeg(cur.Up, last.Up), diffNonNeg(cur.Down, last.Down)
 				}
 				last, haveLast = cur, true
+				conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
 				if err := conn.WriteJSON(map[string]int64{"up": up, "down": down}); err != nil {
 					return
 				}

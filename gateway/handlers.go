@@ -238,15 +238,29 @@ func saveProfile(p srProfile) error {
 	return nil
 }
 
-// --- GET /proxies/{name}/delay: plain TCP-connect latency, same technique
-// as lib/subscription.sh's sr_ping_one (no real proxy handshake needed to
-// know whether a node is reachable at all) ---
+// --- GET /proxies/{name}/delay: TLS handshake latency (tls.DialWithDialer,
+// certificate verification skipped -- REALITY/self-signed nodes are the
+// normal case here, not the exception) -- NOT a bare TCP connect despite
+// what this comment used to say. Every server this project actually
+// generates outbounds for speaks VLESS/Trojan over TLS or REALITY, so this
+// has never been observed to matter in practice, but a hypothetical
+// plain-TCP (no TLS at all) node would report "connect failed" here even
+// while genuinely reachable, since there's no fallback path that tries a
+// bare net.Dial instead. ---
+
+// maxDelayTimeoutMs caps the client-supplied ?timeout= on /delay -- left
+// unbounded, any caller could hold this handler's dialer (and its
+// goroutine) open for as long as they liked, one per request, no limit.
+const maxDelayTimeoutMs = 15000
 
 func handleDelay(w http.ResponseWriter, r *http.Request, name string) {
 	timeoutMs := 3000
 	if v := r.URL.Query().Get("timeout"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			timeoutMs = n
+			if timeoutMs > maxDelayTimeoutMs {
+				timeoutMs = maxDelayTimeoutMs
+			}
 		}
 	}
 

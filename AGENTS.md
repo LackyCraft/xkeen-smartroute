@@ -60,7 +60,7 @@ not `exec_command`.
 One command, idempotent (safe to re-run):
 
 ```sh
-sh <(wget -O - https://raw.githubusercontent.com/LackyCraft/xkeen-smartroute/main/install.sh)
+sh <(wget -O - https://raw.githubusercontent.com/LackyCraft/xkeen-smartroute/master/install.sh)
 ```
 
 What it needs to succeed, in order: OpenWrt (`/etc/openwrt_release` present),
@@ -84,12 +84,15 @@ Every line is `[OK]`/`[FAIL]`/`[--]`. Don't declare the deploy done until this
 comes back clean (or the only `[FAIL]`s are expected pre-subscription states
 like "no profiles configured yet").
 
-`check.sh` doesn't currently check `smartroute-gateway` (the standalone panel,
-port 1001, `gateway/` in this repo) -- verify it by hand:
-`pgrep -f smartroute-gateway`, `curl -s http://127.0.0.1:1001/version`, and if
-either comes back empty, `/opt/etc/init.d/S98smartroute-gateway restart` then
-check `/etc/xkeen-smartroute/state/gateway.log`. It depends on Xray's gRPC API
-being enabled (`00_api.smartroute.json`, `127.0.0.1:10085`) -- if the gateway
+`check.sh` checks `smartroute-gateway` (the standalone panel, port 1001,
+`gateway/` in this repo) via `pgrep -f /opt/share/xkeen-smartroute/gateway`
+(the full binary path -- a shorthand like `pgrep -f smartroute-gateway`
+does NOT match the real process, whose actual argv is
+`/opt/share/xkeen-smartroute/gateway`, no literal "smartroute-gateway"
+substring in it) plus `curl -s http://127.0.0.1:1001/version`. If either
+comes back empty by hand, `/opt/etc/init.d/S98smartroute-gateway restart`
+then check `/etc/xkeen-smartroute/state/gateway.log`. It depends on Xray's
+gRPC API being enabled (`00_api.smartroute.json`, `127.0.0.1:10085`) -- if the gateway
 log shows a connection error there, that fragment is missing or Xray hasn't
 picked it up yet (needs a restart via `lib/common.sh`'s `sr_restart_xray`, not
 `xkeen -restart`).

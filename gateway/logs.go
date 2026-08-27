@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/gorilla/websocket"
 )
 
 // Xray's own log files -- there's no LoggerService streaming API, so this
@@ -42,16 +44,26 @@ func logsWSHandler() http.HandlerFunc {
 
 		ctx, cancel := context.WithCancel(r.Context())
 		defer cancel()
+		wsKeepalive(conn, cancel)
 
 		out := make(chan logLine, 64)
 		go tailFile(ctx, accessLogPath, "access", out)
 		go tailFile(ctx, errorLogPath, "error", out)
 
+		pingTicker := time.NewTicker(wsPingPeriod)
+		defer pingTicker.Stop()
+
 		for {
 			select {
 			case <-ctx.Done():
 				return
+			case <-pingTicker.C:
+				conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
+				if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+					return
+				}
 			case l := <-out:
+				conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
 				if err := conn.WriteJSON(l); err != nil {
 					return
 				}
@@ -63,17 +75,20 @@ func logsWSHandler() http.HandlerFunc {
 func tailFile(ctx context.Context, path, kind string, out chan<- logLine) {
 	var f *os.File
 	var pos int64
+	var curInfo os.FileInfo
 
 	open := func() bool {
-		var err error
-		f, err = os.Open(path)
+		nf, err := os.Open(path)
 		if err != nil {
 			return false
 		}
-		fi, err := f.Stat()
-		if err == nil {
-			pos = fi.Size() // start at EOF, only stream *new* lines
+		fi, err := nf.Stat()
+		if err != nil {
+			nf.Close()
+			return false
 		}
+		f, curInfo = nf, fi
+		pos = fi.Size() // start at EOF, only stream *new* lines
 		return true
 	}
 
@@ -98,10 +113,26 @@ func tailFile(ctx context.Context, path, kind string, out chan<- logLine) {
 			if err != nil {
 				continue
 			}
+			if !os.SameFile(fi, curInfo) {
+				// The path now resolves to a different inode than the
+				// handle we have open -- the file was deleted and
+				// recreated, not truncated in place. Nothing in this
+				// project's own code does that today (sr_clear_logs and
+				// enforceLogCap both truncate in place, see below), but a
+				// tail -f that silently keeps reading a dead inode forever
+				// the moment something else ever does rotate this file
+				// (logrotate, a future feature, anything) is a latent bug
+				// worth not having. Reopen fresh from the top of the new
+				// file.
+				if nf, err := os.Open(path); err == nil {
+					f.Close()
+					f, curInfo, pos = nf, fi, 0
+				}
+			}
 			if fi.Size() < pos {
-				// truncated/rotated (either logging just got re-enabled, or
-				// the size-cap loop below or a manual "clear logs" reset
-				// it) -- restart from the top of the new file
+				// truncated in place (logging just got re-enabled, or the
+				// size-cap loop below or a manual "clear logs" reset it)
+				// -- restart from the top of the same file
 				pos = 0
 			}
 			if fi.Size() == pos {

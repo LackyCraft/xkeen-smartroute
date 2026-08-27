@@ -25,6 +25,19 @@
 	// is open, so Home shows fresh data immediately when you come back.
 	function isGone() { return !document.getElementById('sr-section-home'); }
 
+	// shouldPoll: unlike isGone() above, DOES treat the actual browser tab
+	// being backgrounded (document.hidden) as a reason to pause -- used
+	// only by the rpcd-backed polls below (pollMetrics/pollActivity/
+	// pollTrafficByProfile, each an api.* call -> a fresh `sh`-exec of the
+	// 26KB rpcd script on the router), not by the WebSocket reconnect logic
+	// above, which isn't part of that cost at all. Each poll loop always
+	// reschedules itself regardless of this check and just skips the real
+	// work when it's false, rather than stopping the setTimeout chain
+	// outright -- so there's no separate "resume on visibilitychange"
+	// mechanism needed, the very next tick (a few seconds later, at most)
+	// notices the tab is visible again on its own.
+	function shouldPoll() { return !document.hidden && !isGone(); }
+
 	function serviceCard(key, titleKey, running, onAction) {
 		var dot = E('span', { class: 'sr-dot ' + (running ? 'sr-dot-ok' : 'sr-dot-bad') });
 		return E('div', { class: 'sr-row-between', style: 'padding:6px 0' }, [
@@ -93,8 +106,6 @@
 		});
 	}
 
-	function fmtFree(mb) { return mb >= 1024 ? (mb / 1024).toFixed(1) + ' GB' : mb + ' MB'; }
-
 	// --- logs: viewer + on/off + level + clear + size cap ---
 	function renderLogControls(container, cfg, onChange) {
 		container.innerHTML = '';
@@ -127,7 +138,7 @@
 		]));
 		container.appendChild(E('div', { class: 'sr-row' }, [
 			E('label', {}, T('logs_cap')), capInput, capSaveBtn,
-			E('span', { class: 'sr-desc' }, cfg.free_mb != null ? (fmtFree(cfg.free_mb) + ' ' + T('logs_cap_free')) : '')
+			E('span', { class: 'sr-desc' }, cfg.free_mb != null ? (SR.fmtBytes(cfg.free_mb * 1024 * 1024) + ' ' + T('logs_cap_free')) : '')
 		]));
 	}
 
@@ -149,20 +160,10 @@
 		};
 	}
 
-	function fmtTrafficBytes(n) {
-		n = n || 0;
-		if (n < 1024) return n + ' Б/с';
-		if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' КБ/с';
-		return (n / (1024 * 1024)).toFixed(2) + ' МБ/с';
-	}
-
-	function fmtBytesPlain(n) {
-		n = n || 0;
-		if (n < 1024) return n + ' Б';
-		if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' КБ';
-		if (n < 1024 * 1024 * 1024) return (n / (1024 * 1024)).toFixed(1) + ' МБ';
-		return (n / (1024 * 1024 * 1024)).toFixed(2) + ' ГБ';
-	}
+	// fmtTrafficBytes/fmtBytesPlain now live as SR.fmtBytes(n, rate) in
+	// app.js -- see its own comment for why (one locale-aware formatter,
+	// used to be three separate hardcoded-Russian copies here and in
+	// app.js plus a fourth hardcoded-English one, fmtFree above).
 
 	// Cumulative since Xray's last start (not a rate) -- ranked bars, biggest
 	// first, each split into an up/down segment scaled to the largest single
@@ -187,13 +188,14 @@
 					E('div', { class: 'sr-trafbar-fill sr-trafbar-fill-up', style: 'width:' + upPct.toFixed(2) + '%' }),
 					E('div', { class: 'sr-trafbar-fill sr-trafbar-fill-down', style: 'width:' + downPct.toFixed(2) + '%' })
 				]),
-				E('div', { class: 'sr-trafbar-value' }, total ? (fmtBytesPlain(r.up) + ' / ' + fmtBytesPlain(r.down)) : '—')
+				E('div', { class: 'sr-trafbar-value' }, total ? (SR.fmtBytes(r.up) + ' / ' + SR.fmtBytes(r.down)) : '—')
 			]));
 		});
 	}
 
 	function pollTrafficByProfile() {
 		if (isGone()) return;
+		if (!shouldPoll()) { setTimeout(pollTrafficByProfile, TRAFFIC_BY_PROFILE_POLL_MS); return; }
 		fetch('/api/traffic-by-profile').then(function (r) { return r.json(); }).then(function (rows) {
 			if (isGone()) return;
 			var box = document.getElementById('sr-traffic-by-profile');
@@ -239,8 +241,8 @@
 			try {
 				var d = JSON.parse(ev.data);
 				var upEl = document.getElementById('sr-traffic-up'), downEl = document.getElementById('sr-traffic-down');
-				if (upEl) upEl.textContent = fmtTrafficBytes(d.up);
-				if (downEl) downEl.textContent = fmtTrafficBytes(d.down);
+				if (upEl) upEl.textContent = SR.fmtBytes(d.up, true);
+				if (downEl) downEl.textContent = SR.fmtBytes(d.down, true);
 				state.trafficUp.push(d.up || 0);
 				state.trafficDown.push(d.down || 0);
 				if (state.trafficUp.length > TRAFFIC_HISTORY_LEN) state.trafficUp.shift();
@@ -252,6 +254,7 @@
 
 	function pollMetrics() {
 		if (isGone()) return;
+		if (!shouldPoll()) { setTimeout(pollMetrics, METRICS_POLL_MS); return; }
 		api.getHealthMetrics().then(function (m) {
 			if (isGone()) return;
 			var box = document.getElementById('sr-status-metrics');
@@ -262,6 +265,7 @@
 
 	function pollActivity() {
 		if (isGone()) return;
+		if (!shouldPoll()) { setTimeout(pollActivity, ACTIVITY_POLL_MS); return; }
 		Promise.all([api.listProfiles(), api.getCurrent(), api.getActivity()]).then(function (data) {
 			if (isGone()) return;
 			var profiles = data[0] || [], current = data[1] || {};

@@ -21,8 +21,19 @@
 				var toggle = E('input', { type: 'checkbox' });
 				toggle.checked = enabledNames.indexOf(p.name) !== -1;
 				toggle.addEventListener('change', function (ev) {
+					var enabled = ev.target.checked;
 					ev.target.disabled = true;
-					api.killswitchSet(p.name, ev.target.checked).then(function () { ev.target.disabled = false; });
+					api.killswitchSet(p.name, enabled).then(function (res) {
+						ev.target.disabled = false;
+						// killswitch.sh can genuinely fail to arm (e.g. the
+						// system dnsmasq lacks ipset/nftset support) --
+						// revert the checkbox and say so instead of leaving
+						// it checked as if protection were actually on.
+						if (res && res.error) {
+							ev.target.checked = !enabled;
+							SR.toast(T('status_action_failed') + ': ' + (res.detail || res.error), 'error');
+						}
+					});
 				});
 				table.appendChild(E('tr', {}, [
 					E('td', {}, p.name), E('td', {}, domainsLabel),

@@ -96,6 +96,33 @@ ENTWARE_HOOK_EOF
 	/etc/init.d/entware enable
 fi
 
+# ---------------------------------------------------------------------------
+log "dnsmasq-full (нужен для hard kill-switch)"
+
+# The stock `dnsmasq` package on most OpenWrt builds has neither ipset nor
+# nftset compiled in (confirmed live: `dnsmasq --version` shows
+# "no-ipset no-nftset"). Without one of those, lib/killswitch.sh's hard
+# kill-switch can write all the UCI it wants -- nothing ever tells dnsmasq
+# to feed resolved IPs into the ipset the firewall REJECT rule depends on.
+# Swapping to dnsmasq-full once here, at install time (a strict superset --
+# DHCP/DNS behavior for users who never touch kill-switch is unchanged),
+# avoids every future kill-switch toggle needing this same package swap
+# under a less controlled, less visible rpcd call. Run with the system
+# `opkg` (not yet shadowed by Entware's own /opt/bin/opkg -- PATH is
+# extended below) since dnsmasq is a base-system package, not an Entware one.
+if ! dnsmasq --version 2>/dev/null | grep -q ' ipset\| nftset'; then
+	opkg update >/dev/null 2>&1 || true
+	opkg list-installed 2>/dev/null | grep -q '^dnsmasq -' && { opkg remove dnsmasq >/dev/null 2>&1 || true; }
+	if opkg install dnsmasq-full >/dev/null 2>&1; then
+		/etc/init.d/dnsmasq restart >/dev/null 2>&1 || true
+		log "dnsmasq-full установлен."
+	else
+		log "ПРЕДУПРЕЖДЕНИЕ: не удалось поставить dnsmasq-full -- hard kill-switch будет недоступен, пока не поставите его вручную (opkg remove dnsmasq && opkg install dnsmasq-full). / WARNING: could not install dnsmasq-full -- hard kill-switch unavailable until installed manually."
+	fi
+else
+	log "dnsmasq уже поддерживает ipset/nftset, пропускаю."
+fi
+
 export PATH="/opt/bin:/opt/sbin:$PATH"
 /opt/bin/opkg update >/dev/null 2>&1 || true
 /opt/bin/opkg install jq curl bash coreutils-base64 coreutils-tr coreutils-timeout unzip shadow-su grep sed >/dev/null 2>&1 \
@@ -154,59 +181,6 @@ if ! command -v xkeen >/dev/null 2>&1; then
 	# the template instead of fighting version skew between two upstreams.
 	[ -f /opt/etc/xray/configs/02_transport.json ] && echo '{}' > /opt/etc/xray/configs/02_transport.json
 
-	# xkeen's default 04_outbounds.json ships a placeholder "vless-reality"
-	# outbound with empty address/id/publicKey fields, meant to be hand-edited.
-	# Left as-is, Xray refuses to start at all (even once a real subscription
-	# is imported into our own 04_outbounds.smartroute.json) because this
-	# invalid stub is loaded from the same confdir. Replace it with just the
-	# harmless "direct" outbound; real servers come from SmartRoute.
-	echo '{"outbounds":[{"protocol":"freedom","tag":"direct"}]}' > /opt/etc/xray/configs/04_outbounds.json
-
-	# Xray's own gRPC API (stats/handler/routing), loopback-only -- SmartRoute's
-	# panel reads live traffic/connection data through it. Off by default;
-	# this is what turns it on.
-	cat > /opt/etc/xray/configs/00_api.smartroute.json <<'XRAY_API_EOF'
-{
-  "api": {
-    "tag": "api",
-    "services": ["HandlerService", "LoggerService", "StatsService", "RoutingService", "ObservatoryService"]
-  },
-  "policy": {
-    "levels": {
-      "0": {
-        "connIdle": 30,
-        "statsUserUplink": true,
-        "statsUserDownlink": true
-      }
-    },
-    "system": {
-      "statsInboundUplink": true,
-      "statsInboundDownlink": true,
-      "statsOutboundUplink": true,
-      "statsOutboundDownlink": true
-    }
-  },
-  "inbounds": [
-    {
-      "tag": "api",
-      "listen": "127.0.0.1",
-      "port": 10085,
-      "protocol": "dokodemo-door",
-      "settings": { "address": "127.0.0.1" }
-    }
-  ],
-  "routing": {
-    "rules": [
-      {
-        "type": "field",
-        "inboundTag": ["api"],
-        "outboundTag": "api"
-      }
-    ]
-  }
-}
-XRAY_API_EOF
-
 	# S24xray runs xray as an unprivileged "xkeen" user via `su`, which needs:
 	# shadow-su (installed above) for `su` itself, a "xkeen" account, and a
 	# real shell in its passwd entry (shadow's su falls back to /bin/bash,
@@ -239,6 +213,71 @@ XRAY_API_EOF
 else
 	log "xkeen уже установлен: $(xkeen -status 2>/dev/null | head -n1 || echo ok)"
 fi
+
+# Both of these used to live inside the "xkeen not yet installed" branch
+# above -- harmless the first time, but it meant neither ever got redone on
+# a plain reinstall (xkeen already present, so that whole branch is skipped
+# every time after the first). Confirmed live: 00_api.smartroute.json in
+# particular going missing after a reinstall silently took the gateway
+# panel's entire gRPC connection to Xray with it (no stats, no Observatory,
+# no live traffic graph) while check.sh still reported it as "not generated
+# yet" rather than a failure -- both are cheap, idempotent overwrites, so
+# just always redo them.
+#
+# xkeen's default 04_outbounds.json ships a placeholder "vless-reality"
+# outbound with empty address/id/publicKey fields, meant to be hand-edited.
+# Left as-is, Xray refuses to start at all (even once a real subscription
+# is imported into our own 04_outbounds.smartroute.json) because this
+# invalid stub is loaded from the same confdir. Replace it with just the
+# harmless "direct" outbound; real servers come from SmartRoute.
+echo '{"outbounds":[{"protocol":"freedom","tag":"direct"}]}' > /opt/etc/xray/configs/04_outbounds.json
+
+# Xray's own gRPC API (stats/handler/routing), loopback-only -- SmartRoute's
+# panel reads live traffic/connection data through it. Off by default;
+# this is what turns it on.
+cat > /opt/etc/xray/configs/00_api.smartroute.json <<'XRAY_API_EOF'
+{
+  "api": {
+    "tag": "api",
+    "services": ["HandlerService", "LoggerService", "StatsService", "RoutingService", "ObservatoryService"]
+  },
+  "policy": {
+    "levels": {
+      "0": {
+        "connIdle": 30,
+        "statsUserUplink": true,
+        "statsUserDownlink": true
+      }
+    },
+    "system": {
+      "statsInboundUplink": true,
+      "statsInboundDownlink": true,
+      "statsOutboundUplink": true,
+      "statsOutboundDownlink": true
+    }
+  },
+  "inbounds": [
+    {
+      "tag": "api",
+      "listen": "127.0.0.1",
+      "port": 10085,
+      "protocol": "dokodemo-door",
+      "settings": { "address": "127.0.0.1" }
+    }
+  ]
+}
+XRAY_API_EOF
+# No "routing" block above on purpose, even though the inbound needs one
+# (inboundTag:["api"] -> outboundTag:"api") to actually be reachable --
+# confirmed live via `xray run -test -confdir ... -dump`: once ANY other
+# confdir file also defines a top-level "routing" key, this file's own
+# "routing" block loses the merge with no error logged anywhere, and Xray
+# quietly runs with no route to its own API service (gateway panel's gRPC
+# calls fail with "error reading server preface: EOF" -- health/Observatory/
+# traffic data goes stale, everything else keeps working). genroute.sh emits
+# this exact rule itself now, in 05_routing.smartroute.json, the one file
+# that's actually guaranteed to win that merge -- see its own comment next
+# to the redirect/tproxy catch-all it already had to do the same thing for.
 
 # Xray's own log directory lives on tmpfs (/tmp/xray-logs, see 01_log.json
 # below) so the on-demand logging toggle never wears the flash -- but tmpfs
@@ -373,9 +412,21 @@ cat > /opt/etc/xray/configs/06_policy.json <<'XRAY_POLICY_EOF'
       "statsOutboundUplink": true,
       "statsOutboundDownlink": true
     }
-  }
+  },
+  "stats": {}
 }
 XRAY_POLICY_EOF
+# "stats": {} above is not decorative -- without a top-level "stats" block
+# (separate from "policy", which only configures *what* gets counted once
+# the stats app is actually running), Xray never enables its app/stats
+# feature at all, and QueryStats fails with "QueryStats only works its own
+# stats.Manager" on every call -- confirmed live, and a known upstream
+# report (XTLS/Xray-core#2296, and the same fix independently confirmed in
+# XTLS/Xray-core#4509's own discussion). GetSysStats/lsrules/lso all worked
+# fine throughout, which is what made this one non-obvious -- only the
+# per-outbound/per-user QueryStats path needs the real stats.Manager this
+# unlocks. That's the gateway panel's traffic graph and the "online now"
+# dot's data source (see gateway/xray.go's queryOutboundTrafficByTag).
 
 # ---------------------------------------------------------------------------
 log "Шаг 3/6: xkeen-UI (веб-панель, порт 1000)"
@@ -445,7 +496,6 @@ for f in common.sh subscription.sh genroute.sh killswitch.sh redirect.sh; do
 	wget -O "$SR_LIB_DIR/$f" "$REPO_RAW/lib/$f" || die "не удалось скачать lib/$f"
 	chmod +x "$SR_LIB_DIR/$f"
 done
-sed -i "s#XKEEN_CONFIGS_DIR=\"/opt/etc/xray/configs\"#XKEEN_CONFIGS_DIR=\"/opt/etc/xray/configs\"#" "$SR_LIB_DIR/common.sh" 2>/dev/null || true
 
 wget -O "$SR_ETC_DIR/lists/geosite-categories.json" "$REPO_RAW/lists/geosite-categories.json" || true
 wget -O "$SR_ETC_DIR/lists/custom-categories.json" "$REPO_RAW/lists/custom-categories.json" || true
@@ -472,6 +522,38 @@ done
 chmod +x /usr/libexec/rpcd/luci.xkeen-smartroute
 [ -x /etc/init.d/rpcd ] && /etc/init.d/rpcd restart >/dev/null 2>&1 || true
 [ -x /etc/init.d/uhttpd ] && /etc/init.d/uhttpd restart >/dev/null 2>&1 || true
+
+# On a reinstall over `uninstall.sh` (without --purge) or any re-run of this
+# script, $SR_ETC_DIR/state's flags/profiles/state/outbounds.json survive on
+# disk, but the actual enforcement they describe (the nftables redirect
+# chain, kill-switch's dnsmasq/firewall UCI sections,
+# 04_outbounds.smartroute.json, routing) does NOT survive -- those live
+# outside $SR_ETC_DIR and only ever get (re)built by an explicit
+# enable/regen call. Confirmed live: after a plain reinstall, check.sh still
+# showed everything "[OK]" except the lines that actually matter, while
+# traffic silently stopped being captured/routed at all -- outbounds/routing
+# still pointed at server tags Xray had no outbound for. Redo those calls
+# now so a reinstall really is idempotent, not just file-copy-idempotent.
+if [ -s "$SR_ETC_DIR/state/outbounds.json" ]; then
+	jq '{outbounds: [.[] | del(.subscription)]}' "$SR_ETC_DIR/state/outbounds.json" \
+		>/opt/etc/xray/configs/04_outbounds.smartroute.json.tmp \
+		&& mv /opt/etc/xray/configs/04_outbounds.smartroute.json.tmp /opt/etc/xray/configs/04_outbounds.smartroute.json
+fi
+if [ "$(cat "$SR_ETC_DIR/state/redirect_enabled" 2>/dev/null)" = "1" ]; then
+	sh "$SR_LIB_DIR/redirect.sh" enable >/dev/null 2>&1 || true
+fi
+for f in "$SR_ETC_DIR/state/killswitch"/*.name; do
+	[ -e "$f" ] || continue
+	sh "$SR_LIB_DIR/killswitch.sh" enable "$(cat "$f")" >/dev/null 2>&1 || true
+done
+# The CLI `regen` verb always does a real, network-bound ping pass per
+# balancer-mode profile (see sr_regen's own comment) -- fine for cron every
+# 3 minutes, but blocking the rest of this installer on it would add minutes
+# to every run on a subscription with several such profiles. Fire it in the
+# background instead of waiting on it here; the crontab entry just installed
+# below picks it up again in 3 minutes either way if this particular run
+# hasn't finished by then.
+sh "$SR_LIB_DIR/genroute.sh" regen >/dev/null 2>&1 &
 
 # ---------------------------------------------------------------------------
 log "Шаг 5/6: smartroute-gateway (живая панель в духе Mihomo, порт $SR_GATEWAY_PORT)"
@@ -629,7 +711,19 @@ CRON_REGEN="*/3 * * * * sh $SR_LIB_DIR/genroute.sh regen >/dev/null 2>&1 #xkeen-
 # (see the sequential-vs-concurrent-probing note in genroute.sh for why not
 # more often/parallel on this hardware).
 CRON_PING="0 */2 * * * sh $SR_LIB_DIR/subscription.sh ping >/dev/null 2>&1 #xkeen-smartroute-cron"
-( crontab -l 2>/dev/null | grep -v 'xkeen-smartroute-cron' ; echo "$CRON_GEO" ; echo "$CRON_SUB" ; echo "$CRON_RESTART" ; echo "$CRON_REGEN" ; echo "$CRON_PING" ) | crontab -
+# `grep -v` exits 1 (no lines selected) whenever root has no crontab yet --
+# every first-ever install, and every reinstall after uninstall.sh, which
+# clears out the xkeen-smartroute-cron entries entirely. Under `set -e`,
+# that non-zero status used to abort this whole subshell right after the
+# `crontab -l | grep -v` pipe and before any of the `echo`s below ran --
+# confirmed live: `crontab -` then received empty stdin and silently wrote
+# an empty crontab, taking subscription refresh, domain-list refresh, the
+# nightly Xray restart, and (worst of it) genroute.sh's regen loop with it,
+# the last of which is what actually (re)writes 04_outbounds.smartroute.json
+# and 00_api.smartroute.json from already-imported subscription data -- so
+# a router in this state looked installed (check.sh: everything else [OK])
+# but silently had zero working outbound routing until someone noticed.
+( crontab -l 2>/dev/null | grep -v 'xkeen-smartroute-cron' || true ; echo "$CRON_GEO" ; echo "$CRON_SUB" ; echo "$CRON_RESTART" ; echo "$CRON_REGEN" ; echo "$CRON_PING" ) | crontab -
 /etc/init.d/cron restart >/dev/null 2>&1 || true
 
 # ---------------------------------------------------------------------------

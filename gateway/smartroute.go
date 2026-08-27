@@ -26,6 +26,18 @@ type srServer struct {
 	Subscription string `json:"subscription"`
 }
 
+// srProfile is round-tripped through saveProfile (handlers.go's PUT
+// /proxies/{group}, the Clash-API-style "pick a server" endpoint): loaded
+// via loadProfiles, one field mutated (Mode/FixedServer), then the whole
+// struct is re-marshaled and written back via genroute.sh save. Every field
+// lib/genroute.sh's own profile schema can carry has to be listed here, or
+// json.Unmarshal silently drops it on load and the re-marshal on save
+// silently erases it from the file on disk -- confirmed missing here before:
+// a profile scoped to specific devices or IP ranges (Devices/IPRanges) lost
+// that restriction entirely (silently widened to match everything) the
+// first time its server was changed through this endpoint, and
+// RemovedServers (the "these disappeared in a subscription refresh"
+// warning list genroute.sh/subscription.sh maintain) was wiped the same way.
 type srProfile struct {
 	Name         string `json:"name"`
 	DomainSource struct {
@@ -33,9 +45,16 @@ type srProfile struct {
 		Value string `json:"value"`
 		File  string `json:"file"`
 	} `json:"domain_source"`
-	Mode        string   `json:"mode"` // "balancer" | "fixed"
-	Servers     []string `json:"servers"`
-	FixedServer string   `json:"fixed_server"`
+	Mode           string   `json:"mode"` // "balancer" | "fixed"
+	Servers        []string `json:"servers"`
+	FixedServer    string   `json:"fixed_server"`
+	Devices        []string `json:"devices,omitempty"`
+	IPRanges       []string `json:"ip_ranges,omitempty"`
+	RemovedServers []struct {
+		Tag       string `json:"tag"`
+		Name      string `json:"name"`
+		RemovedAt string `json:"removed_at"`
+	} `json:"removed_servers,omitempty"`
 }
 
 func loadServers() ([]srServer, error) {

@@ -6,31 +6,8 @@
 		serverGroupExpanded: {}, activeTags: {}
 	};
 
-	function pingLabel(tag) {
-		var ms = st.pings[tag];
-		if (ms === null || ms === undefined) return T('ping_timeout');
-		if (typeof ms === 'number') return ms + ' ms';
-		return '—';
-	}
-
-	function serverForTag(tag) {
-		return st.servers.filter(function (x) { return x.tag === tag; })[0] || { tag: tag, name: tag };
-	}
-
-	function activityDot(tag) {
-		var active = !!(tag && st.activeTags[tag]);
-		return E('span', { title: T(active ? 'activity_online' : 'activity_idle'), class: 'sr-dot ' + (active ? 'sr-dot-ok' : '') });
-	}
-
-	function groupServersBySubscription(servers) {
-		var groups = {}, order = [];
-		servers.forEach(function (s) {
-			var key = s.subscription || '';
-			if (!groups[key]) { groups[key] = []; order.push(key); }
-			groups[key].push(s);
-		});
-		return order.map(function (key) { return { label: key, servers: groups[key] }; });
-	}
+	// pingLabel/serverForTag/activityDot/groupServersBySubscription now live
+	// in the shared app.js module (SR.*) -- see its own comment for why.
 
 	function renderServerPicker() {
 		var box = document.getElementById('sr-dv-server-picker');
@@ -38,7 +15,7 @@
 		box.innerHTML = '';
 		if (!st.servers.length) { box.appendChild(E('p', { class: 'sr-desc' }, T('need_servers_first'))); return; }
 
-		groupServersBySubscription(st.servers).forEach(function (g) {
+		SR.groupServersBySubscription(st.servers).forEach(function (g) {
 			var isOpen = !!st.serverGroupExpanded[g.label];
 			var toggle = E('a', { href: '#', style: 'font-weight:700;display:block;margin:6px 0 3px' },
 				(isOpen ? '▾ ' : '▸ ') + (g.label || T('sub_no_subscriptions')) + ' — ' + g.servers.length + ' ' + T('sub_servers_word'));
@@ -53,7 +30,7 @@
 					if (input.checked) st.picked[s.tag] = true; else delete st.picked[s.tag];
 				});
 				list.appendChild(E('label', { class: 'sr-row', style: 'padding:2px 0' }, [
-					input, SR.renderName(s.name), ' (' + s.address + ':' + s.port + ', ' + s.protocol + ', ' + pingLabel(s.tag) + ')'
+					input, SR.renderName(s.name), ' (' + s.address + ':' + s.port + ', ' + s.protocol + ', ' + SR.pingLabel(s.tag, st.pings) + ')'
 				]));
 			});
 			box.appendChild(list);
@@ -79,12 +56,12 @@
 			E('th', {}, T('col_server')), E('th', {}, T('col_address')), E('th', {}, T('col_ping')), E('th', {}, '')
 		])]);
 		poolTags.forEach(function (tag) {
-			var s = serverForTag(tag);
+			var s = SR.serverForTag(tag, st.servers);
 			var isGateway = tag === gateway;
 			table.appendChild(E('tr', {}, [
-				E('td', {}, [isGateway ? activityDot(tag) : E('span', { class: 'sr-dot' }), SR.renderName(s.name)]),
+				E('td', {}, [isGateway ? SR.activityDot(tag, st.activeTags) : E('span', { class: 'sr-dot' }), SR.renderName(s.name)]),
 				E('td', {}, s.address ? (s.address + ':' + s.port) : '—'),
-				E('td', {}, pingLabel(tag)),
+				E('td', {}, SR.pingLabel(tag, st.pings)),
 				E('td', {}, isGateway ? E('span', { class: 'sr-badge' }, T('dv_gateway_badge')) : '')
 			]));
 		});
@@ -115,8 +92,13 @@
 	function handleToggleEnabled(ev) {
 		var enabled = ev.target.checked;
 		ev.target.disabled = true;
-		api.setDoublevpnEnabled(enabled).then(function () {
+		api.setDoublevpnEnabled(enabled).then(function (res) {
 			ev.target.disabled = false;
+			if (res && res.error) {
+				ev.target.checked = !enabled;
+				SR.toast(T('status_action_failed') + ': ' + (res.detail || res.error), 'error');
+				return;
+			}
 			SR.toast(T('dv_toggle_saved_ok'), 'info');
 			return reload();
 		});
@@ -131,7 +113,7 @@
 		// which groups are open, so it's the only complete source of truth.
 		var chosen = Object.keys(st.picked);
 		var enabled = document.getElementById('sr-dv-enabled').checked;
-		if (enabled && !chosen.length) SR.toast(T('dv_need_pool_warning'), 'error');
+		if (enabled && !chosen.length) { SR.toast(T('dv_need_pool_warning'), 'error'); return; }
 
 		var btn = ev.target;
 		btn.disabled = true;
@@ -176,14 +158,20 @@
 			(data[3] || []).forEach(function (t) { st.activeTags[t] = true; });
 			(st.current.servers || []).forEach(function (t) { st.picked[t] = true; });
 			(st.current.servers || []).forEach(function (t) {
-				var s = serverForTag(t);
+				var s = SR.serverForTag(t, st.servers);
 				if (s) st.serverGroupExpanded[s.subscription || ''] = true;
 			});
 			document.getElementById('sr-dv-enabled').checked = !!st.current.enabled;
 			renderServerPicker();
 			renderMembers();
 
+			// Skips the real activity fetch (an api.* call -> a fresh
+			// `sh`-exec of the 26KB rpcd script) while this section isn't
+			// the visible one or the browser tab itself is backgrounded.
+			// Always reschedules regardless, so the next tick notices on
+			// its own once visible again, no separate resume needed.
 			(function pollLoop() {
+				if (!SR.sectionVisible('doublevpn')) { setTimeout(pollLoop, 3000); return; }
 				pollActivity().then(function () { setTimeout(pollLoop, 3000); }, function () { setTimeout(pollLoop, 3000); });
 			})();
 		});
