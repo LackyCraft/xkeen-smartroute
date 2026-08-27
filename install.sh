@@ -455,7 +455,22 @@ if command -v curl >/dev/null 2>&1 && curl -s -m 3 http://127.0.0.1:1000/api/ver
 	# can no longer tell "already configured" apart from "server down".
 	# install.sh runs directly on the router, so the file is just... there.
 	xkeenui_cfg="/opt/etc/xkeen/xkeen-ui.json"
-	already_has_pw="$( [ -s "$xkeenui_cfg" ] && jq -r '.auth.password_hash // empty' "$xkeenui_cfg" 2>/dev/null )"
+	# Not `[ -s "$f" ] && jq ...` inside the substitution: under `set -eu`,
+	# a plain top-level `var="$(cmd)"` inherits cmd's exit status same as
+	# any other simple command -- when `[ -s "$xkeenui_cfg" ]` is false
+	# (the normal case on a fresh install, before xkeen-UI has ever had a
+	# password set), the whole `&&` list's exit status is 1 and this
+	# assignment silently killed the entire script right here, with xkeen,
+	# xkeen-UI, dnsmasq-full etc. all already installed but XKeen
+	# SmartRoute itself, the gateway, and cron never even attempted.
+	# Confirmed live with `sh -x`: the trace just stops dead at this exact
+	# line, no error, no further output. Same class of bug as the
+	# `_sr_xray_launch` fix in lib/common.sh, found completely
+	# independently in much older code.
+	already_has_pw=""
+	if [ -s "$xkeenui_cfg" ]; then
+		already_has_pw="$(jq -r '.auth.password_hash // empty' "$xkeenui_cfg" 2>/dev/null || true)"
+	fi
 	if [ -n "$already_has_pw" ]; then
 		log "У xkeen-UI уже задан пароль, пропускаю."
 	elif [ -r /dev/tty ]; then

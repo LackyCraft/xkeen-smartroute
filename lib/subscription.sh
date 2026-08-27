@@ -709,7 +709,17 @@ sr_refresh_due() {
 	[ -s "$SR_SUBS_META_FILE" ] || { sr_log "refresh: no saved subscriptions yet"; return 0; }
 	hours="$(sr_get_refresh_hours)"
 	last=0
-	[ -s "$SR_REFRESH_STATE_FILE" ] && last="$(jq -r '.last // 0' "$SR_REFRESH_STATE_FILE" 2>/dev/null || echo 0)"
+	# Not a bare `[ cond ] && last=...`: confirmed live elsewhere in this
+	# project (lib/common.sh, install.sh) that a false left-hand test in
+	# that shape still aborts the whole function under `set -eu` on this
+	# busybox ash -- on a fresh install, before $SR_REFRESH_STATE_FILE has
+	# ever been written once, this silently killed every hourly cron
+	# refresh check forever (never logged anywhere, cron redirects this
+	# script's output to /dev/null), even though `last=0` right above is
+	# exactly the fallback this was supposed to produce for that case.
+	if [ -s "$SR_REFRESH_STATE_FILE" ]; then
+		last="$(jq -r '.last // 0' "$SR_REFRESH_STATE_FILE" 2>/dev/null || echo 0)"
+	fi
 	now="$(date +%s)"
 	due_at=$((last + hours * 3600))
 	if [ "$now" -lt "$due_at" ]; then
