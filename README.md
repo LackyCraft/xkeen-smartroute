@@ -45,22 +45,22 @@
 
 ```sh
 # Установка — по SSH на роутере
-sh <(wget -O - https://raw.githubusercontent.com/LackyCraft/xkeen-smartroute/master/install.sh)
+sh <(wget -q -O - https://raw.githubusercontent.com/LackyCraft/xkeen-smartroute/master/install.sh)
 ```
 
 ```sh
 # Обновление — та же команда, скрипт идемпотентен
-sh <(wget -O - https://raw.githubusercontent.com/LackyCraft/xkeen-smartroute/master/install.sh)
+sh <(wget -q -O - https://raw.githubusercontent.com/LackyCraft/xkeen-smartroute/master/install.sh)
 ```
 
 ```sh
 # Удаление
-sh <(wget -O - https://raw.githubusercontent.com/LackyCraft/xkeen-smartroute/master/uninstall.sh)
+sh <(wget -q -O - https://raw.githubusercontent.com/LackyCraft/xkeen-smartroute/master/uninstall.sh)
 ```
 
 ```sh
 # Удаление + все профили/списки/подписки
-sh <(wget -O - https://raw.githubusercontent.com/LackyCraft/xkeen-smartroute/master/uninstall.sh) --purge
+sh <(wget -q -O - https://raw.githubusercontent.com/LackyCraft/xkeen-smartroute/master/uninstall.sh) --purge
 ```
 
 `xkeen`, `xkeen-UI` и Entware не трогаются — отдельные проекты, удаляйте своими средствами.
