@@ -476,9 +476,16 @@ if command -v curl >/dev/null 2>&1 && curl -s -m 3 http://127.0.0.1:1000/api/ver
 	elif [ -r /dev/tty ]; then
 		log "Задайте пароль для веб-панели xkeen-UI (порт 1000) -- рекомендуется тот же, что и для входа на роутер."
 		printf "Пароль: "
-		stty -echo < /dev/tty 2>/dev/null
+		# `|| true` on both -- this busybox doesn't ship an `stty` applet at
+		# all on some builds (confirmed live: "ash: stty: not found"), and
+		# these two calls, bare, killed the entire install under `set -eu`
+		# right after printing the prompt -- `read` below was never even
+		# reached, no matter what the user typed. Echo suppression is a
+		# nicety (don't show the password on screen while typing), not
+		# something worth aborting the whole install over if unavailable.
+		stty -echo < /dev/tty 2>/dev/null || true
 		read -r xkeenui_pw < /dev/tty
-		stty echo < /dev/tty 2>/dev/null
+		stty echo < /dev/tty 2>/dev/null || true
 		printf "\n"
 		if [ -n "$xkeenui_pw" ]; then
 			setup_resp="$(curl -s -m 5 -X POST http://127.0.0.1:1000/api/auth/setup -H 'Content-Type: application/json' \
@@ -650,9 +657,13 @@ GATEWAY_INIT_EOF
 			sleep 1
 			log "Задайте пароль для панели SmartRoute (порт $SR_GATEWAY_PORT) -- рекомендуется тот же, что и для входа на роутер. Пусто = без пароля (панель останется открытой всем в сети)."
 			printf "Пароль: "
-			stty -echo < /dev/tty 2>/dev/null
+			# `|| true` -- see the identical xkeen-UI password prompt above,
+			# same fix, same reason: this busybox has no `stty` applet on
+			# some builds, and a bare failing `stty` here killed the
+			# install outright, `read` never reached.
+			stty -echo < /dev/tty 2>/dev/null || true
 			read -r gw_pw < /dev/tty
-			stty echo < /dev/tty 2>/dev/null
+			stty echo < /dev/tty 2>/dev/null || true
 			printf "\n"
 			if [ -n "$gw_pw" ]; then
 				gw_resp="$(curl -s -m 5 -X POST "http://127.0.0.1:$SR_GATEWAY_PORT/api/change-password" -H 'Content-Type: application/json' \
