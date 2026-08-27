@@ -45,22 +45,22 @@ Per-domain routing over a VLESS/Trojan subscription on OpenWrt routers — one c
 
 ```sh
 # Install -- over SSH on the router
-sh <(wget -O - https://raw.githubusercontent.com/LackyCraft/xkeen-smartroute/master/install.sh)
+sh <(wget -q -O - https://raw.githubusercontent.com/LackyCraft/xkeen-smartroute/master/install.sh)
 ```
 
 ```sh
 # Update -- same command, the script is idempotent
-sh <(wget -O - https://raw.githubusercontent.com/LackyCraft/xkeen-smartroute/master/install.sh)
+sh <(wget -q -O - https://raw.githubusercontent.com/LackyCraft/xkeen-smartroute/master/install.sh)
 ```
 
 ```sh
 # Uninstall
-sh <(wget -O - https://raw.githubusercontent.com/LackyCraft/xkeen-smartroute/master/uninstall.sh)
+sh <(wget -q -O - https://raw.githubusercontent.com/LackyCraft/xkeen-smartroute/master/uninstall.sh)
 ```
 
 ```sh
 # Uninstall + remove all profiles/lists/subscriptions
-sh <(wget -O - https://raw.githubusercontent.com/LackyCraft/xkeen-smartroute/master/uninstall.sh) --purge
+sh <(wget -q -O - https://raw.githubusercontent.com/LackyCraft/xkeen-smartroute/master/uninstall.sh) --purge
 ```
 
 `xkeen`, `xkeen-UI`, and Entware are left untouched — separate projects, remove them with their own tooling.
@@ -142,7 +142,7 @@ Xray on a large subscription (100+ servers) can grow to 100-120MB of RAM over ti
 
 ```sh
 sh check.sh
-# or: sh <(wget -O - https://raw.githubusercontent.com/LackyCraft/xkeen-smartroute/master/check.sh)
+# or: sh <(wget -q -O - https://raw.githubusercontent.com/LackyCraft/xkeen-smartroute/master/check.sh)
 ```
 
 Checks OpenWrt/Entware/xkeen/the xray process/xkeen-UI/config validity/the ubus backend/LuCI pages/server and profile counts — `[OK]`/`[FAIL]`/`[--]` per item.

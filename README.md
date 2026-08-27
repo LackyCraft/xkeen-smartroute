@@ -142,7 +142,7 @@ Xray при большой подписке (100+ серверов) может �
 
 ```sh
 sh check.sh
-# или: sh <(wget -O - https://raw.githubusercontent.com/LackyCraft/xkeen-smartroute/master/check.sh)
+# или: sh <(wget -q -O - https://raw.githubusercontent.com/LackyCraft/xkeen-smartroute/master/check.sh)
 ```
 
 Проверяет OpenWrt/Entware/xkeen/процесс xray/xkeen-UI/валидность конфигов/ubus-бэкенд/LuCI-страницы/число серверов и профилей — `[OK]`/`[FAIL]`/`[--]` по каждому пункту.
