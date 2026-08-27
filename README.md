@@ -157,6 +157,7 @@ sh check.sh
 | Панель на порту 1001 не открывается | `pgrep -f /opt/share/xkeen-smartroute/gateway` (полный путь — короткое `smartroute-gateway` не матчит реальный процесс); пусто — `/opt/etc/init.d/S98smartroute-gateway restart`, лог — `/etc/xkeen-smartroute/state/gateway.log` |
 | В логе панели ошибка подключения к Xray API | gRPC API слушает `127.0.0.1:10085`, включается `00_api.smartroute.json` — `sh check.sh` покажет, на месте ли |
 | Забыл пароль от панели или xkeen-UI | Панель: `rm /etc/xkeen-smartroute/state/gateway_password_hash && /opt/etc/init.d/S98smartroute-gateway restart` — новый пароль задайте на вкладке «Статус». Для xkeen-UI — см. его документацию |
+| Установка зависает / падает по таймауту, при этом `ping 8.8.8.8` работает | Провайдер блокирует GitHub/CDN (частый случай, DPI по SNI) — см. [docs/github-blocked-workaround.md](docs/github-blocked-workaround.md), как обойти через SSH-туннель с другого компьютера |
 
 ## Документация
 

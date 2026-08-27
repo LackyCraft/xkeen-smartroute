@@ -157,6 +157,7 @@ Checks OpenWrt/Entware/xkeen/the xray process/xkeen-UI/config validity/the ubus 
 | Panel on port 1001 won't open | `pgrep -f /opt/share/xkeen-smartroute/gateway` (the full path — the short `smartroute-gateway` doesn't match the real process); empty — `/opt/etc/init.d/S98smartroute-gateway restart`, log at `/etc/xkeen-smartroute/state/gateway.log` |
 | Panel log shows a Xray API connection error | gRPC API listens on `127.0.0.1:10085`, enabled by `00_api.smartroute.json` — `sh check.sh` shows whether it's in place |
 | Forgot the panel or xkeen-UI password | Panel: `rm /etc/xkeen-smartroute/state/gateway_password_hash && /opt/etc/init.d/S98smartroute-gateway restart` — set a new one from Status. For xkeen-UI — see its own docs |
+| Install hangs / times out, but `ping 8.8.8.8` works fine | Your ISP is blocking GitHub/CDN traffic (common, SNI-based DPI) — see [docs/github-blocked-workaround.md](docs/github-blocked-workaround.md) (Russian) for an SSH-tunnel workaround from another machine |
 
 ## Documentation
 
