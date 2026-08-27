@@ -1,4 +1,23 @@
-# XKeen SmartRoute DanyByLC
+<div align="center">
+  <img width="128" height="128" src="docs/screenshots/logo.png" alt="XKeen SmartRoute">
+
+<h1>XKeen SmartRoute</h1>
+<h4>DanyByLC</h4>
+
+<p>
+  Per-domain routing over a VLESS/Trojan subscription on OpenWrt/KeeneticOS routers — one command
+  <br>
+    <a href="#quick-start">Quick start</a>
+    ·
+    <a href="#documentation">Documentation</a>
+    ·
+    <a href="https://t.me/SmartRouteByLC">Project chat</a>
+</p>
+
+![preview](docs/screenshots/SmartRouteUI/InterfaceUI.gif)
+
+</div>
+<br>
 
 [Русский](README.md) | **English**
 

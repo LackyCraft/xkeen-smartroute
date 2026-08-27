@@ -1,4 +1,23 @@
-# XKeen SmartRoute DanyByLC
+<div align="center">
+  <img width="128" height="128" src="docs/screenshots/logo.png" alt="XKeen SmartRoute">
+
+<h1>XKeen SmartRoute</h1>
+<h4>DanyByLC</h4>
+
+<p>
+  Точечная маршрутизация по доменам через VLESS/Trojan-подписку на роутерах OpenWrt/KeeneticOS — одной командой
+  <br>
+    <a href="#быстрый-старт">Быстрый старт</a>
+    ·
+    <a href="#документация">Документация</a>
+    ·
+    <a href="https://t.me/SmartRouteByLC">Чат проекта</a>
+</p>
+
+![preview](docs/screenshots/SmartRouteUI/InterfaceUI.gif)
+
+</div>
+<br>
 
 **Русский** | [English](README.EN.md)
 
