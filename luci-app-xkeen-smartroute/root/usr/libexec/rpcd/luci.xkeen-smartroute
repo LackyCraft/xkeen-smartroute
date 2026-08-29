@@ -5,6 +5,18 @@
 # Protocol: `list` prints the method schema, `call <method>` reads JSON args
 # from stdin and prints a JSON result.
 
+# rpcd execs script-protocol backends with a bare system PATH --
+# /sbin:/usr/sbin:/bin:/usr/bin, no /opt/anything (confirmed live via
+# `env -i sh -c 'which jq'` under the same invocation rpcd itself uses).
+# This script calls jq directly in ~100 places (wrap_array, every arg
+# parse below) instead of only delegating to lib/*.sh -- those jq calls
+# fail with "not found" without this, and wrap_array's own `|| echo '[]'`
+# fallback swallows the failure silently, so list_* methods (subscriptions,
+# servers, profiles, categories, ...) come back as an empty array instead
+# of erroring -- looks exactly like "no data" in the UI, not like a bug.
+# Same fix lib/common.sh already applies for the same reason.
+export PATH="/opt/sbin:/opt/bin:$PATH"
+
 LIB_DIR="/opt/share/xkeen-smartroute/lib"
 SR_ETC_DIR="/etc/xkeen-smartroute"
 
