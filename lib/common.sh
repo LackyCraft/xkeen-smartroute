@@ -242,6 +242,42 @@ XRAY_RUN_USER="xkeen"
 # the whole node, not the whole subscription) and retry -- bounded so a truly
 # broken confdir still fails loudly rather than looping forever.
 _sr_xray_validate() {
+	# xkeen's own 02_transport.json template uses the old top-level
+	# "transport" config style Xray-core has since removed ("Global
+	# transport config has been removed and migrated to streamSettings in
+	# inbounds and outbounds") -- install.sh already neutralizes this file
+	# once, right after installing Entware's xray-core, but confirmed live
+	# on a fresh install: xkeen's own install wizard can (re)write the
+	# incompatible template *after* that one-time check already ran,
+	# leaving the original content in place with no further chance to fix
+	# it -- every start/restart from then on fails validation outright,
+	# xray never comes up. Re-assert defensively on every validate instead
+	# of trusting a single point-in-time check against another project's
+	# install ordering. We don't need this file: every outbound we
+	# generate carries its own streamSettings.
+	if [ -f "$XKEEN_CONFIGS_DIR/02_transport.json" ] && grep -q '"transport"' "$XKEEN_CONFIGS_DIR/02_transport.json" 2>/dev/null; then
+		echo '{}' >"$XKEEN_CONFIGS_DIR/02_transport.json"
+	fi
+
+	# Same self-heal, same reason: install.sh creates the unprivileged
+	# "$XRAY_RUN_USER" account (_sr_xray_launch below does `su -c ... "$XRAY_RUN_USER"`)
+	# once, in the "xkeen not yet installed" branch -- confirmed live, on the
+	# same router as the transport.json bug above, that branch can be skipped
+	# on a run where xkeen's binary is already present but an earlier attempt
+	# died before reaching that step, leaving no account at all. `su` then
+	# fails outright with "No passwd entry for user '$XRAY_RUN_USER'", xray
+	# never launches, and the resulting confdir-read failure looks like the
+	# unrelated known Xray-core confdir race (_sr_xray_launch retries below)
+	# instead of the real, non-transient cause.
+	if ! id "$XRAY_RUN_USER" >/dev/null 2>&1; then
+		for f in /etc/passwd /etc/group /opt/etc/passwd /opt/etc/group; do
+			case "$f" in
+				*group) grep -q "^$XRAY_RUN_USER:" "$f" 2>/dev/null || echo "$XRAY_RUN_USER:x:11111:" >>"$f" ;;
+				*passwd) grep -q "^$XRAY_RUN_USER:" "$f" 2>/dev/null || echo "$XRAY_RUN_USER:x:0:11111:::/bin/sh" >>"$f" ;;
+			esac
+		done
+	fi
+
 	attempts=0
 	while [ "$attempts" -lt 20 ]; do
 		if test_out="$(XRAY_LOCATION_ASSET="$XRAY_ASSET_DIR" xray run -test -confdir "$XKEEN_CONFIGS_DIR" 2>&1)"; then

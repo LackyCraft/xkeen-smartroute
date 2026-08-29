@@ -165,39 +165,6 @@ if ! command -v xkeen >/dev/null 2>&1; then
 		|| die "установка xkeen завершилась с ошибкой (или не уложилась в 5 минут) — запустите 'xkeen -i' вручную и ответьте на вопросы мастера. / xkeen install failed or exceeded its 5-minute budget — run 'xkeen -i' by hand and answer its wizard prompts."
 	[ -x /opt/sbin/xray ] || die "xray не появился после установки xkeen — мастер install мог измениться, запустите 'xkeen -i' вручную и ответьте на вопросы. / xray missing after xkeen install — its interactive wizard may have changed, run 'xkeen -i' by hand and answer its prompts."
 
-	# xkeen's own Xray-core download (from its GitHub release) crashed with
-	# "Illegal instruction" on real mipsel hardware in testing — it's a
-	# hardfloat build, and this Entware target (mipselsf-k3.4, "sf" = softfloat)
-	# has no FPU. Entware's own xray-core package is built correctly for this
-	# exact target and installs to the same /opt/sbin/xray path, so this just
-	# transparently replaces the broken binary with a working one.
-	log "Заменяю Xray на сборку из Entware (совместимую с этим CPU)..."
-	/opt/bin/opkg install xray-core >/dev/null 2>&1 || die "не удалось поставить entware xray-core / failed to install entware's xray-core"
-
-	# The newer Xray-core Entware ships has dropped the old top-level
-	# "transport" config style xkeen's 02_transport.json template uses
-	# ("Global transport config has been removed"). We don't need it — every
-	# outbound we generate carries its own streamSettings — so just neutralize
-	# the template instead of fighting version skew between two upstreams.
-	[ -f /opt/etc/xray/configs/02_transport.json ] && echo '{}' > /opt/etc/xray/configs/02_transport.json
-
-	# S24xray runs xray as an unprivileged "xkeen" user via `su`, which needs:
-	# shadow-su (installed above) for `su` itself, a "xkeen" account, and a
-	# real shell in its passwd entry (shadow's su falls back to /bin/bash,
-	# which doesn't exist here — only busybox ash). Some OpenWrt builds also
-	# lack the busybox `adduser` applet entirely, so don't depend on it.
-	if ! id xkeen >/dev/null 2>&1; then
-		command -v adduser >/dev/null 2>&1 && adduser -D -H -u 11111 -g 11111 xkeen 2>/dev/null
-		if ! id xkeen >/dev/null 2>&1; then
-			for f in /etc/passwd /etc/group /opt/etc/passwd /opt/etc/group; do
-				case "$f" in
-					*group) grep -q '^xkeen:' "$f" 2>/dev/null || echo 'xkeen:x:11111:' >> "$f" ;;
-					*passwd) grep -q '^xkeen:' "$f" 2>/dev/null || echo 'xkeen:x:0:11111:::/bin/sh' >> "$f" ;;
-				esac
-			done
-		fi
-	fi
-
 	# xkeen's own restart path writes a KeeneticOS NDM netfilter hook file
 	# and expects to clean up NDM-managed iptables state -- neither applies
 	# on real OpenWrt (xkeen primarily targets KeeneticOS), and the missing
@@ -212,6 +179,53 @@ if ! command -v xkeen >/dev/null 2>&1; then
 	timeout 30 xkeen -restart >/dev/null 2>&1 || log "ПРЕДУПРЕЖДЕНИЕ: xkeen -restart не завершился штатно (известная проблема на чистом OpenWRT) — это ожидаемо, SmartRoute управляет Xray самостоятельно. / xkeen -restart didn't finish cleanly (known issue on plain OpenWRT) — expected, SmartRoute manages Xray itself from here on."
 else
 	log "xkeen уже установлен: $(xkeen -status 2>/dev/null | head -n1 || echo ok)"
+fi
+
+# These three used to live inside the "xkeen not yet installed" branch
+# above too -- same bug class as 00_api.smartroute.json below: harmless the
+# first time, but skipped on every subsequent run once `command -v xkeen`
+# succeeds, including a run where xkeen's own binary is present but an
+# *earlier* attempt died before reaching these steps (confirmed live: a
+# router ended up with the crash-prone hardfloat xray-core, the
+# old-format 02_transport.json untouched, and no "xkeen" account at all --
+# xray refused to start at all, either on Xray-core's own config
+# validation or, once that was fixed, on `su`'s "No passwd entry for user
+# 'xkeen'"). All three are cheap and idempotent (opkg no-ops if already
+# current; the other two both self-check first), so just always redo them.
+
+# xkeen's own Xray-core download (from its GitHub release) crashed with
+# "Illegal instruction" on real mipsel hardware in testing — it's a
+# hardfloat build, and this Entware target (mipselsf-k3.4, "sf" = softfloat)
+# has no FPU. Entware's own xray-core package is built correctly for this
+# exact target and installs to the same /opt/sbin/xray path, so this just
+# transparently replaces the broken binary with a working one.
+log "Проверяю, что Xray — сборка из Entware (совместимая с этим CPU)..."
+/opt/bin/opkg install xray-core >/dev/null 2>&1 || die "не удалось поставить entware xray-core / failed to install entware's xray-core"
+
+# The newer Xray-core Entware ships has dropped the old top-level
+# "transport" config style xkeen's 02_transport.json template uses
+# ("Global transport config has been removed"). We don't need it — every
+# outbound we generate carries its own streamSettings — so just neutralize
+# the template instead of fighting version skew between two upstreams.
+# (lib/common.sh's _sr_xray_validate re-asserts this on every restart too,
+# in case xkeen's own wizard ever rewrites the template again later.)
+[ -f /opt/etc/xray/configs/02_transport.json ] && echo '{}' > /opt/etc/xray/configs/02_transport.json
+
+# S24xray runs xray as an unprivileged "xkeen" user via `su`, which needs:
+# shadow-su (installed above) for `su` itself, a "xkeen" account, and a
+# real shell in its passwd entry (shadow's su falls back to /bin/bash,
+# which doesn't exist here — only busybox ash). Some OpenWrt builds also
+# lack the busybox `adduser` applet entirely, so don't depend on it.
+if ! id xkeen >/dev/null 2>&1; then
+	command -v adduser >/dev/null 2>&1 && adduser -D -H -u 11111 -g 11111 xkeen 2>/dev/null
+	if ! id xkeen >/dev/null 2>&1; then
+		for f in /etc/passwd /etc/group /opt/etc/passwd /opt/etc/group; do
+			case "$f" in
+				*group) grep -q '^xkeen:' "$f" 2>/dev/null || echo 'xkeen:x:11111:' >> "$f" ;;
+				*passwd) grep -q '^xkeen:' "$f" 2>/dev/null || echo 'xkeen:x:0:11111:::/bin/sh' >> "$f" ;;
+			esac
+		done
+	fi
 fi
 
 # Both of these used to live inside the "xkeen not yet installed" branch
