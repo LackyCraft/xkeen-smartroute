@@ -278,6 +278,27 @@ _sr_xray_validate() {
 		done
 	fi
 
+	# Confirmed live after a hard (power-cycle-style) reboot: dmesg showed
+	# "UBIFS: recovery needed" / "recovery completed" on remount, and
+	# $SR_OUTBOUNDS_FILE (the derived confdir file Xray actually reads) came
+	# back 0 bytes -- "failed to read config file > EOF" on every start from
+	# then on -- while $SR_OUTBOUNDS_STATE_FILE (the source of truth
+	# subscription.sh writes it *from*) survived intact. Unlike
+	# 05_routing.smartroute.json/07_observatory.smartroute.json, which
+	# genroute.sh's cron regenerates every 3 minutes and so already self-heals
+	# from the same class of flash-recovery data loss, this file is only ever
+	# (re)written on a subscription import/refresh -- with nothing else to
+	# rebuild it, a corrupted copy stays corrupted indefinitely, blocking
+	# every start/restart until someone notices and re-imports by hand. Same
+	# jq transform subscription.sh itself uses; only runs when the state file
+	# actually has something valid to rebuild from, so a fresh install with
+	# no subscription yet is untouched.
+	if [ -s "$SR_OUTBOUNDS_STATE_FILE" ] && { [ ! -s "$SR_OUTBOUNDS_FILE" ] || ! jq -e . "$SR_OUTBOUNDS_FILE" >/dev/null 2>&1; }; then
+		sr_log "WARNING: $SR_OUTBOUNDS_FILE missing/empty/corrupt, rebuilding it from $SR_OUTBOUNDS_STATE_FILE"
+		jq '{outbounds: [.[] | del(.subscription)]}' "$SR_OUTBOUNDS_STATE_FILE" >"$SR_OUTBOUNDS_FILE.tmp" 2>/dev/null \
+			&& mv "$SR_OUTBOUNDS_FILE.tmp" "$SR_OUTBOUNDS_FILE"
+	fi
+
 	attempts=0
 	while [ "$attempts" -lt 20 ]; do
 		if test_out="$(XRAY_LOCATION_ASSET="$XRAY_ASSET_DIR" xray run -test -confdir "$XKEEN_CONFIGS_DIR" 2>&1)"; then
