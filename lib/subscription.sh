@@ -148,6 +148,17 @@ build_outbound() {
 	mode="$(qval "$query" mode)"; mode="${mode:-auto}"
 	flow="$(qval "$query" flow)"
 	svcname="$(urldecode "$(qval "$query" serviceName)")"
+	# packetEncoding ("xudp"/"packet") -- Xray's own VLESS user field
+	# (settings.vnext[].users[].packetEncoding), same convention as the
+	# share-link query param. Confirmed live, same failure signature as the
+	# "extra" XHTTP field above: a node whose subscription line carries
+	# packetEncoding=xudp connected fine through a real client (Happ) on the
+	# same subscription while every attempt through our own generated
+	# outbound (missing this field entirely) hung and never got a real
+	# response -- TCP/TLS/REALITY handshake completes, but the VLESS request
+	# itself is apparently invalid/unrecognized without it, not just UDP
+	# relay affected as the name might suggest.
+	pktenc="$(qval "$query" packetEncoding)"
 	# The subscription's own "extra" query param -- raw XHTTP tuning fields
 	# some providers attach: padding obfuscation (xPaddingBytes/Key/Header/
 	# Placement/Method), connection reuse (xmux), upload chunking
@@ -197,14 +208,14 @@ build_outbound() {
 		--arg id "$secret" --arg net "$net" --arg security "$security" --arg sni "$sni" \
 		--arg fp "$fp" --arg pbk "$pbk" --arg sid "$sid" --arg spx "$spx" --arg alpn "$alpn" \
 		--arg path "$path" --arg hosthdr "$hosthdr" --arg mode "$mode" --arg flow "$flow" \
-		--arg svcname "$svcname" --argjson extra "$extra_json" '
+		--arg svcname "$svcname" --argjson extra "$extra_json" --arg pktenc "$pktenc" '
 		def alpnArr: if $alpn=="" then null else ($alpn|split(",")) end;
 		{
 			tag: $tag,
 			protocol: $proto,
 			settings: (
 				if $proto=="vless" then
-					{vnext: [{address:$address, port:$port, users:[{id:$id, encryption:"none", flow:$flow}]}]}
+					{vnext: [{address:$address, port:$port, users:[({id:$id, encryption:"none", flow:$flow} + (if $pktenc!="" then {packetEncoding:$pktenc} else {} end))]}]}
 				else
 					{servers: [{address:$address, port:$port, password:$id}]}
 				end
