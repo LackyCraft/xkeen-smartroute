@@ -101,6 +101,8 @@
 		if (!st.profiles.length) { container.appendChild(E('p', { class: 'sr-desc' }, T('no_profiles'))); return; }
 
 		var table = E('table', { class: 'sr-table' }, [E('tr', {}, [E('th', {}, T('profile_name')), E('th', {}, T('col_domains')), E('th', {}, T('col_target')), E('th', {}, '')])]);
+		var tagOwners = SR.buildTagOwners(st.profiles, st.current);
+		function sharedWith(p, tag) { return (tagOwners[tag] || []).filter(function (n) { return n !== p.name; }); }
 
 		st.profiles.forEach(function (p) {
 			var srcType = (p.domain_source && p.domain_source.type) || 'any';
@@ -114,7 +116,7 @@
 
 			var targetNode;
 			if (p.mode === 'fixed') {
-				targetNode = E('span', {}, [SR.activityDot(p.fixed_server, st.activeTags), SR.renderName(SR.serverForTag(p.fixed_server, st.servers).name)]);
+				targetNode = E('span', {}, [SR.activityDot(p.fixed_server, st.activeTags, sharedWith(p, p.fixed_server)), SR.renderName(SR.serverForTag(p.fixed_server, st.servers).name)]);
 			} else {
 				var tags = p.servers || [];
 				var currentTag = st.current[p.name] || '';
@@ -122,7 +124,7 @@
 				var toggle = E('a', { href: '#' }, (isOpen ? '▾ ' : '▸ ') + tags.length + ' ' + T('sub_servers_word') + ' (auto)');
 				toggle.addEventListener('click', function (ev) { ev.preventDefault(); st.profileTargetExpanded[p.name] = !st.profileTargetExpanded[p.name]; renderProfilesTable(); });
 				var children = [];
-				if (currentTag) children.push(E('div', { style: 'margin-bottom:3px' }, [SR.activityDot(currentTag, st.activeTags), SR.renderName(SR.serverForTag(currentTag, st.servers).name)]));
+				if (currentTag) children.push(E('div', { style: 'margin-bottom:3px' }, [SR.activityDot(currentTag, st.activeTags, sharedWith(p, currentTag)), SR.renderName(SR.serverForTag(currentTag, st.servers).name)]));
 				children.push(toggle);
 				if (isOpen) {
 					var list = E('div', { style: 'margin:4px 0 0 8px' });

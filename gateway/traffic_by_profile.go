@@ -5,9 +5,10 @@ import (
 )
 
 type profileTraffic struct {
-	Name string `json:"name"`
-	Up   int64  `json:"up"`
-	Down int64  `json:"down"`
+	Name   string   `json:"name"`
+	Up     int64    `json:"up"`
+	Down   int64    `json:"down"`
+	Shared []string `json:"shared,omitempty"`
 }
 
 // handleTrafficByProfile aggregates Xray's own per-outbound cumulative
@@ -45,14 +46,35 @@ func handleTrafficByProfile(xc *xrayClient) http.HandlerFunc {
 			current = map[string]string{}
 		}
 
+		// tagOwners: which profile(s) currently resolve to each tag -- built
+		// once up front so Shared below is just a lookup. A tag with only one
+		// owner never gets a Shared list (nil, omitted from the JSON), same
+		// as it's always been for the (still common) case where profiles
+		// don't overlap.
+		tagOwners := map[string][]string{}
+		effectiveTag := func(p srProfile) string {
+			if p.Mode == "fixed" {
+				return p.FixedServer
+			}
+			return current[p.Name]
+		}
+		for _, p := range profiles {
+			if tag := effectiveTag(p); tag != "" {
+				tagOwners[tag] = append(tagOwners[tag], p.Name)
+			}
+		}
+
 		out := make([]profileTraffic, 0, len(profiles))
 		for _, p := range profiles {
-			tag := p.FixedServer
-			if p.Mode != "fixed" {
-				tag = current[p.Name]
-			}
+			tag := effectiveTag(p)
 			t := byTag[tag]
-			out = append(out, profileTraffic{Name: p.Name, Up: t.Up, Down: t.Down})
+			pt := profileTraffic{Name: p.Name, Up: t.Up, Down: t.Down}
+			for _, owner := range tagOwners[tag] {
+				if owner != p.Name {
+					pt.Shared = append(pt.Shared, owner)
+				}
+			}
+			out = append(out, pt)
 		}
 		writeJSON(w, http.StatusOK, out)
 	}

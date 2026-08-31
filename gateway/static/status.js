@@ -182,8 +182,21 @@
 		rows.forEach(function (r) {
 			var total = r.up + r.down;
 			var upPct = (r.up / max) * 100, downPct = (r.down / max) * 100;
+			// r.shared (traffic_by_profile.go) lists the other profiles
+			// currently pointing at the exact same server -- when non-empty,
+			// these bytes are that shared server's total, not this profile's
+			// own isolated usage (Xray counts traffic per outbound tag, not
+			// per routing rule, so there's no way to split it further).
+			// Column's only 140px wide (fixed nowrap/ellipsis, see style.css)
+			// -- no room to spell the shared list out inline, so it's a
+			// short "*" marker plus the full text in the title tooltip
+			// instead of trying to cram it into the row itself.
+			var sharedNote = (r.shared && r.shared.length)
+				? T('traffic_shared_note').replace('%s', r.shared.join(', '))
+				: '';
+			var label = E('div', { class: 'sr-trafbar-label', title: r.name + sharedNote }, r.name + (sharedNote ? ' *' : ''));
 			container.appendChild(E('div', { class: 'sr-trafbar-row' }, [
-				E('div', { class: 'sr-trafbar-label', title: r.name }, r.name),
+				label,
 				E('div', { class: 'sr-trafbar-track' }, [
 					E('div', { class: 'sr-trafbar-fill sr-trafbar-fill-up', style: 'width:' + upPct.toFixed(2) + '%' }),
 					E('div', { class: 'sr-trafbar-fill sr-trafbar-fill-down', style: 'width:' + downPct.toFixed(2) + '%' })

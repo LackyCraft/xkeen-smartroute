@@ -148,6 +148,8 @@ var DICT = {
 	profile_name_placeholder: { ru: 'например: youtube', en: 'e.g. youtube' },
 	activity_online: { ru: 'Сейчас активен — идёт трафик', en: 'Active now — traffic is flowing' },
 	activity_idle: { ru: 'Нет трафика прямо сейчас', en: 'No traffic right now' },
+	activity_online_shared: { ru: 'Сейчас активен — идёт трафик. Общий сервер с профилями: %s — индикатор и цифры трафика ниже зажигаются, даже если реально работает только один из них.', en: 'Active now — traffic is flowing. This server is shared with: %s — the indicator and the traffic numbers below light up even if only one of them is actually in use.' },
+	traffic_shared_note: { ru: ' (общий сервер с: %s)', en: ' (shared server with: %s)' },
 	domain_source: { ru: 'Список доменов', en: 'Domain list' },
 	domain_source_geosite: { ru: 'Категория geosite (Xray)', en: 'geosite category (Xray)' },
 	domain_source_custom: { ru: 'Наш список (custom)', en: 'Our list (custom)' },
@@ -509,9 +511,37 @@ function serverForTag(tag, servers) {
 	return (servers || []).filter(function (x) { return x.tag === tag; })[0] || { tag: tag, name: tag };
 }
 
-function activityDot(tag, activeTags) {
+// activityDot: green dot while `tag` carried traffic in the last few
+// seconds. `sharedWith` (other profile names currently pointing at this
+// exact same tag, if any -- see buildTagOwners below) only changes the
+// tooltip text: the underlying signal is genuinely per-*server*, not
+// per-profile, so once two or more profiles share a pick this dot (and the
+// traffic-by-profile numbers, see status.js) light up for all of them
+// together. Nothing to reconcile in the data itself -- just say so instead
+// of implying an independent per-profile measurement that Xray's own
+// stats can't actually provide (it counts bytes per outbound tag, not per
+// routing rule).
+function activityDot(tag, activeTags, sharedWith) {
 	var active = !!(tag && activeTags && activeTags[tag]);
-	return E('span', { title: T(active ? 'activity_online' : 'activity_idle'), class: 'sr-dot ' + (active ? 'sr-dot-ok' : '') });
+	var title = active
+		? ((sharedWith && sharedWith.length) ? T('activity_online_shared').replace('%s', sharedWith.join(', ')) : T('activity_online'))
+		: T('activity_idle');
+	return E('span', { title: title, class: 'sr-dot ' + (active ? 'sr-dot-ok' : '') });
+}
+
+// buildTagOwners: profile-list -> {tag: [profileName, ...]}, each profile's
+// *currently effective* tag (fixed_server for a fixed-mode profile,
+// current[name] for a balancer-mode one). Used to tell activityDot (and the
+// traffic-by-profile bars) which other profiles share a given profile's
+// pick, since that's exactly when the shared-server caveat above applies.
+function buildTagOwners(profiles, current) {
+	var owners = {};
+	(profiles || []).forEach(function (p) {
+		var tag = p.mode === 'fixed' ? p.fixed_server : (current || {})[p.name];
+		if (!tag) return;
+		(owners[tag] = owners[tag] || []).push(p.name);
+	});
+	return owners;
 }
 
 function groupServersBySubscription(servers) {
@@ -603,6 +633,7 @@ window.SR = {
 	relTime: relTime, fmtBytes: fmtBytes, toast: toast, parseIpRanges: parseIpRanges,
 	sectionVisible: sectionVisible,
 	pingLabel: pingLabel, serverForTag: serverForTag, activityDot: activityDot,
+	buildTagOwners: buildTagOwners,
 	groupServersBySubscription: groupServersBySubscription,
 	CLIENT_PRESETS: CLIENT_PRESETS
 };

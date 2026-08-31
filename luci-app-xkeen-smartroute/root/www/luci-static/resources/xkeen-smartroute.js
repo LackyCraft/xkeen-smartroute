@@ -322,6 +322,7 @@ var DICT = {
 	profile_name: { ru: 'Название профиля', en: 'Profile name' },
 	activity_online: { ru: 'Сейчас активен — идёт трафик', en: 'Active now — traffic is flowing' },
 	activity_idle: { ru: 'Нет трафика прямо сейчас', en: 'No traffic right now' },
+	activity_online_shared: { ru: 'Сейчас активен — идёт трафик. Общий сервер с профилями: %s — индикатор и цифры трафика ниже зажигаются, даже если реально работает только один из них.', en: 'Active now — traffic is flowing. This server is shared with: %s — the indicator and the traffic numbers below light up even if only one of them is actually in use.' },
 	profile_name_placeholder: { ru: 'например: youtube', en: 'e.g. youtube' },
 	domain_source: { ru: 'Список доменов', en: 'Domain list' },
 	domain_source_geosite: { ru: 'Категория geosite (Xray)', en: 'geosite category (Xray)' },
@@ -590,13 +591,39 @@ function srServerForTag(tag, servers) {
 // pollActivity), grey otherwise. Grey covers both "genuinely idle" and "no
 // data yet" -- there's no third state worth the extra complexity, since the
 // tooltip already explains what green means.
-function srActivityDot(tag, activeTags) {
+// srActivityDot: green dot while `tag` carried traffic in the last few
+// seconds. `sharedNames` (other profile names currently pointing at this
+// exact same tag, if any -- see srBuildTagOwners below) only changes the
+// tooltip text: the underlying signal is genuinely per-*server*, not
+// per-profile, so once two or more profiles share a pick this dot lights up
+// for all of them together regardless of which one actually has traffic.
+// Nothing to reconcile in the data itself -- Xray's own stats count bytes
+// per outbound tag, not per routing rule -- so just say so instead of
+// implying an independent per-profile measurement that doesn't exist.
+function srActivityDot(tag, activeTags, sharedNames) {
 	var active = !!(tag && activeTags && activeTags[tag]);
+	var title = active
+		? ((sharedNames && sharedNames.length) ? T('activity_online_shared').replace('%s', sharedNames.join(', ')) : T('activity_online'))
+		: T('activity_idle');
 	return E('span', {
-		'title': T(active ? 'activity_online' : 'activity_idle'),
+		'title': title,
 		'style': 'display:inline-block;width:.6em;height:.6em;border-radius:50%;margin-right:.4em;' +
 			(active ? 'background:#2ecc71;box-shadow:0 0 4px #2ecc71' : 'background:var(--border-color-medium,#bbb)')
 	});
+}
+
+// srBuildTagOwners: profile-list -> {tag: [profileName, ...]}, each
+// profile's *currently effective* tag (fixed_server for a fixed-mode
+// profile, current[name] for a balancer-mode one). Used to tell
+// srActivityDot which other profiles share a given profile's pick.
+function srBuildTagOwners(profiles, current) {
+	var owners = {};
+	(profiles || []).forEach(function (p) {
+		var tag = p.mode === 'fixed' ? p.fixed_server : (current || {})[p.name];
+		if (!tag) return;
+		(owners[tag] = owners[tag] || []).push(p.name);
+	});
+	return owners;
 }
 
 function srGroupServersBySubscription(servers) {
@@ -787,6 +814,7 @@ return L.Class.extend({
 	pingLabel: srPingLabel,
 	serverForTag: srServerForTag,
 	activityDot: srActivityDot,
+	buildTagOwners: srBuildTagOwners,
 	groupServersBySubscription: srGroupServersBySubscription,
 	CLIENT_PRESETS: CLIENT_PRESETS,
 	DEVICE_OS_OPTIONS: DEVICE_OS_OPTIONS,

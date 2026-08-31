@@ -478,6 +478,9 @@ return view.extend({
 			])
 		]);
 
+		var tagOwners = sr.buildTagOwners(profiles, view.current);
+		function sharedWith(p, tag) { return (tagOwners[tag] || []).filter(function (n) { return n !== p.name; }); }
+
 		profiles.forEach(function (p) {
 			var srcType = (p.domain_source && p.domain_source.type) || 'any';
 			var ipRanges = p.ip_ranges || [];
@@ -490,7 +493,7 @@ return view.extend({
 
 			var targetNode;
 			if (p.mode === 'fixed') {
-				targetNode = E('span', {}, [sr.activityDot(p.fixed_server, view.activeTags), sr.renderName(sr.serverForTag(p.fixed_server, view.servers).name)]);
+				targetNode = E('span', {}, [sr.activityDot(p.fixed_server, view.activeTags, sharedWith(p, p.fixed_server)), sr.renderName(sr.serverForTag(p.fixed_server, view.servers).name)]);
 			} else {
 				var tags = p.servers || [];
 				var currentTag = (view.current && view.current[p.name]) || '';
@@ -500,7 +503,7 @@ return view.extend({
 				toggle.addEventListener('click', function (ev) { ev.preventDefault(); view.handleToggleProfileTarget(p.name); });
 				var children = [];
 				if (currentTag) {
-					children.push(E('div', { 'style': 'margin-bottom:.25em' }, [sr.activityDot(currentTag, view.activeTags), sr.renderName(sr.serverForTag(currentTag, view.servers).name)]));
+					children.push(E('div', { 'style': 'margin-bottom:.25em' }, [sr.activityDot(currentTag, view.activeTags, sharedWith(p, currentTag)), sr.renderName(sr.serverForTag(currentTag, view.servers).name)]));
 				}
 				children.push(toggle);
 				if (isOpen) {
