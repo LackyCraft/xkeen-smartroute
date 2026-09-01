@@ -594,10 +594,56 @@ log "Шаг 3/6: xkeen-UI (веб-панель, порт 1000)"
 
 if [ ! -x /opt/sbin/xkeen-ui ] && [ ! -x /opt/bin/xkeen-ui ]; then
 	log "Ставлю xkeen-UI ($XKEEN_UI_REPO)..."
-	wget -O /tmp/xkeen-ui-setup.sh "https://raw.githubusercontent.com/${XKEEN_UI_REPO}/main/setup.sh" \
-		&& sh /tmp/xkeen-ui-setup.sh \
-		|| log "ПРЕДУПРЕЖДЕНИЕ: автоустановка xkeen-UI не удалась, поставьте вручную по https://github.com/${XKEEN_UI_REPO} — остальной стек всё равно будет настроен."
+	wget -O /tmp/xkeen-ui-setup.sh "https://raw.githubusercontent.com/${XKEEN_UI_REPO}/main/setup.sh"
+	# xkeen-UI's own installer is an interactive menu (1=install, plus a
+	# y/N confirm if it detects leftover files from a previous attempt and
+	# reinstalls over them) that reads every answer via `read -p "..."
+	# response < /dev/tty` -- not stdin, so this can't be fed the same way
+	# xkeen's own wizard is (piped stdin answers). Confirmed live on
+	# KeeneticOS: run through a real interactive SSH session, the actual
+	# install/init-script/start sequence all work correctly end to end (no
+	# platform-specific bug) -- but `install.sh` itself runs this
+	# unattended, so left as upstream ships it, this either hangs a real
+	# interactive install.sh run waiting for a keypress nobody's expecting
+	# mid-script, or (confirmed live, our own non-interactive/automated
+	# runs) fails fast with "can't open /dev/tty" the moment there's no
+	# controlling terminal at all. Patch the three known `read -p ... <
+	# /dev/tty` prompts to just assign the answer directly instead
+	# (matches this project's own established preference for
+	# non-interactive installs, see xkeen's own piped-answer wizard call
+	# above) -- if upstream ever changes this script's wording, none of
+	# these `sed` patterns match, nothing is replaced, and behavior falls
+	# straight back to today's (interactive menu / fails fast unattended),
+	# not a broken patch.
+	sed -i \
+		-e 's/read -p " Продолжить? \[y\/N\]: " response < \/dev\/tty/response="y"/' \
+		-e 's/read -p " Удалить его? \[Y\/n\]: " response < \/dev\/tty/response="y"/' \
+		-e 's/read -p "\${GREEN_BOLD}>: \${NC}" response < \/dev\/tty/response="1"/' \
+		/tmp/xkeen-ui-setup.sh 2>/dev/null || true
+	timeout 240 sh /tmp/xkeen-ui-setup.sh \
+		|| log "ПРЕДУПРЕЖДЕНИЕ: автоустановка xkeen-UI не удалась (или не уложилась в 4 минуты), поставьте вручную по https://github.com/${XKEEN_UI_REPO} — остальной стек всё равно будет настроен."
 	rm -f /tmp/xkeen-ui-setup.sh
+
+	# xkeen-UI's own setup.sh drives its last two steps (fsync, then
+	# launching the daemon) through its own spinner helper, which waits on
+	# a backgrounded job by polling `kill -0`/`wait` -- confirmed live,
+	# repeatedly, running install.sh's own way (no real controlling
+	# terminal): that polling can take on the order of two minutes to
+	# actually notice the job it's waiting on has already finished, well
+	# past how long the underlying work (an fsync, launching one small
+	# binary) should ever take on its own -- a job-control quirk in a
+	# non-interactive shell, not something under this project's control.
+	# Landing past the `timeout` above right as it fires mid-wait has been
+	# reproduced live too, taking the freshly-launched xkeen-ui process
+	# down with it. The install itself (binary + init script) reliably
+	# completes well before either of those failure windows, so if it's
+	# all there but nothing's listening, just start it ourselves the same
+	# way the init script already does on every other boot -- cheap and
+	# idempotent if setup.sh's own launch actually won.
+	if [ -x /opt/sbin/xkeen-ui ] && [ -x /opt/etc/init.d/S99xkeen-ui ] && ! pgrep -x xkeen-ui >/dev/null 2>&1; then
+		log "xkeen-UI установлен, но не запущен (мастер setup.sh не успел/не смог его поднять) -- запускаю сам."
+		/opt/etc/init.d/S99xkeen-ui start >/dev/null 2>&1 || true
+	fi
 else
 	log "xkeen-UI уже установлен, пропускаю."
 fi
