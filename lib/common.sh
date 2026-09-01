@@ -16,18 +16,23 @@
 # so this is a no-op for them and only matters for the rpcd path.
 export PATH="/opt/sbin:/opt/bin:$PATH"
 
-# /etc is a writable overlay on OpenWrt but a read-only squashfs image on
-# KeeneticOS (confirmed live: "mkdir: can't create directory
-# '/etc/xkeen-smartroute/': Read-only file system", no exceptions anywhere
-# under /etc there) -- install.sh already detects this and points
-# SR_ETC_DIR at /opt/etc/xkeen-smartroute instead on that platform (see its
-# own platform-detection comment), so every script sourcing this file needs
-# the same branch, or it silently targets a path that can never be written
-# to on KeeneticOS no matter what install.sh itself set up.
-if [ -f /etc/openwrt_release ] || ! uname -r 2>/dev/null | grep -q -- '-ndm-'; then
+# SR_PLATFORM: same detection install.sh itself uses (uname -r's "-ndm-"
+# marker -- KeeneticOS's own kernel builds are tagged "<ver>-ndm-<n>"), kept
+# here as a single reusable variable instead of every script that needs a
+# platform branch re-deriving it. /etc is a writable overlay on OpenWrt but
+# a read-only squashfs image on KeeneticOS (confirmed live: "mkdir: can't
+# create directory '/etc/xkeen-smartroute/': Read-only file system", no
+# exceptions anywhere under /etc there) -- SR_ETC_DIR follows from that the
+# same way install.sh's own copy does.
+if [ -f /etc/openwrt_release ]; then
+	SR_PLATFORM="openwrt"
 	SR_ETC_DIR="/etc/xkeen-smartroute"
-else
+elif uname -r 2>/dev/null | grep -q -- '-ndm-'; then
+	SR_PLATFORM="keenetic"
 	SR_ETC_DIR="/opt/etc/xkeen-smartroute"
+else
+	SR_PLATFORM="openwrt"
+	SR_ETC_DIR="/etc/xkeen-smartroute"
 fi
 SR_LISTS_DIR="$SR_ETC_DIR/lists"
 SR_STATE_DIR="$SR_ETC_DIR/state"

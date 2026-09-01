@@ -216,14 +216,40 @@ rd_quic_protect() {
 }
 
 rd_status() {
+	# "supported" lets the panel/LuCI UI show this feature as genuinely
+	# unavailable on KeeneticOS instead of a toggle that looks like every
+	# other one but silently does nothing when flipped. "enabled" is forced
+	# false there regardless of $FLAG_ENABLED's on-disk value -- confirmed
+	# live this flag can already be stuck at "1" from before this platform
+	# check existed (rd_enable used to write it, then fail past that point
+	# once it hit the first OpenWrt-only command, with set -eu never
+	# reverting the flag it had already written): reporting that stale "1"
+	# back as "enabled": true would just be a second copy of the same lie.
+	if [ "$SR_PLATFORM" != "openwrt" ]; then
+		jq -n '{enabled: false, dns_protect: false, ipv6_protect: false, quic_protect: false, ports: "80,443", supported: false}'
+		return 0
+	fi
 	jq -n \
 		--argjson enabled "$(rd_flag "$FLAG_ENABLED" "0")" \
 		--argjson dns_protect "$(rd_flag "$FLAG_DNS" "0")" \
 		--argjson ipv6_protect "$(rd_flag "$FLAG_IPV6" "0")" \
 		--argjson quic_protect "$(rd_flag "$FLAG_QUIC" "0")" \
 		--arg ports "$(rd_flag "$FLAG_PORTS" "$DEFAULT_PORTS")" \
-		'{enabled: (($enabled|tostring)=="1"), dns_protect: (($dns_protect|tostring)=="1"), ipv6_protect: (($ipv6_protect|tostring)=="1"), quic_protect: (($quic_protect|tostring)=="1"), ports: $ports}'
+		'{enabled: (($enabled|tostring)=="1"), dns_protect: (($dns_protect|tostring)=="1"), ipv6_protect: (($ipv6_protect|tostring)=="1"), quic_protect: (($quic_protect|tostring)=="1"), ports: $ports, supported: true}'
 }
+
+# Every mutating action below (enable/disable/set-ports/*-protect) depends
+# on fw4/nftables.d, which only exists on OpenWrt -- confirmed live on
+# KeeneticOS: rd_enable used to report success and log "LAN traffic redirect
+# enabled" while never actually writing a working rule, because `set -eu`
+# didn't stop it early enough (the flag file write and several early steps
+# all succeed before the first OpenWrt-only command actually fails). `status`
+# stays available everywhere (see the "supported" field above) so the panel
+# can always ask, but every action that would change real firewall state is
+# refused outright here instead of silently doing nothing.
+if [ "$SR_PLATFORM" != "openwrt" ] && [ "${1:-}" != "status" ]; then
+	sr_die "прозрачный редирект трафика (LAN -> Xray) пока поддержан только на OpenWrt -- на KeeneticOS нет аналога fw4/nftables.d, на котором построен этот механизм. / transparent LAN traffic redirect is OpenWrt-only for now -- KeeneticOS has no fw4/nftables.d equivalent this relies on."
+fi
 
 case "${1:-}" in
 	enable) rd_enable ;;
