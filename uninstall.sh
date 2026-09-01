@@ -13,6 +13,13 @@ log() { echo "[xkeen-smartroute] $*"; }
 
 SR_SHARE_DIR="/opt/share/xkeen-smartroute"
 SR_LIB_DIR="$SR_SHARE_DIR/lib"
+if [ -f /etc/openwrt_release ] || ! uname -r 2>/dev/null | grep -q -- '-ndm-'; then
+	SR_ETC_DIR="/etc/xkeen-smartroute"
+else
+	# KeeneticOS's /etc is read-only -- install.sh puts this under /opt/etc
+	# there instead, see its own platform-detection comment for why.
+	SR_ETC_DIR="/opt/etc/xkeen-smartroute"
+fi
 
 log "Удаляю сгенерированные конфиги Xray... / Removing generated Xray configs..."
 # Every Xray confdir fragment SmartRoute itself ever creates: the *.smartroute
@@ -97,11 +104,11 @@ nft delete set inet fw4 sr_killswitch >/dev/null 2>&1 || true
 /etc/init.d/firewall reload >/dev/null 2>&1 || true
 
 if [ "${1:-}" = "--purge" ]; then
-	log "Удаляю профили и списки доменов (/etc/xkeen-smartroute)... / Removing profiles and domain lists (/etc/xkeen-smartroute)..."
-	rm -rf /etc/xkeen-smartroute
+	log "Удаляю профили и списки доменов ($SR_ETC_DIR)... / Removing profiles and domain lists ($SR_ETC_DIR)..."
+	rm -rf "$SR_ETC_DIR"
 else
-	log "Профили и списки в /etc/xkeen-smartroute оставлены, запустите с --purge, чтобы удалить и их."
-	log "Profiles and lists in /etc/xkeen-smartroute were kept, re-run with --purge to remove them too."
+	log "Профили и списки в $SR_ETC_DIR оставлены, запустите с --purge, чтобы удалить и их."
+	log "Profiles and lists in $SR_ETC_DIR were kept, re-run with --purge to remove them too."
 fi
 
 log "Готово. xkeen, xkeen-UI и Entware не тронуты. / Done. xkeen, xkeen-UI and Entware were left untouched."

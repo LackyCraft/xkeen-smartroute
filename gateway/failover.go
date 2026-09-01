@@ -32,10 +32,11 @@ import (
 // Xray config file -- it only calls the same override RPC `xray api bo`
 // uses, so SmartRoute's on-disk state (the source of truth genroute.sh
 // reads) never drifts from what's actually running.
-const (
-	failoverInterval = 20 * time.Second
-	healthStateFile  = "/etc/xkeen-smartroute/state/health.json"
-)
+const failoverInterval = 20 * time.Second
+
+// Built from srEtcDir (main.go), not hardcoded -- see its own comment for
+// why (KeeneticOS's read-only /etc).
+var healthStateFile = srEtcDir + "/state/health.json"
 
 func startFailoverLoop(xc *xrayClient) {
 	ticker := time.NewTicker(failoverInterval)

@@ -10,11 +10,22 @@ info() { echo "  [--]   $*"; }
 echo "XKeen SmartRoute — диагностика / diagnostics"
 echo "=============================================="
 
+PLATFORM=""
 if [ -f /etc/openwrt_release ]; then
+	PLATFORM="openwrt"
 	. /etc/openwrt_release
 	ok "OpenWrt обнаружен / OpenWrt detected ($DISTRIB_DESCRIPTION)"
+elif uname -r 2>/dev/null | grep -q -- '-ndm-'; then
+	PLATFORM="keenetic"
+	ok "KeeneticOS обнаружен / KeeneticOS detected ($(uname -r))"
 else
-	bad "Это не OpenWrt / this is not OpenWrt"
+	bad "Неизвестная платформа (не OpenWrt и не KeeneticOS) / Unknown platform (neither OpenWrt nor KeeneticOS)"
+fi
+
+if [ "$PLATFORM" = "openwrt" ]; then
+	SR_ETC_DIR="/etc/xkeen-smartroute"
+else
+	SR_ETC_DIR="/opt/etc/xkeen-smartroute"
 fi
 
 if [ -x /opt/bin/opkg ]; then ok "Entware установлен / Entware installed"; else bad "Entware не найден / Entware not found"; fi
@@ -80,16 +91,20 @@ else
 	bad "cron-задача отсутствует — автообновление подписок/списков не будет работать / cron job missing -- subscription/list auto-refresh won't run"
 fi
 
-[ -f /usr/libexec/rpcd/luci.xkeen-smartroute ] && ok "ubus backend установлен / ubus backend installed" || bad "ubus backend отсутствует / ubus backend missing"
-[ -d /www/luci-static/resources/view/xkeen-smartroute ] && ok "LuCI view установлен / LuCI view installed" || bad "LuCI view отсутствует / LuCI view missing"
+if [ "$PLATFORM" = "keenetic" ]; then
+	info "LuCI/ubus нет на KeeneticOS -- используйте панель :1001 или xkeen-UI :1000 / No LuCI/ubus on KeeneticOS -- use the :1001 panel or xkeen-UI :1000 instead"
+else
+	[ -f /usr/libexec/rpcd/luci.xkeen-smartroute ] && ok "ubus backend установлен / ubus backend installed" || bad "ubus backend отсутствует / ubus backend missing"
+	[ -d /www/luci-static/resources/view/xkeen-smartroute ] && ok "LuCI view установлен / LuCI view installed" || bad "LuCI view отсутствует / LuCI view missing"
+fi
 
 n_servers=0
-if [ -f /etc/xkeen-smartroute/state/servers.json ] && command -v jq >/dev/null 2>&1; then
-	n_servers="$(jq 'length' /etc/xkeen-smartroute/state/servers.json 2>/dev/null || echo 0)"
+if [ -f "$SR_ETC_DIR/state/servers.json" ] && command -v jq >/dev/null 2>&1; then
+	n_servers="$(jq 'length' "$SR_ETC_DIR/state/servers.json" 2>/dev/null || echo 0)"
 fi
 info "серверов из подписок известно / servers known from subscriptions: $n_servers"
 
-n_profiles="$(ls /etc/xkeen-smartroute/profiles/*.json 2>/dev/null | wc -l)"
+n_profiles="$(ls "$SR_ETC_DIR"/profiles/*.json 2>/dev/null | wc -l)"
 info "профилей (правил маршрутизации) настроено / profiles (routing rules) configured: $n_profiles"
 
 echo "=============================================="

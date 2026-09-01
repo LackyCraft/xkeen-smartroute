@@ -123,33 +123,50 @@ opkg update && opkg upgrade
 
 ## Установка SmartRoute
 
+По SSH на Entware (не на CLI KeeneticOS — см. шаг 6 выше), порт 222,
+логин `root`:
+
 ```sh
-sh <(wget -q -O - https://raw.githubusercontent.com/LackyCraft/xkeen-smartroute/master/install.sh)
+wget -q -O - https://raw.githubusercontent.com/LackyCraft/xkeen-smartroute/master/install.sh | sh
 ```
 
-**Статус: пока не работает на KeeneticOS — подтверждено живьём.** Команда
-выше сейчас падает сразу же:
+Обычный pipe, а не `sh <(wget ...)` из README для OpenWrt — process
+substitution (`<(...)`) не работает в shell этого Entware (нет `/dev/fd`).
+Сам `install.sh` не меняется, меняется только то, как его запускают.
 
-```
-[xkeen-smartroute] Проверка окружения / Checking environment...
-[xkeen-smartroute] ERROR: это не OpenWrt (не найден /etc/openwrt_release).
-```
+`install.sh` сам определяет платформу (по `uname -r`, ищет `-ndm-`) и
+понимает, что Entware уже стоит — не пытается ставить его заново, только
+проверяет. Дальше по шагам install.sh (1–6) ставит xkeen, xkeen-UI (порт
+1000) и панель smartroute-gateway (порт 1001), генерирует конфиги Xray,
+настраивает cron.
 
-`install.sh` жёстко проверяет `/etc/openwrt_release` и отказывается
-работать на любой другой платформе. Этот раздел допишется после того, как
-скрипт научится определять KeeneticOS.
+**Проверено вживую на Keenetic Hero 4G+ (KN-2311): базовый стек
+устанавливается и работает** — xkeen, Xray (пакет Entware `xray_s`,
+ставится самим мастером `xkeen -i`, без хардфлоат-краша, который бывает
+на OpenWrt), панель на порту 1001 (`curl 127.0.0.1:1001/version` отвечает
+корректным JSON), подписки/профили/списки доменов хранятся в
+`/opt/etc/xkeen-smartroute` (на KeeneticOS `/etc` доступен только для
+чтения — это не overlay, как на OpenWrt, а squashfs-образ прошивки, так
+что этот каталог не может быть `/etc/xkeen-smartroute`, как на OpenWrt).
 
-Два нюанса самого KeeneticOS/Entware, обнаруженные по пути (пригодятся
-при доработке `install.sh` и при документировании команды запуска для
-Keenetic):
+**Пока не поддержано на KeeneticOS** (в разработке):
 
-- **`sh <(wget ...)` (process substitution) не работает** в shell этого
-  Entware — нет `/dev/fd`. Нужен обычный pipe:
-  `wget -q -O - <url> | sh` — без изменений в самом `install.sh`, только
-  в том, как его запускают.
+- **LuCI-модуль** — на KeeneticOS нет LuCI вообще, `install.sh` его
+  пропускает. Панель `:1001` и xkeen-UI `:1000` — единственный UI.
+- **Kill-switch и прозрачный перехват трафика** (redirect) —
+  `lib/killswitch.sh`/`lib/redirect.sh` целиком построены на
+  `uci`/`nftables`/`fw4` (firewall-система OpenWrt), которых на
+  KeeneticOS нет — нужен отдельный порт под NDM-firewall KeeneticOS.
+
+Два нюанса самого KeeneticOS/Entware, обнаруженные по пути (актуальны
+при запуске команды выше и любых `wget`-вызовов вручную на этой
+платформе):
+
+- **`sh <(wget ...)` (process substitution) не работает** — см. команду
+  установки выше, поэтому там обычный pipe.
 - **`wget` без флага `-ssl` в `$PATH` резолвится не в тот бинарник** —
   `/opt/usr/bin/wget` (без SSL, входит в `opt-ndmsv2`) стоит в `$PATH`
-  раньше `/opt/bin/wget` (символическая ссылка на `wget-ssl`, который
-  нужно ставить отдельно: `opkg install wget-ssl ca-certificates`).
-  Обращение просто по имени `wget` в скрипте, рассчитанном на OpenWrt,
-  на KeeneticOS может тихо попасть не в тот бинарник.
+  раньше `/opt/bin/wget` (символическая ссылка на `wget-ssl`). `install.sh`
+  сам ставит `wget-ssl`/`ca-certificates` и расширяет `$PATH` в правильном
+  порядке в самом начале — актуально только если вызываете `wget` вручную
+  до этого момента.

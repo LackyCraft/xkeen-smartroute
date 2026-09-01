@@ -24,6 +24,18 @@ import (
 
 const genrouteScript = "/opt/share/xkeen-smartroute/lib/genroute.sh"
 
+// srEtcDir: where SmartRoute's own state/profiles/lists live. Plain
+// /etc/xkeen-smartroute on OpenWrt (its /etc is a writable overlay), but
+// KeeneticOS's /etc is a read-only squashfs -- confirmed live: "mkdir: can't
+// create directory '/etc/xkeen-smartroute/': Read-only file system", no
+// exceptions, no writable subpath anywhere under /etc there. install.sh sets
+// SR_ETC_DIR to /opt/etc/xkeen-smartroute on that platform (/opt already
+// being the one writable location everything else -- Entware, xray, this
+// binary itself -- lives under) and exports it for this process to read;
+// every other file in this package builds its own state-file paths from
+// this var instead of hardcoding the OpenWrt-only prefix.
+var srEtcDir = envOr("SR_ETC_DIR", "/etc/xkeen-smartroute")
+
 func main() {
 	listenAddr := envOr("SR_GATEWAY_LISTEN", "0.0.0.0:9095")
 	xrayAddr := envOr("SR_GATEWAY_XRAY_API", "127.0.0.1:10085")
