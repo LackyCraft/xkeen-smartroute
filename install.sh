@@ -352,6 +352,29 @@ if ! id xkeen >/dev/null 2>&1; then
 	fi
 fi
 
+# shadow-su's own `su` resets $PATH for any non-root target user to
+# login.defs' ENV_PATH (confirmed live on KeeneticOS: default
+# "PATH=/bin:/usr/bin" on a fresh Entware install, no /opt/anything --
+# ENV_SUPATH, used only when the target is uid 0, already includes
+# /opt/bin:/opt/sbin) rather than inheriting the caller's $PATH. Without
+# this, `su -c "xray run ..." xkeen` -- both xkeen's own stock S24xray boot
+# script and this project's lib/common.sh _sr_xray_launch, neither of which
+# invoke xray by full path -- fails with "xray: not found" even though xray
+# is right there in root's own $PATH, because the su'd child shell never
+# sees it. Confirmed live this only actually bites when the "xkeen" account
+# created above is a genuine non-root uid (busybox/Entware `adduser`
+# succeeding, as on KeeneticOS) -- on hardware where `adduser` isn't
+# available and the manual passwd-line fallback above runs instead, that
+# fallback's own hardcoded "0" uid field makes "xkeen" a root-equivalent
+# account, which sidesteps this specific gap via ENV_SUPATH instead (a
+# separate, pre-existing privilege issue in that fallback line, not
+# something this fix touches). Applying this rewrite unconditionally on
+# both platforms is still correct either way: a no-op change in behavior
+# for a root-equivalent "xkeen", the actual fix for a genuine non-root one.
+if [ -f /opt/etc/login.defs ] && ! grep -q '^ENV_PATH.*opt' /opt/etc/login.defs; then
+	sed -i 's#^ENV_PATH[[:space:]].*#ENV_PATH\tPATH=/opt/sbin:/opt/bin:/sbin:/bin:/usr/sbin:/usr/bin#' /opt/etc/login.defs
+fi
+
 # Both of these used to live inside the "xkeen not yet installed" branch
 # above -- harmless the first time, but it meant neither ever got redone on
 # a plain reinstall (xkeen already present, so that whole branch is skipped

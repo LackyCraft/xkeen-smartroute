@@ -16,7 +16,19 @@
 # so this is a no-op for them and only matters for the rpcd path.
 export PATH="/opt/sbin:/opt/bin:$PATH"
 
-SR_ETC_DIR="/etc/xkeen-smartroute"
+# /etc is a writable overlay on OpenWrt but a read-only squashfs image on
+# KeeneticOS (confirmed live: "mkdir: can't create directory
+# '/etc/xkeen-smartroute/': Read-only file system", no exceptions anywhere
+# under /etc there) -- install.sh already detects this and points
+# SR_ETC_DIR at /opt/etc/xkeen-smartroute instead on that platform (see its
+# own platform-detection comment), so every script sourcing this file needs
+# the same branch, or it silently targets a path that can never be written
+# to on KeeneticOS no matter what install.sh itself set up.
+if [ -f /etc/openwrt_release ] || ! uname -r 2>/dev/null | grep -q -- '-ndm-'; then
+	SR_ETC_DIR="/etc/xkeen-smartroute"
+else
+	SR_ETC_DIR="/opt/etc/xkeen-smartroute"
+fi
 SR_LISTS_DIR="$SR_ETC_DIR/lists"
 SR_STATE_DIR="$SR_ETC_DIR/state"
 SR_PROFILES_DIR="$SR_ETC_DIR/profiles"
@@ -218,6 +230,25 @@ sr_ensure_dirs() {
 
 XRAY_ASSET_DIR="/opt/etc/xray/dat"
 XRAY_RUN_USER="xkeen"
+# NOT resolved to a full path here on purpose, even though shadow-su's `su`
+# (confirmed live: /opt/bin/su -> /opt/libexec/su-shadow, the real
+# shadow-utils su, not a busybox fallback) does NOT inherit the caller's
+# $PATH when switching to a non-root user -- it resets to login.defs'
+# ENV_PATH, which had no /opt/anything in it by default on a fresh Entware
+# install (confirmed live: "xray: not found" from inside `su -c "xray run
+# ..." "$XRAY_RUN_USER"` below, even though this process's own $PATH
+# resolves it fine). install.sh now fixes that at the source instead
+# (rewrites login.defs' ENV_PATH to include /opt/sbin:/opt/bin -- see its
+# own comment), which keeps this file's own `pgrep -x xray` /
+# `kill $(pgrep -x xray)` calls throughout _sr_xray_launch and
+# sr_restart_xray working correctly: they match on the bare process name.
+# Tried passing xray's full resolved path into the su'd command directly
+# instead of fixing login.defs -- confirmed live that this broke exactly
+# those `pgrep -x xray` calls (busybox pgrep's -x apparently matches the
+# invoked path/name as launched, not just the executable's basename), so
+# the retry loop below could no longer find/kill its own previous attempt
+# before relaunching, leaving multiple live xray processes stacked on the
+# same confdir/ports at once.
 
 # _sr_xray_validate: config must pass `xray run -test` before we touch the
 # running process either way (start or restart). A single malformed outbound
