@@ -353,6 +353,43 @@ _sr_xray_validate() {
 # whether a running process gets killed first). This busybox has neither
 # `nohup` nor `setsid`, hence the subshell + `trap '' HUP` to survive the
 # launching shell exiting.
+
+# _sr_xray_kill_and_wait: kill every running `xray` and only return once
+# pgrep -x xray genuinely shows none left (or give up and say so). Every
+# caller that stops/replaces xray used to do its own bare `kill` + a fixed
+# 10-attempt/1s poll, then proceed regardless of whether the process had
+# actually died -- confirmed live, repeatedly, on real hardware after the
+# Xray-core 26.2.6 upgrade with a real (17MB+) geoip.dat on slow USB2.0
+# storage: a freshly-started xray reading that file sits in D-state
+# (uninterruptible sleep, blocked on disk I/O) for well over 10 seconds,
+# which neither SIGTERM nor SIGKILL can interrupt until the I/O itself
+# completes -- that's a kernel guarantee, not something any signal choice
+# here can work around. The bug wasn't the signal, it was every caller
+# giving up on the wait and launching (or reporting success on) a fresh
+# xray anyway once the 10s budget ran out, while the old one was still very
+# much alive and still holding the same ports/confdir -- reproduced
+# starting at 3 simultaneous xray processes after one restart, 4 after the
+# next, each new process adding more contention for the same slow disk and
+# making the next one even more likely to blow its own 10s budget too.
+# SIGTERM first (a clean shutdown if xray isn't actually stuck), SIGKILL
+# once it's had a moment to act on that, then just keep polling -- up to
+# 60s, not 10 -- instead of ever proceeding with a live old process still
+# around. Returns non-zero (only) if xray is still there after that,
+# instead of silently returning success either way like every caller used
+# to.
+_sr_xray_kill_and_wait() {
+	pgrep -x xray >/dev/null 2>&1 || return 0
+	for pid in $(pgrep -x xray 2>/dev/null); do kill "$pid" 2>/dev/null || true; done
+	i=0
+	while pgrep -x xray >/dev/null 2>&1 && [ "$i" -lt 5 ]; do sleep 1; i=$((i + 1)); done
+	pgrep -x xray >/dev/null 2>&1 || return 0
+	for pid in $(pgrep -x xray 2>/dev/null); do kill -9 "$pid" 2>/dev/null || true; done
+	i=0
+	while pgrep -x xray >/dev/null 2>&1 && [ "$i" -lt 60 ]; do sleep 1; i=$((i + 1)); done
+	pgrep -x xray >/dev/null 2>&1 && return 1
+	return 0
+}
+
 _sr_xray_launch() {
 	attempt=1
 	while :; do
@@ -459,14 +496,59 @@ _sr_xray_launch() {
 			return 0
 		fi
 		sr_log "xray's -confdir merge only read $got/$expected config files (known Xray-core confdir race), retrying ($attempt/10)"
-		for pid in $(pgrep -x xray 2>/dev/null); do kill "$pid" 2>/dev/null || true; done
-		i=0
-		while pgrep -x xray >/dev/null 2>&1 && [ "$i" -lt 10 ]; do sleep 1; i=$((i + 1)); done
+		if ! _sr_xray_kill_and_wait; then
+			sr_log "ERROR: old xray process(es) still alive after waiting -- refusing to launch another on top (this is what used to stack multiple xray processes on the same confdir/ports). Check $SR_STATE_DIR/xray-launch.log and whether disk I/O is unusually slow."
+			return 1
+		fi
 		attempt=$((attempt + 1))
 	done
 }
 
-sr_restart_xray() {
+# SR_XRAY_LOCK_DIR / _sr_xray_lock_acquire / _sr_xray_lock_release: sr_re-
+# start_xray/sr_stop_xray/sr_start_xray each used to manage the xray process
+# on their own, with no coordination between separate CALLERS of them --
+# confirmed live this is a real gap, not theoretical: genroute.sh's own
+# regen (cron every 3 minutes, see install.sh's crontab setup) calls
+# sr_restart_xray itself whenever routing/observatory actually changed, and
+# a manual restart (from the panel, or an SSH session) can land in the
+# middle of one of those. Two independent, uncoordinated restart sequences
+# each faithfully waiting for "the" old xray to die before launching a new
+# one -- just not the SAME old xray the other one is tracking -- reproduced
+# live stacking multiple live xray processes even after
+# _sr_xray_kill_and_wait's own fix above, which only guarantees no pile-up
+# within a single caller's own sequence. `mkdir` is used as the lock
+# primitive (atomic on every POSIX filesystem, no flock applet needed --
+# confirmed live not present on this Entware). Stale-lock recovery checks
+# whether the PID that created the lock is still alive rather than an
+# age/mtime threshold -- avoids needing `date`/`stat` in a timestamp format
+# that's consistent across busybox variants.
+SR_XRAY_LOCK_DIR="$SR_STATE_DIR/xray-restart.lock"
+
+_sr_xray_lock_acquire() {
+	mkdir -p "$SR_STATE_DIR" 2>/dev/null || true
+	i=0
+	while ! mkdir "$SR_XRAY_LOCK_DIR" 2>/dev/null; do
+		holder="$(cat "$SR_XRAY_LOCK_DIR/pid" 2>/dev/null || true)"
+		if [ -n "$holder" ] && ! kill -0 "$holder" 2>/dev/null; then
+			rm -rf "$SR_XRAY_LOCK_DIR"
+			continue
+		fi
+		i=$((i + 1))
+		if [ "$i" -ge 90 ]; then
+			sr_log "ERROR: another xray start/stop/restart has held the lock for 90s+ (pid ${holder:-unknown}) -- giving up rather than racing it."
+			return 1
+		fi
+		sleep 1
+	done
+	echo "$$" > "$SR_XRAY_LOCK_DIR/pid" 2>/dev/null || true
+	return 0
+}
+
+_sr_xray_lock_release() {
+	rm -rf "$SR_XRAY_LOCK_DIR" 2>/dev/null || true
+}
+
+_sr_restart_xray_impl() {
 	command -v xray >/dev/null 2>&1 || { sr_log "xray binary not found, skipping restart"; return 1; }
 	_sr_xray_validate restart || return 1
 
@@ -477,11 +559,12 @@ sr_restart_xray() {
 	# a manual kill+relaunch. Managing the process directly is what xkeen's
 	# own start routine does under the hood anyway (same user, same env,
 	# same ulimit) -- just without the KeeneticOS-specific detour.
-	for pid in $(pgrep -x xray 2>/dev/null); do kill "$pid" 2>/dev/null || true; done
-	i=0
-	while pgrep -x xray >/dev/null 2>&1 && [ "$i" -lt 10 ]; do sleep 1; i=$((i + 1)); done
+	if ! _sr_xray_kill_and_wait; then
+		sr_log "ERROR: could not stop the currently running xray -- refusing to start another on top of it. Check whether disk I/O is unusually slow (see _sr_xray_kill_and_wait's own comment)."
+		return 1
+	fi
 
-	_sr_xray_launch
+	_sr_xray_launch || return 1
 	if pgrep -x xray >/dev/null 2>&1; then
 		sr_log "xray restarted (pid $(pgrep -x xray | head -1))"
 	else
@@ -490,34 +573,55 @@ sr_restart_xray() {
 	fi
 }
 
+sr_restart_xray() {
+	_sr_xray_lock_acquire || return 1
+	_sr_restart_xray_impl
+	rc=$?
+	_sr_xray_lock_release
+	return $rc
+}
+
 # sr_stop_xray / sr_start_xray: explicit start/stop, not just the
 # always-restart sr_restart_xray above -- for the Status page's per-service
 # controls. Confirmed safe on real hardware to call these independently of
 # xkeen-UI/smartroute-gateway in any order: neither of those two crashes or
 # hangs when Xray is down, they just show it as stopped.
-sr_stop_xray() {
-	for pid in $(pgrep -x xray 2>/dev/null); do kill "$pid" 2>/dev/null || true; done
-	i=0
-	while pgrep -x xray >/dev/null 2>&1 && [ "$i" -lt 10 ]; do sleep 1; i=$((i + 1)); done
-	if pgrep -x xray >/dev/null 2>&1; then
+_sr_stop_xray_impl() {
+	if ! _sr_xray_kill_and_wait; then
 		sr_log "ERROR: xray did not stop"
 		return 1
 	fi
 	sr_log "xray stopped"
 }
 
-sr_start_xray() {
+sr_stop_xray() {
+	_sr_xray_lock_acquire || return 1
+	_sr_stop_xray_impl
+	rc=$?
+	_sr_xray_lock_release
+	return $rc
+}
+
+_sr_start_xray_impl() {
 	command -v xray >/dev/null 2>&1 || { sr_log "xray binary not found, skipping start"; return 1; }
 	if pgrep -x xray >/dev/null 2>&1; then
 		sr_log "xray already running"
 		return 0
 	fi
 	_sr_xray_validate start || return 1
-	_sr_xray_launch
+	_sr_xray_launch || return 1
 	if pgrep -x xray >/dev/null 2>&1; then
 		sr_log "xray started (pid $(pgrep -x xray | head -1))"
 	else
 		sr_log "ERROR: xray did not come up -- check $SR_STATE_DIR/xray-launch.log"
 		return 1
 	fi
+}
+
+sr_start_xray() {
+	_sr_xray_lock_acquire || return 1
+	_sr_start_xray_impl
+	rc=$?
+	_sr_xray_lock_release
+	return $rc
 }

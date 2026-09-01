@@ -466,7 +466,8 @@ cat > /opt/etc/xray/configs/00_api.smartroute.json <<'XRAY_API_EOF'
       "protocol": "dokodemo-door",
       "settings": { "address": "127.0.0.1" }
     }
-  ]
+  ],
+  "stats": {}
 }
 XRAY_API_EOF
 # No "routing" block above on purpose, even though the inbound needs one
@@ -629,6 +630,17 @@ XRAY_POLICY_EOF
 # per-outbound/per-user QueryStats path needs the real stats.Manager this
 # unlocks. That's the gateway panel's traffic graph and the "online now"
 # dot's data source (see gateway/xray.go's queryOutboundTrafficByTag).
+#
+# Also present verbatim in 00_api.smartroute.json above, not just here --
+# confirmed live on real Xray-core 26.2.6 hardware: this is exactly the
+# file the documented confdir merge race (search this file for "confdir
+# race") can silently drop from the merge on any given restart, and unlike
+# "policy" (harmless if only one copy makes it in, since both copies are
+# identical), "stats" only existed in this one file until now -- a restart
+# that happened to drop 06_policy.json specifically left QueryStats broken
+# with no error anywhere obvious, only a panel with an empty traffic graph
+# and every server stuck on "not yet checked". Keeping both copies means
+# either file surviving the race is enough.
 
 # ---------------------------------------------------------------------------
 log "Шаг 3/6: xkeen-UI (веб-панель, порт 1000)"
