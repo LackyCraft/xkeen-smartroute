@@ -79,10 +79,18 @@ else
 	info "smartroute-gateway не запущен (панель :1001 недоступна; необязательна для основной маршрутизации) / smartroute-gateway not running (the :1001 panel is unavailable; not required for core routing)"
 fi
 
-if [ -f /etc/nftables.d/20-xkeen-smartroute-redirect.nft ]; then
-	ok "nftables-правило перехвата трафика найдено / traffic-capture nftables rule found"
+if [ "$PLATFORM" = "openwrt" ]; then
+	if [ -f /etc/nftables.d/20-xkeen-smartroute-redirect.nft ]; then
+		ok "nftables-правило перехвата трафика найдено / traffic-capture nftables rule found"
+	else
+		info "nftables-правило перехвата трафика отсутствует (перехват выключен) / traffic-capture nftables rule absent (capture disabled)"
+	fi
 else
-	info "nftables-правило перехвата трафика отсутствует (перехват выключен) / traffic-capture nftables rule absent (capture disabled)"
+	if command -v iptables >/dev/null 2>&1 && iptables -t nat -L SR_SMARTROUTE_REDIRECT >/dev/null 2>&1; then
+		ok "iptables-правило перехвата трафика найдено / traffic-capture iptables rule found"
+	else
+		info "iptables-правило перехвата трафика отсутствует (перехват выключен) / traffic-capture iptables rule absent (capture disabled)"
+	fi
 fi
 
 if crontab -l 2>/dev/null | grep -q 'xkeen-smartroute-cron'; then

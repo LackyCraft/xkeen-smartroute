@@ -851,21 +851,48 @@ if [ -s "$SR_ETC_DIR/state/outbounds.json" ]; then
 		>/opt/etc/xray/configs/04_outbounds.smartroute.json.tmp \
 		&& mv /opt/etc/xray/configs/04_outbounds.smartroute.json.tmp /opt/etc/xray/configs/04_outbounds.smartroute.json
 fi
-# redirect.sh/killswitch.sh are built on OpenWrt's uci/fw4/nftables firewall
-# integration -- no KeeneticOS (NDM netfilter) port exists yet, so there's
-# nothing meaningful to restore here on that platform (and no way for these
-# state files to be non-empty from a prior run there anyway, since nothing
-# below ever enables them on KeeneticOS in the first place).
+# redirect.sh now has a real backend on both platforms (rd_write_nft /
+# rd_write_iptables -- see its own top-of-file comment), so this restore is
+# unconditional. killswitch.sh's hard kill-switch is still OpenWrt-only
+# (built on system dnsmasq's ipset/nftset support, which KeeneticOS has
+# neither the dnsmasq nor the fw4/nftables.d half of -- a separate, larger
+# task from transparent redirect).
+if [ "$(cat "$SR_ETC_DIR/state/redirect_enabled" 2>/dev/null)" = "1" ]; then
+	sh "$SR_LIB_DIR/redirect.sh" enable >/dev/null 2>&1 || true
+fi
 if [ "$PLATFORM" = "openwrt" ]; then
-	if [ "$(cat "$SR_ETC_DIR/state/redirect_enabled" 2>/dev/null)" = "1" ]; then
-		sh "$SR_LIB_DIR/redirect.sh" enable >/dev/null 2>&1 || true
-	fi
 	for f in "$SR_ETC_DIR/state/killswitch"/*.name; do
 		[ -e "$f" ] || continue
 		sh "$SR_LIB_DIR/killswitch.sh" enable "$(cat "$f")" >/dev/null 2>&1 || true
 	done
 else
-	log "ПРЕДУПРЕЖДЕНИЕ: kill-switch и прозрачный редирект трафика пока поддержаны только на OpenWrt -- на KeeneticOS в разработке. / WARNING: kill-switch and transparent redirect are OpenWrt-only for now -- not yet available on KeeneticOS."
+	log "ПРЕДУПРЕЖДЕНИЕ: жёсткий kill-switch пока поддержан только на OpenWrt -- на KeeneticOS в разработке. / WARNING: hard kill-switch is OpenWrt-only for now -- not yet available on KeeneticOS."
+
+	# OpenWrt's fw4 auto-loads every /etc/nftables.d/*.nft file on its own on
+	# every boot/reload -- rd_write_nft only ever needs to write that file
+	# once per toggle. KeeneticOS has no equivalent "reapply my custom rules
+	# on boot" mechanism for iptables, and a plain reboot clears the live
+	# ruleset rd_write_iptables builds entirely (it's runtime-only, nothing
+	# like iptables-persistent is set up) -- without this hook, transparent
+	# redirect would silently stop working after every router reboot even
+	# though the panel still shows it as "enabled" (the on-disk flag survives
+	# fine, only the actual iptables rules don't). Entware's own S* init.d
+	# convention (same mechanism S23xray-logdir already uses above) runs this
+	# on every boot after Entware itself comes up. `reapply`, not `enable` --
+	# a router that rebooted with redirect *disabled* must come back up
+	# disabled too, see redirect.sh's own comment on that verb.
+	cat > /opt/etc/init.d/S97smartroute-redirect <<REDIRECT_BOOT_EOF
+#!/bin/sh
+# Re-applies XKeen SmartRoute's transparent-redirect iptables rules on boot
+# (KeeneticOS only -- see install.sh's own comment for why OpenWrt doesn't
+# need this).
+case "\${1:-start}" in
+	start|boot) sh "$SR_LIB_DIR/redirect.sh" reapply >/dev/null 2>&1 || true ;;
+	stop) : ;;
+	*) echo "usage: \$0 {start|stop}" >&2; exit 1 ;;
+esac
+REDIRECT_BOOT_EOF
+	chmod +x /opt/etc/init.d/S97smartroute-redirect
 fi
 # The CLI `regen` verb always does a real, network-bound ping pass per
 # balancer-mode profile (see sr_regen's own comment) -- fine for cron every
@@ -1087,6 +1114,6 @@ log "  xkeen-UI:  http://$LAN_IP:1000/"
 log "  Панель:    http://$LAN_IP:$SR_GATEWAY_PORT/"
 log "  Списки:    $SR_ETC_DIR/lists/"
 if [ "$PLATFORM" = "keenetic" ]; then
-	log "  ПРИМЕЧАНИЕ: LuCI на KeeneticOS нет -- панель и xkeen-UI выше единственный UI. Kill-switch и прозрачный редирект трафика пока не поддержаны на KeeneticOS (в разработке)."
+	log "  ПРИМЕЧАНИЕ: LuCI на KeeneticOS нет -- панель и xkeen-UI выше единственный UI. Жёсткий kill-switch пока не поддержан на KeeneticOS (в разработке)."
 fi
 log "Диагностика: sh $SR_LIB_DIR/../check.sh (или ./check.sh из репозитория)"

@@ -295,6 +295,78 @@ _sr_xray_validate() {
 		echo '{}' >"$XKEEN_CONFIGS_DIR/02_transport.json"
 	fi
 
+	# Same self-heal family, a different cause: confirmed live these five
+	# static confdir files -- the ones install.sh writes once and nothing
+	# ever rewrites afterward -- can simply vanish from disk well after a
+	# clean install, independent of anything this project's own code does.
+	# Reproduced the trigger directly: manually swapping the Entware xray
+	# package (opkg remove xray_s; opkg install xray-core, same swap
+	# install.sh itself does on a fresh KeeneticOS install, just re-run by
+	# hand afterward) made 01/02/03/06 disappear together -- some Entware
+	# xray-related package apparently ships its own default confdir files as
+	# conffiles and resets them on install/upgrade, and 04_outbounds.json
+	# (not caught the first time this was diagnosed) went with them the same
+	# way. The visible symptom is easy to misread as something else
+	# entirely: with 04_outbounds.json specifically gone, Xray starts up
+	# clean with no validation error at all, and only fails at request time,
+	# per-connection, with "app/dispatcher: non existing outTag: direct" --
+	# every profile/balancer-tagged route still works, only the plain
+	# catch-all (untagged, non-VPN) traffic breaks. install.sh's own ordering
+	# (these files are written after opkg install xray-core, not before)
+	# already avoids this on a first install; this defends the same way
+	# 02_transport.json/the xkeen account above do against it recurring
+	# later from an out-of-band opkg upgrade this project doesn't control.
+	[ -s "$XKEEN_CONFIGS_DIR/01_log.json" ] || cat >"$XKEEN_CONFIGS_DIR/01_log.json" <<'SR_LOG_EOF'
+{
+  "log": {
+    "access": "/tmp/xray-logs/access.log",
+    "error": "/tmp/xray-logs/error.log",
+    "loglevel": "none",
+    "dnsLog": false
+  }
+}
+SR_LOG_EOF
+	[ -s "$XKEEN_CONFIGS_DIR/03_inbounds.json" ] || cat >"$XKEEN_CONFIGS_DIR/03_inbounds.json" <<'SR_INBOUNDS_EOF'
+{
+  "inbounds": [
+    {
+      "tag": "redirect",
+      "port": 61219,
+      "protocol": "dokodemo-door",
+      "settings": {
+        "network": "tcp",
+        "followRedirect": true
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": ["http", "tls", "quic"]
+      }
+    }
+  ]
+}
+SR_INBOUNDS_EOF
+	[ -s "$XKEEN_CONFIGS_DIR/04_outbounds.json" ] || echo '{"outbounds":[{"protocol":"freedom","tag":"direct"}]}' >"$XKEEN_CONFIGS_DIR/04_outbounds.json"
+	[ -s "$XKEEN_CONFIGS_DIR/06_policy.json" ] || cat >"$XKEEN_CONFIGS_DIR/06_policy.json" <<'SR_POLICY_EOF'
+{
+  "policy": {
+    "levels": {
+      "0": {
+        "connIdle": 30,
+        "statsUserUplink": true,
+        "statsUserDownlink": true
+      }
+    },
+    "system": {
+      "statsInboundUplink": true,
+      "statsInboundDownlink": true,
+      "statsOutboundUplink": true,
+      "statsOutboundDownlink": true
+    }
+  },
+  "stats": {}
+}
+SR_POLICY_EOF
+
 	# Same self-heal, same reason: install.sh creates the unprivileged
 	# "$XRAY_RUN_USER" account (_sr_xray_launch below does `su -c ... "$XRAY_RUN_USER"`)
 	# once, in the "xkeen not yet installed" branch -- confirmed live, on the
