@@ -69,9 +69,43 @@ FLAG_DNS="$SR_STATE_DIR/redirect_dns_protect"
 FLAG_IPV6="$SR_STATE_DIR/redirect_ipv6_protect"
 FLAG_QUIC="$SR_STATE_DIR/redirect_quic_protect"
 FLAG_PORTS="$SR_STATE_DIR/redirect_ports"
+# FLAG_LEAK_PROTECT: OFF by default, deliberately opposite of every other
+# flag in this file. Confirmed live -- reported directly by a user testing
+# on KeeneticOS: with the plain redirect rule active and Xray stopped (a
+# deliberate test, but the exact same thing happens on any real Xray
+# crash), EVERY LAN device lost internet access entirely, not just
+# SmartRoute-routed traffic -- "tcp dport { ports } redirect to :PORT" sends
+# matching packets to a port nothing is listening on, and that's true
+# equally for a request some profile would have routed and a request that
+# was never going through SmartRoute's routing at all. That is a real,
+# useful property for someone who explicitly wants "no Xray means no
+# internet, period" -- but it was the ONLY behavior available, on by
+# definition the moment redirect itself was on, with no way to turn it off
+# short of disabling capture entirely (which also turns off every profile's
+# routing, not just the fail-safe). rd_write_nft/rd_write_iptables below now
+# only emit the actual capture rule at all when Xray is confirmed running OR
+# this flag is explicitly on -- Xray down + this off means captured LAN
+# traffic just isn't captured for as long as that lasts, i.e. plain direct
+# internet access, same as if SmartRoute were never installed, instead of a
+# blackout. True per-profile fail-closed (kill-switch specifically, not
+# every request) needs its own domain->IP tracking independent of Xray being
+# up at all (see lib/killswitch.sh's own header comment) -- a separate,
+# larger piece of work; this flag is deliberately scoped to just "should
+# ALL redirected traffic keep failing closed while Xray is down," the
+# all-or-nothing behavior that already existed, now opt-in instead of
+# unconditional.
+FLAG_LEAK_PROTECT="$SR_STATE_DIR/redirect_leak_protect"
 DEFAULT_PORTS="80,443"
 
 rd_flag() { [ -s "$1" ] && cat "$1" || echo "$2"; }
+
+# rd_xray_up: sr_xray_pids is common.sh's own robust check (matches the full
+# command line through the su->exec transition, not just `pgrep -x xray`'s
+# exact-name-only match -- see its own comment for why that distinction
+# matters here specifically: right after a restart, exactly the boundary
+# case this function needs to get right, is when that transition is still
+# in flight).
+rd_xray_up() { sr_xray_pids >/dev/null 2>&1; }
 
 # rd_write_nft (OpenWrt) regenerates the whole managed .nft file from
 # current flags and reloads the firewall. Single function, not incremental
@@ -84,8 +118,17 @@ rd_write_nft() {
 	dns_protect="$(rd_flag "$FLAG_DNS" "0")"
 	ipv6_protect="$(rd_flag "$FLAG_IPV6" "0")"
 	quic_protect="$(rd_flag "$FLAG_QUIC" "0")"
+	leak_protect="$(rd_flag "$FLAG_LEAK_PROTECT" "0")"
 	ports="$(rd_flag "$FLAG_PORTS" "$DEFAULT_PORTS")"
 	tcp_ports="$(printf '%s' "$ports" | tr ',' ' ')"
+	# See FLAG_LEAK_PROTECT's own comment. capture_active=0 means: still
+	# exclude private ranges (harmless, no reason to stop that), but omit
+	# the actual "redirect to :PORT" line below -- a chain a packet falls
+	# through with no matching rule just continues normal NAT/forwarding
+	# unchanged, exactly the "behave as if SmartRoute weren't installed"
+	# fallback this is for.
+	capture_active=1
+	rd_xray_up || [ "$leak_protect" = "1" ] || capture_active=0
 
 	# Back up whatever was already live before overwriting it in place --
 	# fw4 check (below) validates the *whole* /etc/nftables.d/ directory
@@ -134,13 +177,23 @@ rd_write_nft() {
 				echo
 			fi
 
-			if [ -n "$tcp_ports" ]; then
+			if [ -n "$tcp_ports" ] && [ "$capture_active" = "1" ]; then
 				port_list="$(printf '%s' "$ports")"
 				echo "	# Sniffed at the TLS/HTTP/QUIC layer by xray's own \"redirect\""
 				echo "	# inbound (03_inbounds.json, destOverride) to recover the real"
 				echo "	# domain regardless of how the client resolved the IP -- routing"
 				echo "	# decisions don't depend on DNS having gone through the tunnel."
 				echo "	tcp dport { $port_list } redirect to :$REDIRECT_PORT"
+			elif [ -n "$tcp_ports" ]; then
+				echo "	# Xray isn't running and \"fail closed for all redirected traffic\""
+				echo "	# (leak-protect) is off -- see lib/redirect.sh's FLAG_LEAK_PROTECT"
+				echo "	# comment. Deliberately no redirect rule here right now: falling"
+				echo "	# through this chain with nothing matched means normal NAT/"
+				echo "	# forwarding proceeds unchanged, i.e. plain direct internet access"
+				echo "	# instead of every LAN device losing it. Re-synced automatically"
+				echo "	# (via \`redirect.sh reapply\`) whenever Xray starts/stops/restarts,"
+				echo "	# and by a periodic cron check for the rarer case of Xray dying"
+				echo "	# completely unmanaged."
 			fi
 			echo "}"
 		fi
@@ -273,7 +326,11 @@ rd_write_iptables() {
 	dns_protect="$(rd_flag "$FLAG_DNS" "0")"
 	ipv6_protect="$(rd_flag "$FLAG_IPV6" "0")"
 	quic_protect="$(rd_flag "$FLAG_QUIC" "0")"
+	leak_protect="$(rd_flag "$FLAG_LEAK_PROTECT" "0")"
 	ports="$(rd_flag "$FLAG_PORTS" "$DEFAULT_PORTS")"
+	# See FLAG_LEAK_PROTECT's own comment / rd_write_nft's identical check.
+	capture_active=1
+	rd_xray_up || [ "$leak_protect" = "1" ] || capture_active=0
 
 	if [ "$enabled" = "1" ]; then
 		ipt_chain_reset nat "$IPT_CHAIN_REDIRECT"
@@ -284,7 +341,7 @@ rd_write_iptables() {
 		iptables -t nat -A "$IPT_CHAIN_REDIRECT" -d 172.16.0.0/12 -j RETURN
 		iptables -t nat -A "$IPT_CHAIN_REDIRECT" -d 192.168.0.0/16 -j RETURN
 		iptables -t nat -A "$IPT_CHAIN_REDIRECT" -d 127.0.0.0/8 -j RETURN
-		if [ -n "$ports" ]; then
+		if [ -n "$ports" ] && [ "$capture_active" = "1" ]; then
 			# One rule per port, not `-m multiport --dports` -- confirmed
 			# live on KeeneticOS: the xt_multiport match errors out
 			# ("No chain/target/match by that name"), this kernel doesn't
@@ -298,6 +355,11 @@ rd_write_iptables() {
 			done
 			IFS="$old_ifs"
 		fi
+		# capture_active=0: chain still exists (excludes above, harmless)
+		# but with no REDIRECT rule -- a packet that reaches the end of a
+		# jumped-to chain with nothing matched just returns to PREROUTING
+		# and continues normal NAT/forwarding, same "acts like SmartRoute
+		# isn't installed" fallback as rd_write_nft's own comment.
 		ipt_hook nat PREROUTING "$IPT_CHAIN_REDIRECT"
 
 		if [ "$dns_protect" = "1" ]; then
@@ -412,6 +474,13 @@ rd_quic_protect() {
 	sr_log "QUIC/HTTP3 leak protection: ${1}"
 }
 
+rd_leak_protect() {
+	sr_ensure_dirs
+	case "${1:-}" in on) echo 1 > "$FLAG_LEAK_PROTECT" ;; off) echo 0 > "$FLAG_LEAK_PROTECT" ;; *) sr_die "usage: leak-protect on|off" ;; esac
+	rd_write
+	sr_log "Fail-closed on Xray down (leak protection): ${1}"
+}
+
 rd_status() {
 	# "supported" used to be forced false on KeeneticOS, back when
 	# rd_write_iptables didn't exist yet and every mutating action refused
@@ -421,13 +490,31 @@ rd_status() {
 	# that genuinely meant nothing). Both platforms have a real backend now
 	# (rd_write_nft / rd_write_iptables), so this just reports the flags as
 	# they are everywhere.
+	#
+	# "capture_active" reports whether the redirect rule is *actually*
+	# sending traffic into Xray right now, as opposed to "enabled" (the
+	# user's own on/off intent) -- these two genuinely differ whenever Xray
+	# is down and leak_protect is off (see FLAG_LEAK_PROTECT's own comment):
+	# "enabled" stays true (the user never turned redirect off), but nothing
+	# is actually being captured right now. The panel surfaces this so it
+	# can show something like "перехват временно приостановлен -- Xray не
+	# отвечает" instead of just "enabled: true" while traffic is quietly
+	# going direct.
+	enabled="$(rd_flag "$FLAG_ENABLED" "0")"
+	capture_active=1
+	rd_xray_up || [ "$(rd_flag "$FLAG_LEAK_PROTECT" "0")" = "1" ] || capture_active=0
+	xray_up=0
+	rd_xray_up && xray_up=1
 	jq -n \
-		--argjson enabled "$(rd_flag "$FLAG_ENABLED" "0")" \
+		--argjson enabled "$enabled" \
 		--argjson dns_protect "$(rd_flag "$FLAG_DNS" "0")" \
 		--argjson ipv6_protect "$(rd_flag "$FLAG_IPV6" "0")" \
 		--argjson quic_protect "$(rd_flag "$FLAG_QUIC" "0")" \
+		--argjson leak_protect "$(rd_flag "$FLAG_LEAK_PROTECT" "0")" \
+		--argjson xray_up "$xray_up" \
+		--argjson capture_active "$([ "$enabled" = "1" ] && [ "$capture_active" = "1" ] && echo 1 || echo 0)" \
 		--arg ports "$(rd_flag "$FLAG_PORTS" "$DEFAULT_PORTS")" \
-		'{enabled: (($enabled|tostring)=="1"), dns_protect: (($dns_protect|tostring)=="1"), ipv6_protect: (($ipv6_protect|tostring)=="1"), quic_protect: (($quic_protect|tostring)=="1"), ports: $ports, supported: true}'
+		'{enabled: (($enabled|tostring)=="1"), dns_protect: (($dns_protect|tostring)=="1"), ipv6_protect: (($ipv6_protect|tostring)=="1"), quic_protect: (($quic_protect|tostring)=="1"), leak_protect: (($leak_protect|tostring)=="1"), xray_up: (($xray_up|tostring)=="1"), capture_active: (($capture_active|tostring)=="1"), ports: $ports, supported: true}'
 }
 
 case "${1:-}" in
@@ -437,13 +524,18 @@ case "${1:-}" in
 	dns-protect) rd_dns_protect "${2:-}" ;;
 	ipv6-protect) rd_ipv6_protect "${2:-}" ;;
 	quic-protect) rd_quic_protect "${2:-}" ;;
+	leak-protect) rd_leak_protect "${2:-}" ;;
 	status) rd_status ;;
 	# Re-applies the current on-disk flags without changing any of them --
 	# the boot-time hook install.sh wires up on KeeneticOS (no fw4-style
 	# auto-load-on-boot directory there, see this file's top-of-file
 	# comment) calls this instead of "enable", since a router that
 	# rebooted with redirect *disabled* must come back up disabled too, not
-	# have this hook silently turn it on.
+	# have this hook silently turn it on. Also the same verb common.sh's
+	# xray start/stop/restart functions call afterward (success or failure)
+	# to resync the capture rule with Xray's actual just-changed state, and
+	# what a periodic cron entry calls to catch an unmanaged crash within a
+	# bounded time -- see FLAG_LEAK_PROTECT's own comment.
 	reapply) rd_write ;;
-	*) echo "usage: $0 {enable|disable|set-ports <csv>|dns-protect on|off|ipv6-protect on|off|quic-protect on|off|status|reapply}" >&2; exit 1 ;;
+	*) echo "usage: $0 {enable|disable|set-ports <csv>|dns-protect on|off|ipv6-protect on|off|quic-protect on|off|leak-protect on|off|status|reapply}" >&2; exit 1 ;;
 esac

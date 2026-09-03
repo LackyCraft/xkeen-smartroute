@@ -107,6 +107,7 @@ case "$1" in
 	"redirect_set_dns_protect": {"enabled":"bool1"},
 	"redirect_set_ipv6_protect": {"enabled":"bool1"},
 	"redirect_set_quic_protect": {"enabled":"bool1"},
+	"redirect_set_leak_protect": {"enabled":"bool1"},
 	"list_lan_devices": {},
 	"list_subscriptions": {},
 	"list_custom_lists": {},
@@ -483,7 +484,7 @@ EOF
 				;;
 			redirect_status)
 				out="$(sh "$LIB_DIR/redirect.sh" status 2>/dev/null)"
-				[ -n "$out" ] || out='{"enabled":false,"dns_protect":false,"ipv6_protect":false,"ports":"80,443"}'
+				[ -n "$out" ] || out='{"enabled":false,"dns_protect":false,"ipv6_protect":false,"quic_protect":false,"leak_protect":false,"xray_up":false,"capture_active":false,"ports":"80,443"}'
 				printf '%s' "$out"
 				;;
 			redirect_set_enabled)
@@ -523,6 +524,14 @@ EOF
 			redirect_set_quic_protect)
 				enabled="$(echo "$args" | jq -r '.enabled // false')"
 				if sh "$LIB_DIR/redirect.sh" quic-protect "$([ "$enabled" = "true" ] && echo on || echo off)" >/tmp/sr_redirect.log 2>&1; then
+					sh "$LIB_DIR/redirect.sh" status 2>/dev/null
+				else
+					jq -n --arg log "$(cat /tmp/sr_redirect.log)" '{error:"redirect_failed", detail:$log}'
+				fi
+				;;
+			redirect_set_leak_protect)
+				enabled="$(echo "$args" | jq -r '.enabled // false')"
+				if sh "$LIB_DIR/redirect.sh" leak-protect "$([ "$enabled" = "true" ] && echo on || echo off)" >/tmp/sr_redirect.log 2>&1; then
 					sh "$LIB_DIR/redirect.sh" status 2>/dev/null
 				else
 					jq -n --arg log "$(cat /tmp/sr_redirect.log)" '{error:"redirect_failed", detail:$log}'

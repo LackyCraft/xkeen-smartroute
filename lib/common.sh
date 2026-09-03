@@ -673,11 +673,32 @@ _sr_restart_xray_impl() {
 	fi
 }
 
+# _sr_sync_redirect_capture: re-syncs the transparent-redirect iptables/
+# nftables rule with Xray's own just-changed running state -- see
+# lib/redirect.sh's FLAG_LEAK_PROTECT comment for the full reasoning
+# (default: Xray down + leak-protect off means captured LAN traffic falls
+# through to plain direct internet instead of every device losing it
+# outright). Called after the xray lock is released, not before, so this
+# never extends how long that lock is held -- it only touches redirect's
+# own state, never xray's. Hardcoded path, not a variable this file doesn't
+# have: SR_LIB_DIR is install.sh's own name for this same fixed location
+# (/opt/share/xkeen-smartroute/lib, identical on both platforms -- the same
+# convention gateway/main.go's own genrouteScript constant already relies
+# on). `|| true`: redirect.sh missing or erroring shouldn't turn a
+# successful/failed xray operation into something this function's own
+# caller has to handle differently -- worst case here is a stale capture
+# rule until the next periodic resync (cron) or manual toggle, not a
+# cascading failure of the xray operation that actually mattered.
+_sr_sync_redirect_capture() {
+	sh /opt/share/xkeen-smartroute/lib/redirect.sh reapply >/dev/null 2>&1 || true
+}
+
 sr_restart_xray() {
 	_sr_xray_lock_acquire || return 1
 	_sr_restart_xray_impl
 	rc=$?
 	_sr_xray_lock_release
+	_sr_sync_redirect_capture
 	return $rc
 }
 
@@ -699,6 +720,7 @@ sr_stop_xray() {
 	_sr_stop_xray_impl
 	rc=$?
 	_sr_xray_lock_release
+	_sr_sync_redirect_capture
 	return $rc
 }
 
@@ -723,5 +745,6 @@ sr_start_xray() {
 	_sr_start_xray_impl
 	rc=$?
 	_sr_xray_lock_release
+	_sr_sync_redirect_capture
 	return $rc
 }

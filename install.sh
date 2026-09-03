@@ -1128,6 +1128,20 @@ CRON_REGEN="*/3 * * * * sh $SR_LIB_DIR/genroute.sh regen >/dev/null 2>&1 #xkeen-
 # (see the sequential-vs-concurrent-probing note in genroute.sh for why not
 # more often/parallel on this hardware).
 CRON_PING="0 */2 * * * sh $SR_LIB_DIR/subscription.sh ping >/dev/null 2>&1 #xkeen-smartroute-cron"
+# Catches the one case common.sh's own resync hooks (sr_start_xray/
+# sr_stop_xray/sr_restart_xray, see lib/common.sh's _sr_sync_redirect_capture)
+# can't: Xray dying completely outside this project's own management (OOM-
+# killed, a bug in Xray itself, anything not going through those functions).
+# Without this, the transparent-redirect rule could keep pointing traffic at
+# a dead Xray indefinitely after an unmanaged crash -- with leak-protect off
+# (the default, see lib/redirect.sh's FLAG_LEAK_PROTECT comment) that's not
+# a leak, but it does mean routing silently stops working with no clear
+# signal why until someone checks. Every minute, not every 3 like regen
+# above: this is specifically the fail-safe for "how long can LAN traffic
+# sit dark for no visible reason," which is worth polling tighter for than
+# routing regen (whose own worst case if delayed is just serving slightly
+# stale server picks, not silence).
+CRON_REDIRECT_SYNC="* * * * * sh $SR_LIB_DIR/redirect.sh reapply >/dev/null 2>&1 #xkeen-smartroute-cron"
 # `grep -v` exits 1 (no lines selected) whenever root has no crontab yet --
 # every first-ever install, and every reinstall after uninstall.sh, which
 # clears out the xkeen-smartroute-cron entries entirely. Under `set -e`,
@@ -1140,7 +1154,7 @@ CRON_PING="0 */2 * * * sh $SR_LIB_DIR/subscription.sh ping >/dev/null 2>&1 #xkee
 # and 00_api.smartroute.json from already-imported subscription data -- so
 # a router in this state looked installed (check.sh: everything else [OK])
 # but silently had zero working outbound routing until someone noticed.
-( crontab -l 2>/dev/null | grep -v 'xkeen-smartroute-cron' || true ; echo "$CRON_GEO" ; echo "$CRON_SUB" ; echo "$CRON_RESTART" ; echo "$CRON_REGEN" ; echo "$CRON_PING" ) | crontab -
+( crontab -l 2>/dev/null | grep -v 'xkeen-smartroute-cron' || true ; echo "$CRON_GEO" ; echo "$CRON_SUB" ; echo "$CRON_RESTART" ; echo "$CRON_REGEN" ; echo "$CRON_PING" ; echo "$CRON_REDIRECT_SYNC" ) | crontab -
 /etc/init.d/cron restart >/dev/null 2>&1 || true
 
 # ---------------------------------------------------------------------------
