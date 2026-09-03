@@ -28,6 +28,24 @@ MIN_FREE_KB=25000
 log()  { echo "[xkeen-smartroute] $*"; }
 die()  { echo "[xkeen-smartroute] ERROR: $*" >&2; exit 1; }
 
+# pm_*: thin system-package-manager wrappers over $SR_PM (set just below) --
+# opkg on OpenWrt <25.12, apk on 25.12+ (see SR_PM's own comment). Only used
+# for the handful of *system* package calls this script makes (bootstrapping
+# wget-ssl before Entware exists, the dnsmasq-full swap); every Entware
+# package everywhere else always goes through /opt/bin/opkg directly,
+# unaffected by any of this -- Entware ships and manages its own opkg
+# regardless of which system package manager the base OpenWrt install uses.
+pm_update()  { if [ "$SR_PM" = "apk" ]; then apk update; else opkg update; fi; }
+pm_install() { if [ "$SR_PM" = "apk" ]; then apk add "$@"; else opkg install "$@"; fi; }
+pm_remove()  { if [ "$SR_PM" = "apk" ]; then apk del "$@"; else opkg remove "$@"; fi; }
+# `apk info -e PKG` is the standard apk-tools idiom for "is PKG installed, by
+# exact name" -- deliberately not a `list | grep` for apk the way the opkg
+# branch below still is: apk's own list output has no clean name/version
+# separator to anchor a prefix-safe grep against (opkg's "pkgname - version"
+# does, hence `grep -q "^$1 "` there), so "dnsmasq" could false-positive
+# match an already-installed "dnsmasq-full" with a looser pattern.
+pm_is_installed() { if [ "$SR_PM" = "apk" ]; then apk info -e "$1" >/dev/null 2>&1; else opkg list-installed 2>/dev/null | grep -q "^$1 "; fi; }
+
 # ---------------------------------------------------------------------------
 log "Проверка окружения / Checking environment..."
 
@@ -41,15 +59,26 @@ if [ -n "${FREE_KB:-}" ] && [ "$FREE_KB" -lt "$MIN_FREE_KB" ]; then
 fi
 log "Свободно на /overlay: ${FREE_KB:-unknown} KB"
 
-command -v opkg >/dev/null 2>&1 || die "opkg not found"
+# OpenWrt 25.12 replaced opkg with apk (Alpine's package manager) as its
+# system package manager -- confirmed live via a real user's install.sh run
+# on OpenWrt 25.12.5/mediatek-filogic ("ERROR: opkg not found", GitHub issue
+# #1): opkg genuinely doesn't exist there anymore, this isn't a PATH
+# problem. See pm_update/pm_install/etc. above for the actual dispatch.
+if command -v apk >/dev/null 2>&1; then
+	SR_PM="apk"
+elif command -v opkg >/dev/null 2>&1; then
+	SR_PM="opkg"
+else
+	die "не найден пакетный менеджер OpenWrt (ни opkg, ни apk) / no OpenWrt package manager found (neither opkg nor apk)"
+fi
 
 # ---------------------------------------------------------------------------
 log "Шаг 1/6: Entware"
 
 if [ ! -x /opt/bin/opkg ]; then
 	log "Entware не найден, устанавливаю..."
-	opkg update >/dev/null 2>&1 || true
-	opkg install wget-ssl ca-certificates >/dev/null 2>&1 || opkg install wget ca-certificates >/dev/null 2>&1 || true
+	pm_update >/dev/null 2>&1 || true
+	pm_install wget-ssl ca-certificates >/dev/null 2>&1 || pm_install wget ca-certificates >/dev/null 2>&1 || true
 	case "$DISTRIB_ARCH" in
 		mipsel_24kc|mipsel_24kec) ENTWARE_ARCH="mipselsf-k3.4" ;;
 		mips_24kc) ENTWARE_ARCH="mipssf-k3.4" ;;
@@ -111,13 +140,17 @@ log "dnsmasq-full (нужен для hard kill-switch)"
 # `opkg` (not yet shadowed by Entware's own /opt/bin/opkg -- PATH is
 # extended below) since dnsmasq is a base-system package, not an Entware one.
 if ! dnsmasq --version 2>/dev/null | grep -q ' ipset\| nftset'; then
-	opkg update >/dev/null 2>&1 || true
-	opkg list-installed 2>/dev/null | grep -q '^dnsmasq -' && { opkg remove dnsmasq >/dev/null 2>&1 || true; }
-	if opkg install dnsmasq-full >/dev/null 2>&1; then
+	pm_update >/dev/null 2>&1 || true
+	pm_is_installed dnsmasq && { pm_remove dnsmasq >/dev/null 2>&1 || true; }
+	if pm_install dnsmasq-full >/dev/null 2>&1; then
 		/etc/init.d/dnsmasq restart >/dev/null 2>&1 || true
 		log "dnsmasq-full установлен."
 	else
-		log "ПРЕДУПРЕЖДЕНИЕ: не удалось поставить dnsmasq-full -- hard kill-switch будет недоступен, пока не поставите его вручную (opkg remove dnsmasq && opkg install dnsmasq-full). / WARNING: could not install dnsmasq-full -- hard kill-switch unavailable until installed manually."
+		if [ "$SR_PM" = "apk" ]; then
+			log "ПРЕДУПРЕЖДЕНИЕ: не удалось поставить dnsmasq-full -- hard kill-switch будет недоступен, пока не поставите его вручную (apk del dnsmasq && apk add dnsmasq-full). / WARNING: could not install dnsmasq-full -- hard kill-switch unavailable until installed manually."
+		else
+			log "ПРЕДУПРЕЖДЕНИЕ: не удалось поставить dnsmasq-full -- hard kill-switch будет недоступен, пока не поставите его вручную (opkg remove dnsmasq && opkg install dnsmasq-full). / WARNING: could not install dnsmasq-full -- hard kill-switch unavailable until installed manually."
+		fi
 	fi
 else
 	log "dnsmasq уже поддерживает ipset/nftset, пропускаю."
