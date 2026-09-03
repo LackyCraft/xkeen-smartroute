@@ -170,7 +170,7 @@ sr_apply_log_config() {
   }
 }
 EOF
-	command -v xray >/dev/null 2>&1 && pgrep -x xray >/dev/null 2>&1 && sr_restart_xray
+	command -v xray >/dev/null 2>&1 && sr_xray_pids >/dev/null 2>&1 && sr_restart_xray
 }
 
 sr_set_log_enabled() {
@@ -244,16 +244,39 @@ XRAY_RUN_USER="xkeen"
 # ..." "$XRAY_RUN_USER"` below, even though this process's own $PATH
 # resolves it fine). install.sh now fixes that at the source instead
 # (rewrites login.defs' ENV_PATH to include /opt/sbin:/opt/bin -- see its
-# own comment), which keeps this file's own `pgrep -x xray` /
-# `kill $(pgrep -x xray)` calls throughout _sr_xray_launch and
-# sr_restart_xray working correctly: they match on the bare process name.
-# Tried passing xray's full resolved path into the su'd command directly
-# instead of fixing login.defs -- confirmed live that this broke exactly
-# those `pgrep -x xray` calls (busybox pgrep's -x apparently matches the
-# invoked path/name as launched, not just the executable's basename), so
-# the retry loop below could no longer find/kill its own previous attempt
-# before relaunching, leaving multiple live xray processes stacked on the
-# same confdir/ports at once.
+# own comment), which keeps `su -c "xray run ..." "$XRAY_RUN_USER"` below
+# actually able to find and exec xray by its bare name at all. Tried passing
+# xray's full resolved path into the su'd command directly instead of fixing
+# login.defs -- confirmed live that this broke process detection below
+# (busybox pgrep's -x apparently matches the invoked path/name as launched,
+# not just the executable's basename) badly enough that the retry loop could
+# no longer find/kill its own previous attempt before relaunching, leaving
+# multiple live xray processes stacked on the same confdir/ports at once --
+# sr_xray_pids (below) since moved off `pgrep -x` entirely for a different,
+# unrelated reason (see its own comment), but the bare-name launch here
+# stays either way, since it's what login.defs' ENV_PATH fix is actually
+# for.
+
+# sr_xray_pids: every PID that IS or WILL BECOME the xray process --
+# matches on the full command line, not `pgrep -x xray`'s exact-name-only
+# match. `su -c CMD user` exec()s straight into CMD (same PID throughout,
+# POSIX exec semantics), but /proc's own reported comm/cmdline only flips
+# from "su ..." to "xray ..." at the moment that exec actually happens, not
+# when the su invocation starts -- confirmed live, reproduced repeatedly
+# after a hard power-cycle reboot under heavy boot-time I/O contention (this
+# same su->exec transition alone measured taking several seconds under that
+# load, not instant): _sr_xray_kill_and_wait's own `pgrep -x xray || return
+# 0` fast-path can run in the exact window where a previous launch attempt's
+# process is still visibly "su", not yet "xray" -- concluding "nothing to
+# kill" and letting the caller's retry loop launch a fresh attempt on top of
+# one that was never actually dead, just not renamed yet. Reproduced this
+# exact way after a real reboot: up to 6 live xray processes stacked, each
+# one genuinely running, none of them orphaned duplicates a normal
+# `pgrep -x xray` kill would have caught. `-f 'xray run -confdir'` matches
+# both phases of the exact same PID -- it's a substring of su's own visible
+# "-c" argument during the pre-exec window, and of xray's own argv once
+# exec()'d -- so a check against this never has that same blind spot.
+sr_xray_pids() { pgrep -f 'xray run -confdir' 2>/dev/null; }
 
 # _sr_xray_validate: config must pass `xray run -test` before we touch the
 # running process either way (start or restart). A single malformed outbound
@@ -455,15 +478,15 @@ SR_POLICY_EOF
 # instead of silently returning success either way like every caller used
 # to.
 _sr_xray_kill_and_wait() {
-	pgrep -x xray >/dev/null 2>&1 || return 0
-	for pid in $(pgrep -x xray 2>/dev/null); do kill "$pid" 2>/dev/null || true; done
+	sr_xray_pids >/dev/null 2>&1 || return 0
+	for pid in $(sr_xray_pids); do kill "$pid" 2>/dev/null || true; done
 	i=0
-	while pgrep -x xray >/dev/null 2>&1 && [ "$i" -lt 5 ]; do sleep 1; i=$((i + 1)); done
-	pgrep -x xray >/dev/null 2>&1 || return 0
-	for pid in $(pgrep -x xray 2>/dev/null); do kill -9 "$pid" 2>/dev/null || true; done
+	while sr_xray_pids >/dev/null 2>&1 && [ "$i" -lt 5 ]; do sleep 1; i=$((i + 1)); done
+	sr_xray_pids >/dev/null 2>&1 || return 0
+	for pid in $(sr_xray_pids); do kill -9 "$pid" 2>/dev/null || true; done
 	i=0
-	while pgrep -x xray >/dev/null 2>&1 && [ "$i" -lt 60 ]; do sleep 1; i=$((i + 1)); done
-	pgrep -x xray >/dev/null 2>&1 && return 1
+	while sr_xray_pids >/dev/null 2>&1 && [ "$i" -lt 60 ]; do sleep 1; i=$((i + 1)); done
+	sr_xray_pids >/dev/null 2>&1 && return 1
 	return 0
 }
 
@@ -491,7 +514,7 @@ _sr_xray_launch() {
 			exec su -c "XRAY_LOCATION_ASSET='$XRAY_ASSET_DIR' xray run -confdir '$XKEEN_CONFIGS_DIR'" "$XRAY_RUN_USER" >"$SR_STATE_DIR/xray-launch.log" 2>&1 </dev/null
 		) &
 		i=0
-		while ! pgrep -x xray >/dev/null 2>&1 && [ "$i" -lt 10 ]; do sleep 1; i=$((i + 1)); done
+		while ! sr_xray_pids >/dev/null 2>&1 && [ "$i" -lt 10 ]; do sleep 1; i=$((i + 1)); done
 
 		# A second, different confdir problem from the env-var mixup above --
 		# confirmed live, reproduced on demand, on Xray-core 26.2.6 on this
@@ -642,8 +665,8 @@ _sr_restart_xray_impl() {
 	fi
 
 	_sr_xray_launch || return 1
-	if pgrep -x xray >/dev/null 2>&1; then
-		sr_log "xray restarted (pid $(pgrep -x xray | head -1))"
+	if sr_xray_pids >/dev/null 2>&1; then
+		sr_log "xray restarted (pid $(sr_xray_pids | head -1))"
 	else
 		sr_log "ERROR: xray did not come back up after restart -- check $SR_STATE_DIR/xray-launch.log"
 		return 1
@@ -681,14 +704,14 @@ sr_stop_xray() {
 
 _sr_start_xray_impl() {
 	command -v xray >/dev/null 2>&1 || { sr_log "xray binary not found, skipping start"; return 1; }
-	if pgrep -x xray >/dev/null 2>&1; then
+	if sr_xray_pids >/dev/null 2>&1; then
 		sr_log "xray already running"
 		return 0
 	fi
 	_sr_xray_validate start || return 1
 	_sr_xray_launch || return 1
-	if pgrep -x xray >/dev/null 2>&1; then
-		sr_log "xray started (pid $(pgrep -x xray | head -1))"
+	if sr_xray_pids >/dev/null 2>&1; then
+		sr_log "xray started (pid $(sr_xray_pids | head -1))"
 	else
 		sr_log "ERROR: xray did not come up -- check $SR_STATE_DIR/xray-launch.log"
 		return 1
