@@ -545,8 +545,25 @@ sr_regen() {
 		return 0
 	fi
 
-	sr_restart_xray
-	sr_log "regenerated routing ($(echo "$rules" | jq 'length') rule(s)), observatory watching $(echo "$selector" | jq 'length') stale tag(s)"
+	# Backgrounded, not a synchronous call -- routing.smartroute.json and
+	# observatory.smartroute.json (the state that actually matters) are
+	# already written on disk above; restarting Xray itself is what's slow
+	# (the confdir-race retry loop in _sr_xray_launch, each attempt its own
+	# kill+relaunch+validate cycle -- measured well past a minute on
+	# KeeneticOS hardware under load). save/delete are called synchronously
+	# from the rpcd bridge, in turn called synchronously from the gateway's
+	# own HTTP handler -- confirmed live: with sr_restart_xray blocking here,
+	# the Profiles page's Save button just sat on its spinner for the whole
+	# restart, indistinguishable from a hang, with no way to tell it had
+	# actually already succeeded short of a manual reload. `(trap '' HUP;
+	# ...) &`, not a bare `&` -- same reasoning as _sr_xray_launch's own
+	# identical wrapper (this busybox has neither nohup nor setsid): without
+	# it, this backgrounded restart could be killed mid-flight the moment
+	# genroute.sh itself (and everything that invoked it -- the rpcd script,
+	# the gateway's own exec.Command) exits right after this line, which for
+	# an interactive Save/Delete call happens within moments.
+	(trap '' HUP; sr_restart_xray) >/dev/null 2>&1 &
+	sr_log "regenerated routing ($(echo "$rules" | jq 'length') rule(s)), observatory watching $(echo "$selector" | jq 'length') stale tag(s), xray restart backgrounded"
 }
 
 case "${1:-}" in

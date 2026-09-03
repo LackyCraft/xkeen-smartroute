@@ -438,8 +438,8 @@ var DICT = {
 	ks_disabled: { ru: 'Выключено', en: 'Disabled' },
 	ks_geosite_note: { ru: '(частичное покрытие для geosite — см. пояснение выше)', en: '(partial coverage for geosite — see note above)' },
 
-	prot_intro: { ru: 'Перехват LAN-трафика: без него ни один профиль/kill-switch не видит реальные пакеты устройств — это включает сам механизм, через который SmartRoute вообще может что-то маршрутизировать (свой nftables-редирект, не сломанный xkeen -ap на OpenWrt/nftables). Выключайте только для диагностики.',
-	            en: "LAN traffic capture: without it, no profile/kill-switch ever sees real device packets — this is the mechanism SmartRoute routing depends on in the first place (our own nftables redirect, not xkeen's broken -ap on OpenWrt/nftables). Only turn it off for diagnostics." },
+	prot_intro: { ru: 'Перехват LAN-трафика: без него ни один профиль/kill-switch не видит реальные пакеты устройств — это включает сам механизм, через который SmartRoute вообще может что-то маршрутизировать (свой редирект на уровне firewall роутера — nftables на OpenWrt, iptables на KeeneticOS; не сломанный xkeen -ap). Выключайте только для диагностики.',
+	            en: "LAN traffic capture: without it, no profile/kill-switch ever sees real device packets — this is the mechanism SmartRoute routing depends on in the first place (our own firewall-level redirect — nftables on OpenWrt, iptables on KeeneticOS; not xkeen's broken -ap). Only turn it off for diagnostics." },
 	prot_redirect_enabled: { ru: 'Перехват трафика включён', en: 'Traffic capture enabled' },
 	prot_ports_label: { ru: 'Порты перехвата (через запятую)', en: 'Captured ports (comma-separated)' },
 	prot_ports_placeholder: { ru: '80,443', en: '80,443' },
