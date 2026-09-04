@@ -251,6 +251,25 @@ rd_write_nft() {
 	/etc/init.d/firewall reload >/dev/null 2>&1 || /sbin/fw4 reload >/dev/null 2>&1 || true
 }
 
+# ipt/ip6t: every KeeneticOS iptables/ip6tables call in this file goes
+# through these instead of the bare binary. redirect.sh reapply now runs
+# from cron every single minute (install.sh's CRON_REDIRECT_SYNC, added
+# alongside FLAG_LEAK_PROTECT), on top of every interactive toggle and
+# every sr_restart_xray/stop/start hook already calling rd_write -- so two
+# invocations of rd_write_iptables racing each other for the legacy
+# xtables lock is a real, observed case now (confirmed live: a plain
+# `quic-protect off` hit "Another app is currently holding the xtables
+# lock" from exactly this race), not a theoretical one. Under `set -eu` an
+# unhandled lock failure aborts rd_write_iptables mid-rebuild, potentially
+# leaving a chain flushed but not yet repopulated. This build's iptables
+# (v1.4.21) only supports the bare `-w` (no numeric timeout, confirmed
+# live: `-w 5` itself errors out) -- it blocks until the lock is free
+# rather than failing outright, which is exactly what's wanted here; a
+# real hold is measured in milliseconds, so blocking is never a
+# perceptible delay in practice.
+ipt() { iptables -w "$@"; }
+ip6t() { ip6tables -w "$@"; }
+
 # ipt_chain_reset: (re)create a chain empty, in either table -- idempotent,
 # safe whether the chain already exists (from a previous enable) or not.
 # `-N` fails harmlessly if it's already there; `-F` then guarantees empty
@@ -260,11 +279,11 @@ rd_write_nft() {
 ipt_chain_reset() {
 	table_flag="$1"; chain="$2"
 	if [ "$table_flag" = "nat" ]; then
-		iptables -t nat -N "$chain" 2>/dev/null || true
-		iptables -t nat -F "$chain"
+		ipt -t nat -N "$chain" 2>/dev/null || true
+		ipt -t nat -F "$chain"
 	else
-		iptables -N "$chain" 2>/dev/null || true
-		iptables -F "$chain"
+		ipt -N "$chain" 2>/dev/null || true
+		ipt -F "$chain"
 	fi
 }
 
@@ -278,11 +297,11 @@ ipt_chain_reset() {
 ipt_hook() {
 	table_flag="$1"; hook_chain="$2"; chain="$3"
 	if [ "$table_flag" = "nat" ]; then
-		iptables -t nat -D "$hook_chain" -i "$LAN_DEVICE" -j "$chain" 2>/dev/null || true
-		iptables -t nat -A "$hook_chain" -i "$LAN_DEVICE" -j "$chain"
+		ipt -t nat -D "$hook_chain" -i "$LAN_DEVICE" -j "$chain" 2>/dev/null || true
+		ipt -t nat -A "$hook_chain" -i "$LAN_DEVICE" -j "$chain"
 	else
-		iptables -D "$hook_chain" -i "$LAN_DEVICE" -j "$chain" 2>/dev/null || true
-		iptables -A "$hook_chain" -i "$LAN_DEVICE" -j "$chain"
+		ipt -D "$hook_chain" -i "$LAN_DEVICE" -j "$chain" 2>/dev/null || true
+		ipt -A "$hook_chain" -i "$LAN_DEVICE" -j "$chain"
 	fi
 }
 
@@ -294,19 +313,19 @@ ipt_hook() {
 ipt_unhook() {
 	table_flag="$1"; hook_chain="$2"; chain="$3"
 	if [ "$table_flag" = "nat" ]; then
-		iptables -t nat -D "$hook_chain" -i "$LAN_DEVICE" -j "$chain" 2>/dev/null || true
+		ipt -t nat -D "$hook_chain" -i "$LAN_DEVICE" -j "$chain" 2>/dev/null || true
 	else
-		iptables -D "$hook_chain" -i "$LAN_DEVICE" -j "$chain" 2>/dev/null || true
+		ipt -D "$hook_chain" -i "$LAN_DEVICE" -j "$chain" 2>/dev/null || true
 	fi
 }
 ipt_chain_delete() {
 	table_flag="$1"; chain="$2"
 	if [ "$table_flag" = "nat" ]; then
-		iptables -t nat -F "$chain" 2>/dev/null || true
-		iptables -t nat -X "$chain" 2>/dev/null || true
+		ipt -t nat -F "$chain" 2>/dev/null || true
+		ipt -t nat -X "$chain" 2>/dev/null || true
 	else
-		iptables -F "$chain" 2>/dev/null || true
-		iptables -X "$chain" 2>/dev/null || true
+		ipt -F "$chain" 2>/dev/null || true
+		ipt -X "$chain" 2>/dev/null || true
 	fi
 }
 
@@ -337,10 +356,10 @@ rd_write_iptables() {
 		# Same private/local exclusion as rd_write_nft's own -- redirecting
 		# LAN-to-LAN or LAN-to-router traffic through xray would just break
 		# it for no reason (xray has no route back to those destinations).
-		iptables -t nat -A "$IPT_CHAIN_REDIRECT" -d 10.0.0.0/8 -j RETURN
-		iptables -t nat -A "$IPT_CHAIN_REDIRECT" -d 172.16.0.0/12 -j RETURN
-		iptables -t nat -A "$IPT_CHAIN_REDIRECT" -d 192.168.0.0/16 -j RETURN
-		iptables -t nat -A "$IPT_CHAIN_REDIRECT" -d 127.0.0.0/8 -j RETURN
+		ipt -t nat -A "$IPT_CHAIN_REDIRECT" -d 10.0.0.0/8 -j RETURN
+		ipt -t nat -A "$IPT_CHAIN_REDIRECT" -d 172.16.0.0/12 -j RETURN
+		ipt -t nat -A "$IPT_CHAIN_REDIRECT" -d 192.168.0.0/16 -j RETURN
+		ipt -t nat -A "$IPT_CHAIN_REDIRECT" -d 127.0.0.0/8 -j RETURN
 		if [ -n "$ports" ] && [ "$capture_active" = "1" ]; then
 			# One rule per port, not `-m multiport --dports` -- confirmed
 			# live on KeeneticOS: the xt_multiport match errors out
@@ -351,7 +370,7 @@ rd_write_iptables() {
 			# same way -- so just loop instead of depending on multiport.
 			old_ifs="$IFS"; IFS=','
 			for p in $ports; do
-				iptables -t nat -A "$IPT_CHAIN_REDIRECT" -p tcp --dport "$p" -j REDIRECT --to-port "$REDIRECT_PORT"
+				ipt -t nat -A "$IPT_CHAIN_REDIRECT" -p tcp --dport "$p" -j REDIRECT --to-port "$REDIRECT_PORT"
 			done
 			IFS="$old_ifs"
 		fi
@@ -369,8 +388,8 @@ rd_write_iptables() {
 			# because kill-switch's dnsmasq-ipset mechanism needs to see
 			# every query to populate its ipset in the first place.
 			ipt_chain_reset nat "$IPT_CHAIN_DNS"
-			iptables -t nat -A "$IPT_CHAIN_DNS" -p tcp --dport 53 -j REDIRECT --to-port 53
-			iptables -t nat -A "$IPT_CHAIN_DNS" -p udp --dport 53 -j REDIRECT --to-port 53
+			ipt -t nat -A "$IPT_CHAIN_DNS" -p tcp --dport 53 -j REDIRECT --to-port 53
+			ipt -t nat -A "$IPT_CHAIN_DNS" -p udp --dport 53 -j REDIRECT --to-port 53
 			ipt_hook nat PREROUTING "$IPT_CHAIN_DNS"
 		else
 			ipt_unhook nat PREROUTING "$IPT_CHAIN_DNS"
@@ -385,7 +404,7 @@ rd_write_iptables() {
 			# above -- one rule per port instead.
 			old_ifs="$IFS"; IFS=','
 			for p in $ports; do
-				iptables -A "$IPT_CHAIN_QUIC" -p udp --dport "$p" -j DROP
+				ipt -A "$IPT_CHAIN_QUIC" -p udp --dport "$p" -j DROP
 			done
 			IFS="$old_ifs"
 			ipt_hook filter FORWARD "$IPT_CHAIN_QUIC"
@@ -409,16 +428,16 @@ rd_write_iptables() {
 		# switch doesn't cover IPv6" leak. ip6tables, not iptables -- a
 		# completely separate ruleset/binary on this platform too.
 		if command -v ip6tables >/dev/null 2>&1; then
-			ip6tables -N "$IP6T_CHAIN_BLOCK" 2>/dev/null || true
-			ip6tables -F "$IP6T_CHAIN_BLOCK"
-			ip6tables -A "$IP6T_CHAIN_BLOCK" -j DROP
-			ip6tables -D FORWARD -i "$LAN_DEVICE" -j "$IP6T_CHAIN_BLOCK" 2>/dev/null || true
-			ip6tables -A FORWARD -i "$LAN_DEVICE" -j "$IP6T_CHAIN_BLOCK"
+			ip6t -N "$IP6T_CHAIN_BLOCK" 2>/dev/null || true
+			ip6t -F "$IP6T_CHAIN_BLOCK"
+			ip6t -A "$IP6T_CHAIN_BLOCK" -j DROP
+			ip6t -D FORWARD -i "$LAN_DEVICE" -j "$IP6T_CHAIN_BLOCK" 2>/dev/null || true
+			ip6t -A FORWARD -i "$LAN_DEVICE" -j "$IP6T_CHAIN_BLOCK"
 		fi
 	elif command -v ip6tables >/dev/null 2>&1; then
-		ip6tables -D FORWARD -i "$LAN_DEVICE" -j "$IP6T_CHAIN_BLOCK" 2>/dev/null || true
-		ip6tables -F "$IP6T_CHAIN_BLOCK" 2>/dev/null || true
-		ip6tables -X "$IP6T_CHAIN_BLOCK" 2>/dev/null || true
+		ip6t -D FORWARD -i "$LAN_DEVICE" -j "$IP6T_CHAIN_BLOCK" 2>/dev/null || true
+		ip6t -F "$IP6T_CHAIN_BLOCK" 2>/dev/null || true
+		ip6t -X "$IP6T_CHAIN_BLOCK" 2>/dev/null || true
 	fi
 }
 
