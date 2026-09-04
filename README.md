@@ -126,7 +126,7 @@ sh <(wget -q -O - https://raw.githubusercontent.com/LackyCraft/xkeen-smartroute/
 
 | Параметр | Требование |
 |---|---|
-| ОС роутера | OpenWrt 21.02+ (тест: 23.05/24.10) или KeeneticOS + Entware |
+| ОС роутера | OpenWrt 22.03+ (тест: 23.05/24.10) или KeeneticOS + Entware |
 | Архитектура | mips/mipsel, aarch64, armv7, x86_64 |
 | Свободное место | от ~25 МБ, реально стек занимает больше (см. ниже) |
 | ОЗУ | от 128 МБ, комфортно — от 256 МБ |

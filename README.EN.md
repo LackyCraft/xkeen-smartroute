@@ -126,7 +126,7 @@ By default the panel (`:1001`) and xkeen-UI (`:1000`) listen on all router inter
 
 | Parameter | Requirement |
 |---|---|
-| Router OS | OpenWrt 21.02+ (tested: 23.05/24.10) or KeeneticOS + Entware |
+| Router OS | OpenWrt 22.03+ (tested: 23.05/24.10) or KeeneticOS + Entware |
 | Architecture | mips/mipsel, aarch64, armv7, x86_64 |
 | Free space | ~25MB minimum, the real stack needs more (see below) |
 | RAM | 128MB minimum, 256MB comfortable |

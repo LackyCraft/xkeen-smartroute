@@ -7,7 +7,7 @@
 # but on OpenWrt it writes rules through Entware's *legacy* iptables
 # (xtables-multi), which is a completely separate ruleset from the one that
 # platform's kernel actually consults for packet forwarding on OpenWrt
-# 21.02+ (nftables/fw4 by default, via the xtables-nft compat binary).
+# 22.03+ (nftables/fw4 by default, via the xtables-nft compat binary).
 # `xkeen -ap 443,80` reports success and silently does nothing there --
 # confirmed on real hardware: zero fwmark, zero conntrack entries through
 # xray's redirect inbound, real devices' traffic flagged as ordinary NAT'd
