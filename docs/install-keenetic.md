@@ -149,14 +149,25 @@ substitution (`<(...)`) не работает в shell этого Entware (не�
 чтения — это не overlay, как на OpenWrt, а squashfs-образ прошивки, так
 что этот каталог не может быть `/etc/xkeen-smartroute`, как на OpenWrt).
 
+**Работает на KeeneticOS** (проверено вживую): прозрачный перехват
+LAN-трафика (вкладка «Защита от утечек») — на KeeneticOS у него отдельный
+бэкенд поверх легаси `iptables`/`ip6tables` (то же самое пространство
+правил, которым управляет NDM-firewall самого роутера — на KeeneticOS нет
+`uci`/`nftables`/`fw4`, как на OpenWrt). Включение перехвата, защита от
+утечек DNS/IPv6/QUIC и опциональная «защита от отказа Xray» (fail-closed)
+работают так же, как на OpenWrt — только правила пишутся напрямую в
+iptables, а не в управляемый `.nft`-файл. Подробности механики —
+[docs/functionality_doc/leak-protection.md](functionality_doc/leak-protection.md).
+
 **Пока не поддержано на KeeneticOS** (в разработке):
 
 - **LuCI-модуль** — на KeeneticOS нет LuCI вообще, `install.sh` его
   пропускает. Панель `:1001` и xkeen-UI `:1000` — единственный UI.
-- **Kill-switch и прозрачный перехват трафика** (redirect) —
-  `lib/killswitch.sh`/`lib/redirect.sh` целиком построены на
-  `uci`/`nftables`/`fw4` (firewall-система OpenWrt), которых на
-  KeeneticOS нет — нужен отдельный порт под NDM-firewall KeeneticOS.
+- **Жёсткий (per-профильный) kill-switch** — `lib/killswitch.sh`
+  построен на ipset/nftset-поддержке системного `dnsmasq` и на
+  `fw4`/`nftables.d`, которых на KeeneticOS нет ни в каком виде — нужен
+  отдельный порт под NDM-firewall KeeneticOS, отдельная от перехвата
+  задача.
 
 Два нюанса самого KeeneticOS/Entware, обнаруженные по пути (актуальны
 при запуске команды выше и любых `wget`-вызовов вручную на этой

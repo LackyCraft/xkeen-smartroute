@@ -203,6 +203,7 @@ README — обзор для установки и настройки. Техн�
 
 | Файл | О чём |
 |---|---|
+| [docs/install-keenetic.md](docs/install-keenetic.md) | Установка на KeeneticOS: флешка, Entware, OPKG, нюансы платформы |
 | [docs/release-process.md](docs/release-process.md) | Схема веток, версий и CI/CD-публикации (тег `vX.Y.Z` → сборка → Release) |
 | [docs/screenshots/README.md](docs/screenshots/README.md) | Реальные скриншоты LuCI-модуля и панели SmartRoute |
 | [AGENTS.md](AGENTS.md) | Журнал находок для AI-агента, разворачивающего проект на роутере |

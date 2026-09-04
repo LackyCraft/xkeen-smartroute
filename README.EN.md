@@ -203,6 +203,7 @@ This README is an install/setup overview. Technical detail, bug history, and des
 
 | File | About |
 |---|---|
+| [docs/install-keenetic.md](docs/install-keenetic.md) | Installing on KeeneticOS: USB drive, Entware, OPKG, platform quirks (Russian only) |
 | [docs/release-process.md](docs/release-process.md) | Branching, versioning, and CI/CD publishing (a `vX.Y.Z` tag → build → Release) |
 | [docs/screenshots/README.md](docs/screenshots/README.md) | Real screenshots of the LuCI module and the SmartRoute panel |
 | [AGENTS.md](AGENTS.md) | Findings log for an AI agent deploying the project on a router |
