@@ -20,7 +20,7 @@
 					"add_custom_domain", "killswitch_set", "ping_servers",
 					"set_refresh_hours", "set_observatory_period", "set_auto_refresh_enabled", "refresh_now", "redirect_set_enabled",
 					"redirect_set_ports", "redirect_set_dns_protect", "redirect_set_ipv6_protect",
-					"redirect_set_quic_protect",
+					"redirect_set_quic_protect", "redirect_set_leak_protect",
 					"delete_subscription", "refresh_subscription", "ping_subscription",
 					"service_control", "delete_custom_list", "add_domain_to_list",
 					"remove_domain_from_list",

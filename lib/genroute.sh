@@ -545,8 +545,25 @@ sr_regen() {
 		return 0
 	fi
 
-	sr_restart_xray
-	sr_log "regenerated routing ($(echo "$rules" | jq 'length') rule(s)), observatory watching $(echo "$selector" | jq 'length') stale tag(s)"
+	# Backgrounded, not a synchronous call -- routing.smartroute.json and
+	# observatory.smartroute.json (the state that actually matters) are
+	# already written on disk above; restarting Xray itself is what's slow
+	# (the confdir-race retry loop in _sr_xray_launch, each attempt its own
+	# kill+relaunch+validate cycle -- measured well past a minute on
+	# KeeneticOS hardware under load). save/delete are called synchronously
+	# from the rpcd bridge, in turn called synchronously from the gateway's
+	# own HTTP handler -- confirmed live: with sr_restart_xray blocking here,
+	# the Profiles page's Save button just sat on its spinner for the whole
+	# restart, indistinguishable from a hang, with no way to tell it had
+	# actually already succeeded short of a manual reload. `(trap '' HUP;
+	# ...) &`, not a bare `&` -- same reasoning as _sr_xray_launch's own
+	# identical wrapper (this busybox has neither nohup nor setsid): without
+	# it, this backgrounded restart could be killed mid-flight the moment
+	# genroute.sh itself (and everything that invoked it -- the rpcd script,
+	# the gateway's own exec.Command) exits right after this line, which for
+	# an interactive Save/Delete call happens within moments.
+	(trap '' HUP; sr_restart_xray) >/dev/null 2>&1 &
+	sr_log "regenerated routing ($(echo "$rules" | jq 'length') rule(s)), observatory watching $(echo "$selector" | jq 'length') stale tag(s), xray restart backgrounded"
 }
 
 case "${1:-}" in
@@ -609,6 +626,16 @@ case "${1:-}" in
 		sr_regen 1
 		;;
 	regen) sr_regen ;;
+	# regen-fast: same as "regen" but skips the fresh network-bound ping
+	# pass (see sr_pick_top1's own comment on why skip_fresh_ping exists --
+	# same tradeoff "save"/"delete" already make). Used by the gateway's
+	# own failover loop (failover.go) to react immediately when
+	# ObservatoryService flags a profile's *currently active* pick dead,
+	# instead of waiting for the plain 3-minute cron "regen" -- it already
+	# has a fresh health.json verdict from the very tick that triggered
+	# this call, a new TCP ping pass would add tens of seconds for no new
+	# information.
+	regen-fast) sr_regen 1 ;;
 	list)
 		sr_ensure_dirs
 		if ls "$SR_PROFILES_DIR"/*.json >/dev/null 2>&1; then
@@ -654,5 +681,5 @@ case "${1:-}" in
 	set-log-cap-mb) sr_set_log_cap_mb "${2:-}" ;;
 	get-log-free-mb) sr_log_free_mb ;;
 	clear-logs) sr_clear_logs ;;
-	*) echo "usage: $0 {save <profile.json>|delete <name>|regen|list|get-doublevpn|get-doublevpn-current|set-doublevpn-enabled <true|false>|set-doublevpn-servers <json-array>|get-observatory-period|set-observatory-period <minutes>|get-log-enabled|set-log-enabled <true|false>|get-log-level|set-log-level <debug|info|warning|error>|get-log-cap-mb|set-log-cap-mb <mb>|get-log-free-mb|clear-logs}" >&2; exit 1 ;;
+	*) echo "usage: $0 {save <profile.json>|delete <name>|regen|regen-fast|list|get-doublevpn|get-doublevpn-current|set-doublevpn-enabled <true|false>|set-doublevpn-servers <json-array>|get-observatory-period|set-observatory-period <minutes>|get-log-enabled|set-log-enabled <true|false>|get-log-level|set-log-level <debug|info|warning|error>|get-log-cap-mb|set-log-cap-mb <mb>|get-log-free-mb|clear-logs}" >&2; exit 1 ;;
 esac

@@ -25,9 +25,12 @@ import (
 const (
 	accessLogPath   = "/tmp/xray-logs/access.log"
 	errorLogPath    = "/tmp/xray-logs/error.log"
-	logCapMBFile    = "/etc/xkeen-smartroute/state/log_cap_mb"
 	defaultLogCapMB = 10
 )
+
+// Built from srEtcDir (main.go), not hardcoded -- see its own comment for
+// why (KeeneticOS's read-only /etc).
+var logCapMBFile = srEtcDir + "/state/log_cap_mb"
 
 type logLine struct {
 	Type string `json:"type"` // "access" | "error"

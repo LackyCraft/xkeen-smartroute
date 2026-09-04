@@ -209,6 +209,10 @@ var callRedirectSetQuicProtect = rpc.declare({
 	object: 'luci.xkeen-smartroute', method: 'redirect_set_quic_protect',
 	params: ['enabled']
 });
+var callRedirectSetLeakProtect = rpc.declare({
+	object: 'luci.xkeen-smartroute', method: 'redirect_set_leak_protect',
+	params: ['enabled']
+});
 var _callListLanDevices = rpc.declare({
 	object: 'luci.xkeen-smartroute', method: 'list_lan_devices'
 });
@@ -438,8 +442,8 @@ var DICT = {
 	ks_disabled: { ru: 'Выключено', en: 'Disabled' },
 	ks_geosite_note: { ru: '(частичное покрытие для geosite — см. пояснение выше)', en: '(partial coverage for geosite — see note above)' },
 
-	prot_intro: { ru: 'Перехват LAN-трафика: без него ни один профиль/kill-switch не видит реальные пакеты устройств — это включает сам механизм, через который SmartRoute вообще может что-то маршрутизировать (свой nftables-редирект, не сломанный xkeen -ap на OpenWrt/nftables). Выключайте только для диагностики.',
-	            en: "LAN traffic capture: without it, no profile/kill-switch ever sees real device packets — this is the mechanism SmartRoute routing depends on in the first place (our own nftables redirect, not xkeen's broken -ap on OpenWrt/nftables). Only turn it off for diagnostics." },
+	prot_intro: { ru: 'Перехват LAN-трафика: без него ни один профиль/kill-switch не видит реальные пакеты устройств — это включает сам механизм, через который SmartRoute вообще может что-то маршрутизировать (свой редирект на уровне firewall роутера — nftables на OpenWrt, iptables на KeeneticOS; не сломанный xkeen -ap). Выключайте только для диагностики. Если Xray вдруг перестанет отвечать, перехват сам временно приостанавливается и трафик идёт напрямую, как без SmartRoute — если вам нужно, чтобы вместо этого пропадал интернет целиком, см. «Защита от отказа Xray» ниже.',
+	            en: "LAN traffic capture: without it, no profile/kill-switch ever sees real device packets — this is the mechanism SmartRoute routing depends on in the first place (our own firewall-level redirect — nftables on OpenWrt, iptables on KeeneticOS; not xkeen's broken -ap). Only turn it off for diagnostics. If Xray ever stops responding, capture pauses itself automatically and traffic goes out directly, as if SmartRoute weren't installed — if you'd rather lose internet entirely instead, see \"Fail-closed on Xray down\" below." },
 	prot_redirect_enabled: { ru: 'Перехват трафика включён', en: 'Traffic capture enabled' },
 	prot_ports_label: { ru: 'Порты перехвата (через запятую)', en: 'Captured ports (comma-separated)' },
 	prot_ports_placeholder: { ru: '80,443', en: '80,443' },
@@ -453,6 +457,10 @@ var DICT = {
 	prot_quic_title: { ru: 'Защита от утечек через QUIC/HTTP3', en: 'QUIC/HTTP3 leak protection' },
 	prot_quic_intro: { ru: 'Наш перехват ловит только TCP-трафик. Сайты, объявляющие поддержку HTTP/3 (заголовок Alt-Svc: h3), браузер может открыть по QUIC — это тот же порт 443, но по UDP, и он проходит мимо перехвата целиком, в обход VPN и правил. Подтверждено на практике. Эта опция блокирует исходящий UDP на перехватываемых портах с LAN — браузеры при этом просто откатываются на обычный TCP/TLS, без потери функциональности.',
 	                en: "Our redirect only catches TCP traffic. A site that advertises HTTP/3 support (Alt-Svc: h3 header) may get requested over QUIC — the same port 443, but over UDP — which bypasses the redirect entirely, VPN and rules included. Confirmed in practice. This option blocks outbound UDP on the captured ports from the LAN; browsers just fall back to plain TCP/TLS cleanly, no functionality lost." },
+	prot_leak_title: { ru: 'Защита от отказа Xray (fail-closed)', en: 'Fail-closed on Xray down' },
+	prot_leak_intro: { ru: 'По умолчанию перехват работает по принципу "мягкой" защиты: если Xray упал, редирект временно выключается сам и трафик идёт напрямую в интернет, как будто SmartRoute не установлен — вы не теряете доступ в сеть, но на время падения Xray правила профилей и kill-switch не действуют. Включите эту опцию, если вам важнее не допустить ни одного байта в обход правил, чем сохранить интернет: тогда при падении Xray перехваченные порты вместо этого будут вести на порт, который никто не слушает, соединения будут просто отклоняться — а значит, если Xray откажет полностью, интернет на этих портах пропадёт целиком, пока Xray не поднимется снова.',
+	              en: 'By default capture uses a "soft" approach: if Xray dies, the redirect switches itself off temporarily and traffic goes out directly, as if SmartRoute weren\'t installed — you keep internet access, but profile rules and the kill-switch stop applying for as long as Xray is down. Turn this on if you\'d rather guarantee zero bytes bypass the rules than keep internet working: with it on, a dead Xray leaves the captured ports pointing at a port nothing listens on, so connections are simply refused — meaning if Xray fails completely, internet on those ports disappears entirely until Xray comes back up.' },
+	prot_capture_paused: { ru: 'Xray сейчас не отвечает — перехват временно приостановлен, трафик идёт напрямую.', en: "Xray isn't responding right now — capture is temporarily paused, traffic is going out directly." },
 	prot_saving: { ru: 'Сохраняю…', en: 'Saving…' },
 	prot_saved_ok: { ru: 'Применено', en: 'Applied' },
 	prot_save_failed: { ru: 'Не удалось применить', en: 'Failed to apply' },
@@ -794,6 +802,7 @@ return L.Class.extend({
 		redirectSetDnsProtect: callRedirectSetDnsProtect,
 		redirectSetIpv6Protect: callRedirectSetIpv6Protect,
 		redirectSetQuicProtect: callRedirectSetQuicProtect,
+		redirectSetLeakProtect: callRedirectSetLeakProtect,
 		listLanDevices: callListLanDevices,
 		listSubscriptions: callListSubscriptions,
 		deleteSubscription: callDeleteSubscription,

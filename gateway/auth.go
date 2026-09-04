@@ -24,10 +24,13 @@ import (
 )
 
 const (
-	passwordHashFile  = "/etc/xkeen-smartroute/state/gateway_password_hash"
 	sessionCookieName = "sr_session"
 	sessionTTL        = 7 * 24 * time.Hour
 )
+
+// Built from srEtcDir (main.go), not hardcoded -- see its own comment for
+// why (KeeneticOS's read-only /etc).
+var passwordHashFile = srEtcDir + "/state/gateway_password_hash"
 
 // --- password storage ---
 

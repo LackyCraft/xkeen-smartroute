@@ -16,7 +16,24 @@
 # so this is a no-op for them and only matters for the rpcd path.
 export PATH="/opt/sbin:/opt/bin:$PATH"
 
-SR_ETC_DIR="/etc/xkeen-smartroute"
+# SR_PLATFORM: same detection install.sh itself uses (uname -r's "-ndm-"
+# marker -- KeeneticOS's own kernel builds are tagged "<ver>-ndm-<n>"), kept
+# here as a single reusable variable instead of every script that needs a
+# platform branch re-deriving it. /etc is a writable overlay on OpenWrt but
+# a read-only squashfs image on KeeneticOS (confirmed live: "mkdir: can't
+# create directory '/etc/xkeen-smartroute/': Read-only file system", no
+# exceptions anywhere under /etc there) -- SR_ETC_DIR follows from that the
+# same way install.sh's own copy does.
+if [ -f /etc/openwrt_release ]; then
+	SR_PLATFORM="openwrt"
+	SR_ETC_DIR="/etc/xkeen-smartroute"
+elif uname -r 2>/dev/null | grep -q -- '-ndm-'; then
+	SR_PLATFORM="keenetic"
+	SR_ETC_DIR="/opt/etc/xkeen-smartroute"
+else
+	SR_PLATFORM="openwrt"
+	SR_ETC_DIR="/etc/xkeen-smartroute"
+fi
 SR_LISTS_DIR="$SR_ETC_DIR/lists"
 SR_STATE_DIR="$SR_ETC_DIR/state"
 SR_PROFILES_DIR="$SR_ETC_DIR/profiles"
@@ -153,7 +170,7 @@ sr_apply_log_config() {
   }
 }
 EOF
-	command -v xray >/dev/null 2>&1 && pgrep -x xray >/dev/null 2>&1 && sr_restart_xray
+	command -v xray >/dev/null 2>&1 && sr_xray_pids >/dev/null 2>&1 && sr_restart_xray
 }
 
 sr_set_log_enabled() {
@@ -218,6 +235,48 @@ sr_ensure_dirs() {
 
 XRAY_ASSET_DIR="/opt/etc/xray/dat"
 XRAY_RUN_USER="xkeen"
+# NOT resolved to a full path here on purpose, even though shadow-su's `su`
+# (confirmed live: /opt/bin/su -> /opt/libexec/su-shadow, the real
+# shadow-utils su, not a busybox fallback) does NOT inherit the caller's
+# $PATH when switching to a non-root user -- it resets to login.defs'
+# ENV_PATH, which had no /opt/anything in it by default on a fresh Entware
+# install (confirmed live: "xray: not found" from inside `su -c "xray run
+# ..." "$XRAY_RUN_USER"` below, even though this process's own $PATH
+# resolves it fine). install.sh now fixes that at the source instead
+# (rewrites login.defs' ENV_PATH to include /opt/sbin:/opt/bin -- see its
+# own comment), which keeps `su -c "xray run ..." "$XRAY_RUN_USER"` below
+# actually able to find and exec xray by its bare name at all. Tried passing
+# xray's full resolved path into the su'd command directly instead of fixing
+# login.defs -- confirmed live that this broke process detection below
+# (busybox pgrep's -x apparently matches the invoked path/name as launched,
+# not just the executable's basename) badly enough that the retry loop could
+# no longer find/kill its own previous attempt before relaunching, leaving
+# multiple live xray processes stacked on the same confdir/ports at once --
+# sr_xray_pids (below) since moved off `pgrep -x` entirely for a different,
+# unrelated reason (see its own comment), but the bare-name launch here
+# stays either way, since it's what login.defs' ENV_PATH fix is actually
+# for.
+
+# sr_xray_pids: every PID that IS or WILL BECOME the xray process --
+# matches on the full command line, not `pgrep -x xray`'s exact-name-only
+# match. `su -c CMD user` exec()s straight into CMD (same PID throughout,
+# POSIX exec semantics), but /proc's own reported comm/cmdline only flips
+# from "su ..." to "xray ..." at the moment that exec actually happens, not
+# when the su invocation starts -- confirmed live, reproduced repeatedly
+# after a hard power-cycle reboot under heavy boot-time I/O contention (this
+# same su->exec transition alone measured taking several seconds under that
+# load, not instant): _sr_xray_kill_and_wait's own `pgrep -x xray || return
+# 0` fast-path can run in the exact window where a previous launch attempt's
+# process is still visibly "su", not yet "xray" -- concluding "nothing to
+# kill" and letting the caller's retry loop launch a fresh attempt on top of
+# one that was never actually dead, just not renamed yet. Reproduced this
+# exact way after a real reboot: up to 6 live xray processes stacked, each
+# one genuinely running, none of them orphaned duplicates a normal
+# `pgrep -x xray` kill would have caught. `-f 'xray run -confdir'` matches
+# both phases of the exact same PID -- it's a substring of su's own visible
+# "-c" argument during the pre-exec window, and of xray's own argv once
+# exec()'d -- so a check against this never has that same blind spot.
+sr_xray_pids() { pgrep -f 'xray run -confdir' 2>/dev/null; }
 
 # _sr_xray_validate: config must pass `xray run -test` before we touch the
 # running process either way (start or restart). A single malformed outbound
@@ -258,6 +317,78 @@ _sr_xray_validate() {
 	if [ -f "$XKEEN_CONFIGS_DIR/02_transport.json" ] && grep -q '"transport"' "$XKEEN_CONFIGS_DIR/02_transport.json" 2>/dev/null; then
 		echo '{}' >"$XKEEN_CONFIGS_DIR/02_transport.json"
 	fi
+
+	# Same self-heal family, a different cause: confirmed live these five
+	# static confdir files -- the ones install.sh writes once and nothing
+	# ever rewrites afterward -- can simply vanish from disk well after a
+	# clean install, independent of anything this project's own code does.
+	# Reproduced the trigger directly: manually swapping the Entware xray
+	# package (opkg remove xray_s; opkg install xray-core, same swap
+	# install.sh itself does on a fresh KeeneticOS install, just re-run by
+	# hand afterward) made 01/02/03/06 disappear together -- some Entware
+	# xray-related package apparently ships its own default confdir files as
+	# conffiles and resets them on install/upgrade, and 04_outbounds.json
+	# (not caught the first time this was diagnosed) went with them the same
+	# way. The visible symptom is easy to misread as something else
+	# entirely: with 04_outbounds.json specifically gone, Xray starts up
+	# clean with no validation error at all, and only fails at request time,
+	# per-connection, with "app/dispatcher: non existing outTag: direct" --
+	# every profile/balancer-tagged route still works, only the plain
+	# catch-all (untagged, non-VPN) traffic breaks. install.sh's own ordering
+	# (these files are written after opkg install xray-core, not before)
+	# already avoids this on a first install; this defends the same way
+	# 02_transport.json/the xkeen account above do against it recurring
+	# later from an out-of-band opkg upgrade this project doesn't control.
+	[ -s "$XKEEN_CONFIGS_DIR/01_log.json" ] || cat >"$XKEEN_CONFIGS_DIR/01_log.json" <<'SR_LOG_EOF'
+{
+  "log": {
+    "access": "/tmp/xray-logs/access.log",
+    "error": "/tmp/xray-logs/error.log",
+    "loglevel": "none",
+    "dnsLog": false
+  }
+}
+SR_LOG_EOF
+	[ -s "$XKEEN_CONFIGS_DIR/03_inbounds.json" ] || cat >"$XKEEN_CONFIGS_DIR/03_inbounds.json" <<'SR_INBOUNDS_EOF'
+{
+  "inbounds": [
+    {
+      "tag": "redirect",
+      "port": 61219,
+      "protocol": "dokodemo-door",
+      "settings": {
+        "network": "tcp",
+        "followRedirect": true
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": ["http", "tls", "quic"]
+      }
+    }
+  ]
+}
+SR_INBOUNDS_EOF
+	[ -s "$XKEEN_CONFIGS_DIR/04_outbounds.json" ] || echo '{"outbounds":[{"protocol":"freedom","tag":"direct"}]}' >"$XKEEN_CONFIGS_DIR/04_outbounds.json"
+	[ -s "$XKEEN_CONFIGS_DIR/06_policy.json" ] || cat >"$XKEEN_CONFIGS_DIR/06_policy.json" <<'SR_POLICY_EOF'
+{
+  "policy": {
+    "levels": {
+      "0": {
+        "connIdle": 30,
+        "statsUserUplink": true,
+        "statsUserDownlink": true
+      }
+    },
+    "system": {
+      "statsInboundUplink": true,
+      "statsInboundDownlink": true,
+      "statsOutboundUplink": true,
+      "statsOutboundDownlink": true
+    }
+  },
+  "stats": {}
+}
+SR_POLICY_EOF
 
 	# Same self-heal, same reason: install.sh creates the unprivileged
 	# "$XRAY_RUN_USER" account (_sr_xray_launch below does `su -c ... "$XRAY_RUN_USER"`)
@@ -322,6 +453,43 @@ _sr_xray_validate() {
 # whether a running process gets killed first). This busybox has neither
 # `nohup` nor `setsid`, hence the subshell + `trap '' HUP` to survive the
 # launching shell exiting.
+
+# _sr_xray_kill_and_wait: kill every running `xray` and only return once
+# pgrep -x xray genuinely shows none left (or give up and say so). Every
+# caller that stops/replaces xray used to do its own bare `kill` + a fixed
+# 10-attempt/1s poll, then proceed regardless of whether the process had
+# actually died -- confirmed live, repeatedly, on real hardware after the
+# Xray-core 26.2.6 upgrade with a real (17MB+) geoip.dat on slow USB2.0
+# storage: a freshly-started xray reading that file sits in D-state
+# (uninterruptible sleep, blocked on disk I/O) for well over 10 seconds,
+# which neither SIGTERM nor SIGKILL can interrupt until the I/O itself
+# completes -- that's a kernel guarantee, not something any signal choice
+# here can work around. The bug wasn't the signal, it was every caller
+# giving up on the wait and launching (or reporting success on) a fresh
+# xray anyway once the 10s budget ran out, while the old one was still very
+# much alive and still holding the same ports/confdir -- reproduced
+# starting at 3 simultaneous xray processes after one restart, 4 after the
+# next, each new process adding more contention for the same slow disk and
+# making the next one even more likely to blow its own 10s budget too.
+# SIGTERM first (a clean shutdown if xray isn't actually stuck), SIGKILL
+# once it's had a moment to act on that, then just keep polling -- up to
+# 60s, not 10 -- instead of ever proceeding with a live old process still
+# around. Returns non-zero (only) if xray is still there after that,
+# instead of silently returning success either way like every caller used
+# to.
+_sr_xray_kill_and_wait() {
+	sr_xray_pids >/dev/null 2>&1 || return 0
+	for pid in $(sr_xray_pids); do kill "$pid" 2>/dev/null || true; done
+	i=0
+	while sr_xray_pids >/dev/null 2>&1 && [ "$i" -lt 5 ]; do sleep 1; i=$((i + 1)); done
+	sr_xray_pids >/dev/null 2>&1 || return 0
+	for pid in $(sr_xray_pids); do kill -9 "$pid" 2>/dev/null || true; done
+	i=0
+	while sr_xray_pids >/dev/null 2>&1 && [ "$i" -lt 60 ]; do sleep 1; i=$((i + 1)); done
+	sr_xray_pids >/dev/null 2>&1 && return 1
+	return 0
+}
+
 _sr_xray_launch() {
 	attempt=1
 	while :; do
@@ -346,7 +514,7 @@ _sr_xray_launch() {
 			exec su -c "XRAY_LOCATION_ASSET='$XRAY_ASSET_DIR' xray run -confdir '$XKEEN_CONFIGS_DIR'" "$XRAY_RUN_USER" >"$SR_STATE_DIR/xray-launch.log" 2>&1 </dev/null
 		) &
 		i=0
-		while ! pgrep -x xray >/dev/null 2>&1 && [ "$i" -lt 10 ]; do sleep 1; i=$((i + 1)); done
+		while ! sr_xray_pids >/dev/null 2>&1 && [ "$i" -lt 10 ]; do sleep 1; i=$((i + 1)); done
 
 		# A second, different confdir problem from the env-var mixup above --
 		# confirmed live, reproduced on demand, on Xray-core 26.2.6 on this
@@ -428,14 +596,59 @@ _sr_xray_launch() {
 			return 0
 		fi
 		sr_log "xray's -confdir merge only read $got/$expected config files (known Xray-core confdir race), retrying ($attempt/10)"
-		for pid in $(pgrep -x xray 2>/dev/null); do kill "$pid" 2>/dev/null || true; done
-		i=0
-		while pgrep -x xray >/dev/null 2>&1 && [ "$i" -lt 10 ]; do sleep 1; i=$((i + 1)); done
+		if ! _sr_xray_kill_and_wait; then
+			sr_log "ERROR: old xray process(es) still alive after waiting -- refusing to launch another on top (this is what used to stack multiple xray processes on the same confdir/ports). Check $SR_STATE_DIR/xray-launch.log and whether disk I/O is unusually slow."
+			return 1
+		fi
 		attempt=$((attempt + 1))
 	done
 }
 
-sr_restart_xray() {
+# SR_XRAY_LOCK_DIR / _sr_xray_lock_acquire / _sr_xray_lock_release: sr_re-
+# start_xray/sr_stop_xray/sr_start_xray each used to manage the xray process
+# on their own, with no coordination between separate CALLERS of them --
+# confirmed live this is a real gap, not theoretical: genroute.sh's own
+# regen (cron every 3 minutes, see install.sh's crontab setup) calls
+# sr_restart_xray itself whenever routing/observatory actually changed, and
+# a manual restart (from the panel, or an SSH session) can land in the
+# middle of one of those. Two independent, uncoordinated restart sequences
+# each faithfully waiting for "the" old xray to die before launching a new
+# one -- just not the SAME old xray the other one is tracking -- reproduced
+# live stacking multiple live xray processes even after
+# _sr_xray_kill_and_wait's own fix above, which only guarantees no pile-up
+# within a single caller's own sequence. `mkdir` is used as the lock
+# primitive (atomic on every POSIX filesystem, no flock applet needed --
+# confirmed live not present on this Entware). Stale-lock recovery checks
+# whether the PID that created the lock is still alive rather than an
+# age/mtime threshold -- avoids needing `date`/`stat` in a timestamp format
+# that's consistent across busybox variants.
+SR_XRAY_LOCK_DIR="$SR_STATE_DIR/xray-restart.lock"
+
+_sr_xray_lock_acquire() {
+	mkdir -p "$SR_STATE_DIR" 2>/dev/null || true
+	i=0
+	while ! mkdir "$SR_XRAY_LOCK_DIR" 2>/dev/null; do
+		holder="$(cat "$SR_XRAY_LOCK_DIR/pid" 2>/dev/null || true)"
+		if [ -n "$holder" ] && ! kill -0 "$holder" 2>/dev/null; then
+			rm -rf "$SR_XRAY_LOCK_DIR"
+			continue
+		fi
+		i=$((i + 1))
+		if [ "$i" -ge 90 ]; then
+			sr_log "ERROR: another xray start/stop/restart has held the lock for 90s+ (pid ${holder:-unknown}) -- giving up rather than racing it."
+			return 1
+		fi
+		sleep 1
+	done
+	echo "$$" > "$SR_XRAY_LOCK_DIR/pid" 2>/dev/null || true
+	return 0
+}
+
+_sr_xray_lock_release() {
+	rm -rf "$SR_XRAY_LOCK_DIR" 2>/dev/null || true
+}
+
+_sr_restart_xray_impl() {
 	command -v xray >/dev/null 2>&1 || { sr_log "xray binary not found, skipping restart"; return 1; }
 	_sr_xray_validate restart || return 1
 
@@ -446,17 +659,47 @@ sr_restart_xray() {
 	# a manual kill+relaunch. Managing the process directly is what xkeen's
 	# own start routine does under the hood anyway (same user, same env,
 	# same ulimit) -- just without the KeeneticOS-specific detour.
-	for pid in $(pgrep -x xray 2>/dev/null); do kill "$pid" 2>/dev/null || true; done
-	i=0
-	while pgrep -x xray >/dev/null 2>&1 && [ "$i" -lt 10 ]; do sleep 1; i=$((i + 1)); done
+	if ! _sr_xray_kill_and_wait; then
+		sr_log "ERROR: could not stop the currently running xray -- refusing to start another on top of it. Check whether disk I/O is unusually slow (see _sr_xray_kill_and_wait's own comment)."
+		return 1
+	fi
 
-	_sr_xray_launch
-	if pgrep -x xray >/dev/null 2>&1; then
-		sr_log "xray restarted (pid $(pgrep -x xray | head -1))"
+	_sr_xray_launch || return 1
+	if sr_xray_pids >/dev/null 2>&1; then
+		sr_log "xray restarted (pid $(sr_xray_pids | head -1))"
 	else
 		sr_log "ERROR: xray did not come back up after restart -- check $SR_STATE_DIR/xray-launch.log"
 		return 1
 	fi
+}
+
+# _sr_sync_redirect_capture: re-syncs the transparent-redirect iptables/
+# nftables rule with Xray's own just-changed running state -- see
+# lib/redirect.sh's FLAG_LEAK_PROTECT comment for the full reasoning
+# (default: Xray down + leak-protect off means captured LAN traffic falls
+# through to plain direct internet instead of every device losing it
+# outright). Called after the xray lock is released, not before, so this
+# never extends how long that lock is held -- it only touches redirect's
+# own state, never xray's. Hardcoded path, not a variable this file doesn't
+# have: SR_LIB_DIR is install.sh's own name for this same fixed location
+# (/opt/share/xkeen-smartroute/lib, identical on both platforms -- the same
+# convention gateway/main.go's own genrouteScript constant already relies
+# on). `|| true`: redirect.sh missing or erroring shouldn't turn a
+# successful/failed xray operation into something this function's own
+# caller has to handle differently -- worst case here is a stale capture
+# rule until the next periodic resync (cron) or manual toggle, not a
+# cascading failure of the xray operation that actually mattered.
+_sr_sync_redirect_capture() {
+	sh /opt/share/xkeen-smartroute/lib/redirect.sh reapply >/dev/null 2>&1 || true
+}
+
+sr_restart_xray() {
+	_sr_xray_lock_acquire || return 1
+	_sr_restart_xray_impl
+	rc=$?
+	_sr_xray_lock_release
+	_sr_sync_redirect_capture
+	return $rc
 }
 
 # sr_stop_xray / sr_start_xray: explicit start/stop, not just the
@@ -464,29 +707,44 @@ sr_restart_xray() {
 # controls. Confirmed safe on real hardware to call these independently of
 # xkeen-UI/smartroute-gateway in any order: neither of those two crashes or
 # hangs when Xray is down, they just show it as stopped.
-sr_stop_xray() {
-	for pid in $(pgrep -x xray 2>/dev/null); do kill "$pid" 2>/dev/null || true; done
-	i=0
-	while pgrep -x xray >/dev/null 2>&1 && [ "$i" -lt 10 ]; do sleep 1; i=$((i + 1)); done
-	if pgrep -x xray >/dev/null 2>&1; then
+_sr_stop_xray_impl() {
+	if ! _sr_xray_kill_and_wait; then
 		sr_log "ERROR: xray did not stop"
 		return 1
 	fi
 	sr_log "xray stopped"
 }
 
-sr_start_xray() {
+sr_stop_xray() {
+	_sr_xray_lock_acquire || return 1
+	_sr_stop_xray_impl
+	rc=$?
+	_sr_xray_lock_release
+	_sr_sync_redirect_capture
+	return $rc
+}
+
+_sr_start_xray_impl() {
 	command -v xray >/dev/null 2>&1 || { sr_log "xray binary not found, skipping start"; return 1; }
-	if pgrep -x xray >/dev/null 2>&1; then
+	if sr_xray_pids >/dev/null 2>&1; then
 		sr_log "xray already running"
 		return 0
 	fi
 	_sr_xray_validate start || return 1
-	_sr_xray_launch
-	if pgrep -x xray >/dev/null 2>&1; then
-		sr_log "xray started (pid $(pgrep -x xray | head -1))"
+	_sr_xray_launch || return 1
+	if sr_xray_pids >/dev/null 2>&1; then
+		sr_log "xray started (pid $(sr_xray_pids | head -1))"
 	else
 		sr_log "ERROR: xray did not come up -- check $SR_STATE_DIR/xray-launch.log"
 		return 1
 	fi
+}
+
+sr_start_xray() {
+	_sr_xray_lock_acquire || return 1
+	_sr_start_xray_impl
+	rc=$?
+	_sr_xray_lock_release
+	_sr_sync_redirect_capture
+	return $rc
 }

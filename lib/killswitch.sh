@@ -206,6 +206,19 @@ ks_rebuild_dnsmasq() {
 }
 
 ks_check_dnsmasq_capability() {
+	if [ "$SR_PLATFORM" != "openwrt" ]; then
+		# Fails the same way (sr_die, before anything is armed) as the
+		# OpenWrt-missing-dnsmasq-full case below either way -- this is
+		# just a clearer message for it. KeeneticOS has no system dnsmasq
+		# at all (its own DNS is NDM-managed, not dnsmasq-based), so
+		# without this the generic message below ("install dnsmasq-full")
+		# would send a KeeneticOS user chasing an opkg package that has
+		# nothing to do with why this actually doesn't work there -- the
+		# REJECT rule half of hard kill-switch is built on the same
+		# fw4/nftables.d this project's lib/redirect.sh needs (see its own
+		# platform check), which KeeneticOS doesn't have either.
+		sr_die "жёсткий kill-switch пока поддержан только на OpenWrt -- на KeeneticOS нет ни системного dnsmasq, ни fw4/nftables.d, на которых он построен. / hard kill-switch is OpenWrt-only for now -- KeeneticOS has neither a system dnsmasq nor the fw4/nftables.d this relies on."
+	fi
 	dnsmasq --version 2>/dev/null | grep -q ' ipset\| nftset' \
 		|| sr_die "system dnsmasq lacks ipset/nftset support -- install dnsmasq-full (opkg remove dnsmasq && opkg install dnsmasq-full) to use the hard kill-switch"
 }
