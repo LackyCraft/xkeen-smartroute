@@ -52,14 +52,36 @@ jobs:
           gzip -k "$out"
           echo "ASSET=gateway/${out}.gz" >> "$GITHUB_ENV"
 
+      # Pulls this exact version's own section out of CHANGELOG.md (between
+      # its "## [X.Y.Z]" heading and the next one) instead of a generic
+      # "see CHANGELOG.md" pointer -- opening a release used to always mean
+      # a second trip to the changelog to find out what actually changed.
+      # Requires the tag's own CHANGELOG.md entry to already exist in this
+      # commit (docs/release-process.md's own step order already puts the
+      # changelog commit before the tag).
+      - name: Extract this version's changelog section
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          awk -v ver="$version" '
+            /^## \[/ {
+              if (found) exit
+              if ($0 ~ "^## \\[" ver "\\]") { found=1; next }
+              next
+            }
+            found { print }
+          ' CHANGELOG.md > release_notes.md
+          if [ ! -s release_notes.md ]; then
+            echo "См. CHANGELOG.md для списка изменений этой версии." > release_notes.md
+            echo "" >> release_notes.md
+            echo "See CHANGELOG.md for this version's changelog." >> release_notes.md
+          fi
+          cat release_notes.md
+
       - name: Publish versioned release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           name: "XKeen SmartRoute ${{ github.ref_name }}"
-          body: |
-            См. CHANGELOG.md для списка изменений этой версии.
-
-            See CHANGELOG.md for this version's changelog.
+          body_path: release_notes.md
           prerelease: false
           files: ${{ env.ASSET }}
