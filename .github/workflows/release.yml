@@ -62,10 +62,17 @@ jobs:
       - name: Extract this version's changelog section
         run: |
           version="${GITHUB_REF_NAME#v}"
+          # Plain string matching (index()), not a regex match against a
+          # dynamically-built pattern -- confirmed live that gawk mangles
+          # `\[`/`\]` escapes built via string concatenation into a -v
+          # variable (silent "escape sequence treated as plain" warning,
+          # and the match never fires), even though the exact same
+          # brackets work fine in a literal /.../ regex.
           awk -v ver="$version" '
-            /^## \[/ {
+            BEGIN { target = "## [" ver "]" }
+            index($0, "## [") == 1 {
               if (found) exit
-              if ($0 ~ "^## \\[" ver "\\]") { found=1; next }
+              if (index($0, target) == 1) { found=1; next }
               next
             }
             found { print }
