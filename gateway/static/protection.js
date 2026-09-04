@@ -9,7 +9,9 @@
 		var dnsToggle = E('input', { type: 'checkbox' });
 		var ipv6Toggle = E('input', { type: 'checkbox' });
 		var quicToggle = E('input', { type: 'checkbox' });
+		var leakToggle = E('input', { type: 'checkbox' });
 		var portsInput = E('input', { type: 'text', class: 'sr-input', style: 'max-width:160px', placeholder: T('prot_ports_placeholder') });
+		var captureStatus = E('p', { class: 'sr-desc' });
 
 		function applyStatus(status) {
 			if (!status) return;
@@ -17,7 +19,14 @@
 			dnsToggle.checked = !!status.dns_protect;
 			ipv6Toggle.checked = !!status.ipv6_protect;
 			quicToggle.checked = !!status.quic_protect;
+			leakToggle.checked = !!status.leak_protect;
 			if (typeof status.ports === 'string') portsInput.value = status.ports;
+			if (status.enabled && status.xray_up === false && !status.capture_active) {
+				captureStatus.textContent = T('prot_capture_paused');
+				captureStatus.hidden = false;
+			} else {
+				captureStatus.hidden = true;
+			}
 		}
 
 		// applyOrRevert: on failure (redirect.sh's rd_write can genuinely
@@ -55,6 +64,11 @@
 			ev.target.disabled = true;
 			api.redirectSetQuicProtect(ev.target.checked).then(function (status) { ev.target.disabled = false; applyOrRevert(ev, wasChecked, status); });
 		});
+		leakToggle.addEventListener('change', function (ev) {
+			var wasChecked = !ev.target.checked;
+			ev.target.disabled = true;
+			api.redirectSetLeakProtect(ev.target.checked).then(function (status) { ev.target.disabled = false; applyOrRevert(ev, wasChecked, status); });
+		});
 
 		var savePortsBtn = E('button', { class: 'sr-btn sr-btn-sm' }, T('prot_ports_save'));
 		savePortsBtn.addEventListener('click', function (ev) {
@@ -72,7 +86,8 @@
 
 			E('div', { class: 'sr-card' }, [
 				E('p', {}, T('prot_intro')),
-				E('label', { class: 'sr-row' }, [enabledToggle, ' ', T('prot_redirect_enabled')])
+				E('label', { class: 'sr-row' }, [enabledToggle, ' ', T('prot_redirect_enabled')]),
+				captureStatus
 			]),
 			E('div', { class: 'sr-card' }, [
 				E('label', { class: 'sr-label' }, T('prot_ports_label')),
@@ -92,6 +107,11 @@
 				E('h3', {}, T('prot_quic_title')),
 				E('p', { class: 'sr-desc' }, T('prot_quic_intro')),
 				E('label', { class: 'sr-row' }, [quicToggle, ' ', T('prot_quic_title')])
+			]),
+			E('div', { class: 'sr-card' }, [
+				E('h3', {}, T('prot_leak_title')),
+				E('p', { class: 'sr-desc' }, T('prot_leak_intro')),
+				E('label', { class: 'sr-row' }, [leakToggle, ' ', T('prot_leak_title')])
 			])
 		]));
 

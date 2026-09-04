@@ -24,6 +24,18 @@ import (
 
 const genrouteScript = "/opt/share/xkeen-smartroute/lib/genroute.sh"
 
+// srEtcDir: where SmartRoute's own state/profiles/lists live. Plain
+// /etc/xkeen-smartroute on OpenWrt (its /etc is a writable overlay), but
+// KeeneticOS's /etc is a read-only squashfs -- confirmed live: "mkdir: can't
+// create directory '/etc/xkeen-smartroute/': Read-only file system", no
+// exceptions, no writable subpath anywhere under /etc there. install.sh sets
+// SR_ETC_DIR to /opt/etc/xkeen-smartroute on that platform (/opt already
+// being the one writable location everything else -- Entware, xray, this
+// binary itself -- lives under) and exports it for this process to read;
+// every other file in this package builds its own state-file paths from
+// this var instead of hardcoding the OpenWrt-only prefix.
+var srEtcDir = envOr("SR_ETC_DIR", "/etc/xkeen-smartroute")
+
 func main() {
 	listenAddr := envOr("SR_GATEWAY_LISTEN", "0.0.0.0:9095")
 	xrayAddr := envOr("SR_GATEWAY_XRAY_API", "127.0.0.1:10085")
@@ -71,7 +83,7 @@ func main() {
 	mux.HandleFunc("GET /logs", logsWSHandler())
 
 	if staticDir != "" {
-		mux.Handle("/", noCacheStatic(http.FileServer(http.Dir(staticDir))))
+		mux.Handle("/", http.FileServer(http.Dir(staticDir)))
 	}
 
 	log.Printf("smartroute-gateway listening on %s (xray api %s, static %q, rpcd %q)", listenAddr, xrayAddr, staticDir, rpcdScript)
@@ -86,7 +98,7 @@ func main() {
 	// (main.go/logs.go) pick up afterward.
 	srv := &http.Server{
 		Addr:              listenAddr,
-		Handler:           corsWrap(requireAuth(mux)),
+		Handler:           noCache(corsWrap(requireAuth(mux))),
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       120 * time.Second,
 		MaxHeaderBytes:    1 << 20, // 1MB
@@ -94,22 +106,33 @@ func main() {
 	log.Fatal(srv.ListenAndServe())
 }
 
-// noCacheStatic forces every static asset to revalidate with the server on
-// every load instead of a browser trusting its own heuristic cache -- Go's
-// plain http.FileServer sets no Cache-Control at all, so a browser that
-// already has a copy of e.g. doublevpn.js can keep serving it verbatim for
-// an arbitrary amount of time after a redeploy, with no way to tell it's
-// stale short of a manual hard refresh. Confirmed live: server-side data,
-// the rpcd script, and the deployed JS file all matched exactly, yet the
-// panel still rendered stale state -- the browser's own cached copy of the
-// JS was the only thing left that could explain it.
+// noCache forces every response -- static assets AND the JSON/WS API alike
+// -- to revalidate with the server on every load instead of a browser
+// trusting its own heuristic cache. Used to be scoped to just the static
+// file server (Go's plain http.FileServer sets no Cache-Control at all, so
+// a browser that already had a copy of e.g. doublevpn.js could keep serving
+// it verbatim for an arbitrary amount of time after a redeploy -- confirmed
+// live once already: server-side data, the rpcd script, and the deployed JS
+// file all matched exactly, yet the panel still rendered stale state, the
+// browser's own cached copy of the JS was the only thing left that could
+// explain it). Narrowing it to only the static handler left every plain
+// `mux.HandleFunc` route -- /activity, /proxies, /version, all of it --
+// with zero cache headers of their own, which turned out to be the same bug
+// one layer up: confirmed live on KeeneticOS, the Profiles page's "online
+// now" dot and the freshly-added-profile state could both sit stale in the
+// browser until a manual reload, even though the gateway's own /activity
+// response had already moved on. Applied at the outermost layer (wraps
+// corsWrap, not just the static mux.Handle) so no future route can forget
+// this the way the old per-handler version already did once.
 //
 // "no-cache" (not "no-store") still lets the browser keep a local copy, it
 // just can't use it without asking first -- http.FileServer already sets
-// Last-Modified/ETag and answers a conditional GET with a bare 304, so a
-// revalidation that finds nothing changed costs one small round trip, not a
-// full re-download.
-func noCacheStatic(h http.Handler) http.Handler {
+// Last-Modified/ETag and answers a conditional GET with a bare 304 when
+// nothing changed, so revalidating a static asset costs one small round
+// trip, not a full re-download; the JSON/WS routes set no such validator, so
+// a revalidation there is just an ordinary fresh fetch every time -- exactly
+// the point, given how quickly this data is expected to change.
+func noCache(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-cache")
 		h.ServeHTTP(w, r)

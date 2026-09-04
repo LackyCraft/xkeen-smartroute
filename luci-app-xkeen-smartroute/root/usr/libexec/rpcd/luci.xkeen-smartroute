@@ -14,11 +14,26 @@
 # fallback swallows the failure silently, so list_* methods (subscriptions,
 # servers, profiles, categories, ...) come back as an empty array instead
 # of erroring -- looks exactly like "no data" in the UI, not like a bug.
-# Same fix lib/common.sh already applies for the same reason.
-export PATH="/opt/sbin:/opt/bin:$PATH"
-
+#
+# LIB_DIR itself was already platform-neutral (/opt, same on both), but
+# SR_ETC_DIR used to be a second, independent copy of the plain OpenWrt
+# "/etc/xkeen-smartroute" hardcode lib/common.sh has its own platform check
+# for (KeeneticOS's /etc is a read-only squashfs image, confirmed live --
+# see common.sh's own comment) -- meaning this script silently pointed at a
+# path that can never exist on KeeneticOS even after install.sh and every
+# lib/*.sh script this file execs already agreed on the real one. Sourcing
+# common.sh instead of re-declaring both PATH and SR_ETC_DIR here keeps
+# this file from being a third place that same platform check has to be
+# kept in sync by hand.
 LIB_DIR="/opt/share/xkeen-smartroute/lib"
-SR_ETC_DIR="/etc/xkeen-smartroute"
+# Guarded, not unconditional: `list` (the ubus method schema dump below)
+# used to work even before/without an install (common.sh missing) -- only
+# `call` ever gated itself on common.sh being present, via the existing
+# `[ -x "$LIB_DIR/common.sh" ]` check further down. Sourcing it
+# unconditionally here would turn that soft "not_installed" JSON error into
+# a hard shell failure for `list` too.
+# shellcheck source=/dev/null
+[ -r "$LIB_DIR/common.sh" ] && . "$LIB_DIR/common.sh"
 
 json_err() { printf '{"error":"%s"}\n' "$1"; }
 
@@ -92,6 +107,7 @@ case "$1" in
 	"redirect_set_dns_protect": {"enabled":"bool1"},
 	"redirect_set_ipv6_protect": {"enabled":"bool1"},
 	"redirect_set_quic_protect": {"enabled":"bool1"},
+	"redirect_set_leak_protect": {"enabled":"bool1"},
 	"list_lan_devices": {},
 	"list_subscriptions": {},
 	"list_custom_lists": {},
@@ -468,7 +484,7 @@ EOF
 				;;
 			redirect_status)
 				out="$(sh "$LIB_DIR/redirect.sh" status 2>/dev/null)"
-				[ -n "$out" ] || out='{"enabled":false,"dns_protect":false,"ipv6_protect":false,"ports":"80,443"}'
+				[ -n "$out" ] || out='{"enabled":false,"dns_protect":false,"ipv6_protect":false,"quic_protect":false,"leak_protect":false,"xray_up":false,"capture_active":false,"ports":"80,443"}'
 				printf '%s' "$out"
 				;;
 			redirect_set_enabled)
@@ -508,6 +524,14 @@ EOF
 			redirect_set_quic_protect)
 				enabled="$(echo "$args" | jq -r '.enabled // false')"
 				if sh "$LIB_DIR/redirect.sh" quic-protect "$([ "$enabled" = "true" ] && echo on || echo off)" >/tmp/sr_redirect.log 2>&1; then
+					sh "$LIB_DIR/redirect.sh" status 2>/dev/null
+				else
+					jq -n --arg log "$(cat /tmp/sr_redirect.log)" '{error:"redirect_failed", detail:$log}'
+				fi
+				;;
+			redirect_set_leak_protect)
+				enabled="$(echo "$args" | jq -r '.enabled // false')"
+				if sh "$LIB_DIR/redirect.sh" leak-protect "$([ "$enabled" = "true" ] && echo on || echo off)" >/tmp/sr_redirect.log 2>&1; then
 					sh "$LIB_DIR/redirect.sh" status 2>/dev/null
 				else
 					jq -n --arg log "$(cat /tmp/sr_redirect.log)" '{error:"redirect_failed", detail:$log}'

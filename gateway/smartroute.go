@@ -10,11 +10,13 @@ import (
 // LuCI app use, so there is exactly one source of truth for server/profile
 // state, not a second copy the gateway could drift out of sync with.
 
-const (
-	serversFile = "/etc/xkeen-smartroute/state/servers.json"
-	pingFile    = "/etc/xkeen-smartroute/state/ping.json"
-	currentFile = "/etc/xkeen-smartroute/state/current.json"
-	profilesDir = "/etc/xkeen-smartroute/profiles"
+// Built from srEtcDir (main.go), not hardcoded -- see its own comment for
+// why (KeeneticOS's read-only /etc).
+var (
+	serversFile = srEtcDir + "/state/servers.json"
+	pingFile    = srEtcDir + "/state/ping.json"
+	currentFile = srEtcDir + "/state/current.json"
+	profilesDir = srEtcDir + "/profiles"
 )
 
 type srServer struct {

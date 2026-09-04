@@ -68,6 +68,16 @@ return view.extend({
 		});
 	},
 
+	handleLeakToggle: function (ev) {
+		var view = this;
+		var wasChecked = !ev.target.checked;
+		ev.target.disabled = true;
+		return sr.rpc.redirectSetLeakProtect(ev.target.checked).then(function (status) {
+			ev.target.disabled = false;
+			view.applyOrRevert(ev, wasChecked, status);
+		});
+	},
+
 	handleSavePorts: function (ev) {
 		var view = this;
 		var ports = view.portsInput.value.trim();
@@ -89,7 +99,16 @@ return view.extend({
 		if (this.dnsToggle) this.dnsToggle.checked = !!status.dns_protect;
 		if (this.ipv6Toggle) this.ipv6Toggle.checked = !!status.ipv6_protect;
 		if (this.quicToggle) this.quicToggle.checked = !!status.quic_protect;
+		if (this.leakToggle) this.leakToggle.checked = !!status.leak_protect;
 		if (this.portsInput && typeof status.ports === 'string') this.portsInput.value = status.ports;
+		if (this.captureStatus) {
+			if (status.enabled && status.xray_up === false && !status.capture_active) {
+				this.captureStatus.textContent = sr.T('prot_capture_paused');
+				this.captureStatus.style.display = '';
+			} else {
+				this.captureStatus.style.display = 'none';
+			}
+		}
 	},
 
 	render: function (status) {
@@ -112,6 +131,12 @@ return view.extend({
 		view.quicToggle.checked = !!status.quic_protect;
 		view.quicToggle.addEventListener('change', function (ev) { view.handleQuicToggle(ev); });
 
+		view.leakToggle = E('input', { 'type': 'checkbox' });
+		view.leakToggle.checked = !!status.leak_protect;
+		view.leakToggle.addEventListener('change', function (ev) { view.handleLeakToggle(ev); });
+
+		view.captureStatus = E('p', { 'class': 'cbi-value-description', 'style': 'display:none' });
+
 		view.portsInput = E('input', {
 			'type': 'text',
 			'class': 'cbi-input-text',
@@ -132,7 +157,8 @@ return view.extend({
 					view.enabledToggle,
 					' ',
 					sr.T('prot_redirect_enabled')
-				])
+				]),
+				view.captureStatus
 			]),
 
 			E('div', { 'style': BOX_STYLE }, [
@@ -170,6 +196,16 @@ return view.extend({
 					view.quicToggle,
 					' ',
 					sr.T('prot_quic_title')
+				])
+			]),
+
+			E('div', { 'style': BOX_STYLE }, [
+				E('h3', { 'style': 'margin-top:0' }, sr.T('prot_leak_title')),
+				E('p', { 'class': 'cbi-value-description' }, sr.T('prot_leak_intro')),
+				E('label', { 'class': 'cbi-value' }, [
+					view.leakToggle,
+					' ',
+					sr.T('prot_leak_title')
 				])
 			])
 		]);
