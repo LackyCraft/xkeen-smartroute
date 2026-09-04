@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log"
 	"os"
+	"os/exec"
 	"time"
 )
 
@@ -42,11 +43,22 @@ func startFailoverLoop(xc *xrayClient) {
 	ticker := time.NewTicker(failoverInterval)
 	go func() {
 		defer ticker.Stop()
-		wasFailing := false
+		st := &failoverState{prevAlive: map[string]bool{}}
 		for range ticker.C {
-			wasFailing = runFailoverTick(xc, wasFailing)
+			runFailoverTick(xc, st)
 		}
 	}()
+}
+
+// failoverState carries everything that needs to persist between ticks of
+// the same ticker goroutine -- kept as one struct (instead of loose
+// variables threaded through return values, the original wasFailing-only
+// shape) once triggerFastRegenOnDeadPick needed its own carry-over state
+// too.
+type failoverState struct {
+	wasFailing    bool
+	prevAlive     map[string]bool // outbound tag -> alive, as of the previous tick
+	lastRegenFast time.Time
 }
 
 // runFailoverTick logs a queryOutboundHealth failure only on the
@@ -56,16 +68,14 @@ func startFailoverLoop(xc *xrayClient) {
 // 07_observatory.smartroute.json for ObservatoryService to report against,
 // see lib/genroute.sh), this ran at failoverInterval forever, ~4300 log
 // lines/day for a condition that was never going away and never needed
-// repeating. wasFailing (this tick's outcome) is threaded through the
-// caller's loop variable rather than a package global so state stays
-// scoped to this one ticker goroutine.
-func runFailoverTick(xc *xrayClient, wasFailing bool) bool {
+// repeating.
+func runFailoverTick(xc *xrayClient, st *failoverState) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	health, err := xc.queryOutboundHealth(ctx)
 	if err != nil {
-		if !wasFailing {
+		if !st.wasFailing {
 			// Most commonly means no balancer-mode profile exists yet
 			// (07_observatory.smartroute.json isn't written, see
 			// lib/genroute.sh) so ObservatoryService has nothing to report
@@ -74,12 +84,15 @@ func runFailoverTick(xc *xrayClient, wasFailing bool) bool {
 			// or Xray's API isn't reachable at all.
 			log.Printf("failover: queryOutboundHealth: %v", err)
 		}
-		return true
+		st.wasFailing = true
+		return
 	}
-	if wasFailing {
+	if st.wasFailing {
 		log.Printf("failover: queryOutboundHealth recovered")
 	}
+	st.wasFailing = false
 	persistHealth(health)
+	triggerFastRegenOnDeadPick(health, st)
 
 	// reconcileBalancer (below, commented out) is currently dead: it patches
 	// a gap in Xray's native `leastPing` balancer, but genroute.sh stopped
@@ -108,7 +121,61 @@ func runFailoverTick(xc *xrayClient, wasFailing bool) bool {
 	// 	}
 	// 	reconcileBalancer(ctx, xc, "bal_"+p.Name, p.Servers, health)
 	// }
-	return false
+}
+
+// regenFastCooldown rate-limits how often triggerFastRegenOnDeadPick can
+// fire genroute.sh regen-fast -- each call still costs a real Xray restart
+// (regen-fast only skips the fresh-ping pass, see genroute.sh's own
+// comment), so a pool with no healthy candidate left at all doesn't restart
+// Xray on every single failoverInterval tick forever.
+const regenFastCooldown = 30 * time.Second
+
+// triggerFastRegenOnDeadPick reacts the moment ObservatoryService flags a
+// profile's *currently active* pick (current.json, written by
+// lib/genroute.sh's sr_pick_top1) as dead, instead of waiting for the next
+// plain 3-minute cron "regen" -- see genroute.sh's own regen-fast comment
+// for why skipping the fresh ping pass here is correct (this call already
+// has the fresh verdict that triggered it). Edge-triggered, not
+// level-triggered: it only fires the tick a tag's alive state actually
+// flips to false, not on every tick it stays that way -- a pool with
+// nothing healthy left would otherwise trigger a restart every tick
+// forever for no gain, since sr_pick_top1 has no better candidate to switch
+// to either way.
+func triggerFastRegenOnDeadPick(health map[string]outboundHealth, st *failoverState) {
+	newAlive := make(map[string]bool, len(health))
+	for tag, h := range health {
+		newAlive[tag] = h.Alive
+	}
+
+	current, err := loadCurrent()
+	if err != nil {
+		st.prevAlive = newAlive
+		return
+	}
+
+	deadNow := false
+	for _, tag := range current {
+		h, known := health[tag]
+		if !known || h.Alive {
+			continue
+		}
+		if wasAlive, seen := st.prevAlive[tag]; !seen || wasAlive {
+			deadNow = true
+		}
+	}
+	st.prevAlive = newAlive
+
+	if !deadNow || time.Since(st.lastRegenFast) < regenFastCooldown {
+		return
+	}
+	st.lastRegenFast = time.Now()
+	go func() {
+		if out, err := exec.Command("sh", genrouteScript, "regen-fast").CombinedOutput(); err != nil {
+			log.Printf("failover: regen-fast: %v: %s", err, out)
+		} else {
+			log.Printf("failover: regen-fast triggered (an active pick went dead)")
+		}
+	}()
 }
 
 // reconcileBalancer -- DISABLED, see the comment in runFailoverTick above.

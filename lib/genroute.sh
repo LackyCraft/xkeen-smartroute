@@ -626,6 +626,16 @@ case "${1:-}" in
 		sr_regen 1
 		;;
 	regen) sr_regen ;;
+	# regen-fast: same as "regen" but skips the fresh network-bound ping
+	# pass (see sr_pick_top1's own comment on why skip_fresh_ping exists --
+	# same tradeoff "save"/"delete" already make). Used by the gateway's
+	# own failover loop (failover.go) to react immediately when
+	# ObservatoryService flags a profile's *currently active* pick dead,
+	# instead of waiting for the plain 3-minute cron "regen" -- it already
+	# has a fresh health.json verdict from the very tick that triggered
+	# this call, a new TCP ping pass would add tens of seconds for no new
+	# information.
+	regen-fast) sr_regen 1 ;;
 	list)
 		sr_ensure_dirs
 		if ls "$SR_PROFILES_DIR"/*.json >/dev/null 2>&1; then
@@ -671,5 +681,5 @@ case "${1:-}" in
 	set-log-cap-mb) sr_set_log_cap_mb "${2:-}" ;;
 	get-log-free-mb) sr_log_free_mb ;;
 	clear-logs) sr_clear_logs ;;
-	*) echo "usage: $0 {save <profile.json>|delete <name>|regen|list|get-doublevpn|get-doublevpn-current|set-doublevpn-enabled <true|false>|set-doublevpn-servers <json-array>|get-observatory-period|set-observatory-period <minutes>|get-log-enabled|set-log-enabled <true|false>|get-log-level|set-log-level <debug|info|warning|error>|get-log-cap-mb|set-log-cap-mb <mb>|get-log-free-mb|clear-logs}" >&2; exit 1 ;;
+	*) echo "usage: $0 {save <profile.json>|delete <name>|regen|regen-fast|list|get-doublevpn|get-doublevpn-current|set-doublevpn-enabled <true|false>|set-doublevpn-servers <json-array>|get-observatory-period|set-observatory-period <minutes>|get-log-enabled|set-log-enabled <true|false>|get-log-level|set-log-level <debug|info|warning|error>|get-log-cap-mb|set-log-cap-mb <mb>|get-log-free-mb|clear-logs}" >&2; exit 1 ;;
 esac
