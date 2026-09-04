@@ -22,16 +22,24 @@
 #      the primary UI on KeeneticOS, since there's no LuCI there.
 #   6. Sets up a cron job to refresh geosite/geoip data periodically.
 #
-# Kill-switch and transparent redirect (lib/killswitch.sh, lib/redirect.sh)
-# depend on OpenWrt's uci/fw4/nftables firewall integration and are OpenWrt-only
-# for now -- skipped with a warning on KeeneticOS, pending a native NDM-firewall
-# port.
+# Transparent redirect (lib/redirect.sh) has a real backend on both
+# platforms -- nftables/fw4 on OpenWrt, legacy iptables/ip6tables on
+# KeeneticOS (that's what KeeneticOS's own NDM firewall already runs on
+# too, confirmed live). The hard, per-profile kill-switch
+# (lib/killswitch.sh) is still OpenWrt-only -- it's built on system
+# dnsmasq's ipset/nftset support and fw4/nftables.d, neither of which
+# KeeneticOS has; skipped there with a warning, pending a native
+# NDM-firewall port (a separate, larger task).
 #
 # Safe to re-run (idempotent): existing installs are detected and skipped/updated.
 
 set -eu
 
-REPO_RAW="https://raw.githubusercontent.com/LackyCraft/xkeen-smartroute/master"
+# Overridable via env for testing an unmerged branch end-to-end before it
+# reaches master (e.g. `REPO_RAW=.../feature/some-branch sh install.sh`) --
+# every other install.sh invocation, including the documented one-liners
+# above, leaves this at its default.
+REPO_RAW="${REPO_RAW:-https://raw.githubusercontent.com/LackyCraft/xkeen-smartroute/master}"
 GATEWAY_RELEASE_BASE="https://github.com/LackyCraft/xkeen-smartroute/releases/download/gateway-latest"
 XKEEN_INSTALL_URL="https://raw.githubusercontent.com/Skrill0/XKeen/main/install.sh"
 XKEEN_UI_REPO="zxc-rv/XKeen-UI"
