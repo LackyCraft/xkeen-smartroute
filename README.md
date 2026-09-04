@@ -191,7 +191,7 @@ README — обзор для установки и настройки. Техн�
 | [doublevpn.md](docs/functionality_doc/doublevpn.md) | Double VPN: релей через шлюз, `sockopt.dialerProxy` |
 | [domain-lists.md](docs/functionality_doc/domain-lists.md) | Автообновление списков доменов, которых нет в geosite |
 | [leak-protection.md](docs/functionality_doc/leak-protection.md) | nftables, почему не `xkeen -ap`, DNS/IPv6/QUIC изнутри |
-| [kill-switch.md](docs/functionality_doc/kill-switch.md) | dnsmasq+ipset+nftables изнутри, пробел с `ip_ranges` |
+| [kill-switch.md](docs/functionality_doc/kill-switch.md) | dnsmasq+ipset+nftables/iptables изнутри (OpenWrt и KeeneticOS), пробел с `ip_ranges` |
 | [gateway-architecture.md](docs/functionality_doc/gateway-architecture.md) | Устройство панели, почему не Mihomo |
 | [gateway-telemetry.md](docs/functionality_doc/gateway-telemetry.md) | gRPC-клиент, health-polling, «online now», трафик по профилю |
 | [rpc-bridge.md](docs/functionality_doc/rpc-bridge.md) | rpcd как общий backend LuCI и панели |
