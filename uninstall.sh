@@ -14,10 +14,12 @@ log() { echo "[xkeen-smartroute] $*"; }
 SR_SHARE_DIR="/opt/share/xkeen-smartroute"
 SR_LIB_DIR="$SR_SHARE_DIR/lib"
 if [ -f /etc/openwrt_release ] || ! uname -r 2>/dev/null | grep -q -- '-ndm-'; then
+	PLATFORM="openwrt"
 	SR_ETC_DIR="/etc/xkeen-smartroute"
 else
 	# KeeneticOS's /etc is read-only -- install.sh puts this under /opt/etc
 	# there instead, see its own platform-detection comment for why.
+	PLATFORM="keenetic"
 	SR_ETC_DIR="/opt/etc/xkeen-smartroute"
 fi
 
@@ -71,16 +73,35 @@ fi
 # make sure nothing is left listening on the panel port regardless.
 for pid in $(pgrep -f "$SR_SHARE_DIR/gateway" 2>/dev/null); do kill "$pid" 2>/dev/null || true; done
 rm -f /opt/etc/init.d/S98smartroute-gateway
+# KeeneticOS-only boot hook (install.sh) that reapplies redirect.sh's
+# iptables rules on every boot -- see this file's own comment on the
+# redirect teardown above for why KeeneticOS needs this at all.
+rm -f /opt/etc/init.d/S97smartroute-redirect
 
-log "Удаляю правило перехвата трафика (nftables)... / Removing the traffic-capture nftables rule..."
-# lib/redirect.sh's managed .nft file -- fw4 loads every *.nft under
-# /etc/nftables.d/ on every boot/reload regardless of whether SmartRoute
-# itself is still installed. Left behind with capture enabled, this keeps
-# redirecting LAN DNS/TCP 80+443 to a now-deleted xray inbound and keeps
-# dropping all LAN->WAN IPv6 forever -- an uninstalled SmartRoute would
-# otherwise leave the router's internet access silently half-broken instead
-# of restoring plain routing.
-rm -f /etc/nftables.d/20-xkeen-smartroute-redirect.nft
+log "Удаляю правило перехвата трафика... / Removing the traffic-capture rule..."
+if [ "$PLATFORM" = "openwrt" ]; then
+	# lib/redirect.sh's managed .nft file -- fw4 loads every *.nft under
+	# /etc/nftables.d/ on every boot/reload regardless of whether SmartRoute
+	# itself is still installed. Left behind with capture enabled, this keeps
+	# redirecting LAN DNS/TCP 80+443 to a now-deleted xray inbound and keeps
+	# dropping all LAN->WAN IPv6 forever -- an uninstalled SmartRoute would
+	# otherwise leave the router's internet access silently half-broken
+	# instead of restoring plain routing.
+	rm -f /etc/nftables.d/20-xkeen-smartroute-redirect.nft
+elif [ -x "$SR_LIB_DIR/redirect.sh" ]; then
+	# KeeneticOS has no equivalent managed-file-that-just-stops-loading --
+	# rd_write_iptables builds live iptables/ip6tables chains at runtime, so
+	# they have to be torn down explicitly while redirect.sh (about to be
+	# deleted below) still exists, or they'd keep redirecting LAN traffic to
+	# a now-gone xray inbound (and, if ipv6-protect was ever turned on,
+	# keep dropping all LAN->WAN IPv6) forever after "uninstall". "disable"
+	# alone tears down the redirect/dns/quic chains regardless of their own
+	# flags (see rd_write_iptables's own comment), but ipv6-protect is
+	# intentionally independent of the main enabled flag, so it needs its
+	# own explicit "off" first.
+	sh "$SR_LIB_DIR/redirect.sh" ipv6-protect off >/dev/null 2>&1 || true
+	sh "$SR_LIB_DIR/redirect.sh" disable >/dev/null 2>&1 || true
+fi
 
 log "Удаляю библиотеки и cron-задачи... / Removing libraries and cron jobs..."
 rm -rf "$SR_SHARE_DIR"
