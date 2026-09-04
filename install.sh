@@ -427,7 +427,30 @@ if [ "$PLATFORM" != "openwrt" ] && opkg list-installed 2>/dev/null | grep -q '^x
 	xkeen -ri >/dev/null 2>&1 || true
 fi
 log "Проверяю, что Xray — сборка из Entware (совместимая с этим CPU)..."
-/opt/bin/opkg install xray-core >/dev/null 2>&1 || die "не удалось поставить entware xray-core / failed to install entware's xray-core"
+# --force-overwrite, not a plain install: confirmed live on a fresh OpenWrt
+# 25.12.5 install that xkeen's own installer (Skrill0/XKeen) self-registers
+# its own "xray_s" entry straight into Entware's opkg status db to track
+# every file it wrote itself (the xray binary, its config templates, geoip/
+# geosite .dat files, logs) -- xray_s was never a real, downloadable
+# Entware feed package on OpenWrt, just xkeen's own bookkeeping, but opkg
+# doesn't know that: a plain `opkg install xray-core` correctly refuses the
+# clash on /opt/sbin/xray ("already provided by package xray_s") the same
+# way it would for two genuinely conflicting real packages.
+#
+# Not the same fix as the KeeneticOS block above (which removes xray_s
+# outright, then re-downloads the geoip/geosite .dat files that removal
+# collaterally deletes, then re-runs `xkeen -ri`) -- deliberately simpler:
+# confirmed live this leaves xkeen's whole /opt/etc/xray/configs template
+# tree and dat files untouched, since --force-overwrite only lets
+# xray-core's real files win the one specific path they both claim,
+# without touching xray_s's status entry or removing anything else it
+# claims. Left the KeeneticOS block itself alone rather than unifying the
+# two -- that one docs a second, unrelated reason to prefer xray-core
+# there (xray_s stuck at 1.8.4, no xhttp transport support) and is already
+# confirmed working; no reason to risk it for a simplification this fix
+# doesn't need.
+/opt/bin/opkg install --force-overwrite xray-core >/dev/null 2>&1 \
+	|| die "не удалось поставить entware xray-core / failed to install entware's xray-core"
 
 # The newer Xray-core Entware ships has dropped the old top-level
 # "transport" config style xkeen's 02_transport.json template uses
