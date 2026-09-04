@@ -34,6 +34,22 @@ else
 	SR_PLATFORM="openwrt"
 	SR_ETC_DIR="/etc/xkeen-smartroute"
 fi
+# LAN_DEVICE: shared between lib/redirect.sh and lib/killswitch.sh (both
+# need to scope firewall rules to "packets arriving from the LAN", not the
+# whole box) -- lifted here from redirect.sh's own original copy so a
+# second script needing the exact same platform-specific interface name
+# doesn't have to re-derive it independently.
+if [ "$SR_PLATFORM" = "openwrt" ]; then
+	LAN_DEVICE="$(uci get network.lan.device 2>/dev/null || echo br-lan)"
+else
+	# KeeneticOS's LAN bridge -- confirmed live on a Hero 4G+/KN-2311
+	# (`ip -4 addr show`: br0 carries the LAN subnet) and independently
+	# assumed by zxc-rv/XKeen-UI's own setup.sh (`ip -4 a s br0` to find
+	# "the router's own LAN IP" for its post-install summary) -- a third
+	# party already treating this as a safe constant for this platform, not
+	# just this one router's own layout.
+	LAN_DEVICE="br0"
+fi
 SR_LISTS_DIR="$SR_ETC_DIR/lists"
 SR_STATE_DIR="$SR_ETC_DIR/state"
 SR_PROFILES_DIR="$SR_ETC_DIR/profiles"

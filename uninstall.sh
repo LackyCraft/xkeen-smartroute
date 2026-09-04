@@ -73,10 +73,12 @@ fi
 # make sure nothing is left listening on the panel port regardless.
 for pid in $(pgrep -f "$SR_SHARE_DIR/gateway" 2>/dev/null); do kill "$pid" 2>/dev/null || true; done
 rm -f /opt/etc/init.d/S98smartroute-gateway
-# KeeneticOS-only boot hook (install.sh) that reapplies redirect.sh's
-# iptables rules on every boot -- see this file's own comment on the
-# redirect teardown above for why KeeneticOS needs this at all.
+# KeeneticOS-only boot hooks (install.sh) that reapply redirect.sh's/
+# killswitch.sh's iptables rules (and, for the latter, its shadow dnsmasq
+# instance) on every boot -- see this file's own comments on their teardown
+# below for why KeeneticOS needs these at all.
 rm -f /opt/etc/init.d/S97smartroute-redirect
+rm -f /opt/etc/init.d/S99smartroute-killswitch
 
 log "Удаляю правило перехвата трафика... / Removing the traffic-capture rule..."
 if [ "$PLATFORM" = "openwrt" ]; then
@@ -103,26 +105,46 @@ elif [ -x "$SR_LIB_DIR/redirect.sh" ]; then
 	sh "$SR_LIB_DIR/redirect.sh" disable >/dev/null 2>&1 || true
 fi
 
+log "Удаляю правила kill-switch, если были... / Removing kill-switch firewall/dnsmasq state, if any..."
+if [ "$PLATFORM" = "openwrt" ]; then
+	# All three pieces lib/killswitch.sh's OpenWrt backend can leave armed:
+	# the LAN->WAN REJECT rule, the firewall-side ipset that actually backs
+	# it, and the dhcp-side ipset section telling dnsmasq which domains feed
+	# it. Missing any one of these used to mean either a dangling nftables
+	# set (harmless but untidy) or -- worse -- dnsmasq left permanently
+	# pointed at a set/table that no longer has a rule using it.
+	uci -q delete firewall.xkeen_smartroute_killswitch 2>/dev/null || true
+	uci -q delete firewall.sr_killswitch_ipset 2>/dev/null || true
+	uci -q delete dhcp.sr_killswitch 2>/dev/null || true
+	uci commit firewall 2>/dev/null || true
+	uci commit dhcp 2>/dev/null || true
+	nft delete set inet fw4 sr_killswitch >/dev/null 2>&1 || true
+	/etc/init.d/dnsmasq restart >/dev/null 2>&1 || true
+	/etc/init.d/firewall reload >/dev/null 2>&1 || true
+elif [ -x "$SR_LIB_DIR/killswitch.sh" ]; then
+	# KeeneticOS's backend is three pieces of *runtime* state instead of UCI
+	# config: the shadow dnsmasq process, the ipset it feeds, and two
+	# iptables chains (the DNS redirect into that instance, and the FORWARD
+	# REJECT rule) -- none of it survives a reboot on its own, but none of
+	# it goes away on its own either. Disabling every profile still flagged
+	# enabled drives killswitch.sh's own ks_apply_keenetic down to its
+	# "nothing enabled" branch, which is what actually stops the dnsmasq
+	# process, destroys the ipset and removes both chains -- done here,
+	# while killswitch.sh (about to be deleted below) still exists, same
+	# reasoning as the redirect.sh teardown above. A profile left armed with
+	# the shadow instance dead would otherwise blackhole DNS for the whole
+	# LAN forever after "uninstall" -- see killswitch.sh's own top-of-file
+	# comment for why that specific failure mode matters.
+	for f in "$SR_ETC_DIR/state/killswitch"/*.name; do
+		[ -e "$f" ] || continue
+		sh "$SR_LIB_DIR/killswitch.sh" disable "$(cat "$f")" >/dev/null 2>&1 || true
+	done
+fi
+
 log "Удаляю библиотеки и cron-задачи... / Removing libraries and cron jobs..."
 rm -rf "$SR_SHARE_DIR"
 crontab -l 2>/dev/null | grep -v 'xkeen-smartroute-cron' | crontab - || true
 /etc/init.d/cron restart >/dev/null 2>&1 || true
-
-log "Удаляю правила kill-switch, если были... / Removing kill-switch firewall/dnsmasq state, if any..."
-# All three pieces lib/killswitch.sh can leave armed: the LAN->WAN REJECT
-# rule, the firewall-side ipset that actually backs it, and the dhcp-side
-# ipset section telling dnsmasq which domains feed it. Missing any one of
-# these used to mean either a dangling nftables set (harmless but untidy) or
-# -- worse -- dnsmasq left permanently pointed at a set/table that no longer
-# has a rule using it.
-uci -q delete firewall.xkeen_smartroute_killswitch 2>/dev/null || true
-uci -q delete firewall.sr_killswitch_ipset 2>/dev/null || true
-uci -q delete dhcp.sr_killswitch 2>/dev/null || true
-uci commit firewall 2>/dev/null || true
-uci commit dhcp 2>/dev/null || true
-nft delete set inet fw4 sr_killswitch >/dev/null 2>&1 || true
-/etc/init.d/dnsmasq restart >/dev/null 2>&1 || true
-/etc/init.d/firewall reload >/dev/null 2>&1 || true
 
 if [ "${1:-}" = "--purge" ]; then
 	log "Удаляю профили и списки доменов ($SR_ETC_DIR)... / Removing profiles and domain lists ($SR_ETC_DIR)..."

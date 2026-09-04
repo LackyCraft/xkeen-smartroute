@@ -191,7 +191,7 @@ This README is an install/setup overview. Technical detail, bug history, and des
 | [doublevpn.md](docs/functionality_doc/doublevpn.md) | Double VPN: relaying through a gateway, `sockopt.dialerProxy` (Russian) |
 | [domain-lists.md](docs/functionality_doc/domain-lists.md) | Auto-updating domain lists missing from geosite (Russian) |
 | [leak-protection.md](docs/functionality_doc/leak-protection.md) | nftables internals, why not `xkeen -ap`, DNS/IPv6/QUIC (Russian) |
-| [kill-switch.md](docs/functionality_doc/kill-switch.md) | dnsmasq+ipset+nftables internals, the `ip_ranges` gap (Russian) |
+| [kill-switch.md](docs/functionality_doc/kill-switch.md) | dnsmasq+ipset+nftables/iptables internals (OpenWrt and KeeneticOS), the `ip_ranges` gap (Russian) |
 | [gateway-architecture.md](docs/functionality_doc/gateway-architecture.md) | Panel design, why not Mihomo (Russian) |
 | [gateway-telemetry.md](docs/functionality_doc/gateway-telemetry.md) | gRPC client, health polling, "online now", per-profile traffic (Russian) |
 | [rpc-bridge.md](docs/functionality_doc/rpc-bridge.md) | rpcd as the shared backend for LuCI and the panel (Russian) |

@@ -48,17 +48,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 . "$SCRIPT_DIR/common.sh"
 
 NFT_FILE="/etc/nftables.d/20-xkeen-smartroute-redirect.nft"
-if [ "$SR_PLATFORM" = "openwrt" ]; then
-	LAN_DEVICE="$(uci get network.lan.device 2>/dev/null || echo br-lan)"
-else
-	# KeeneticOS's LAN bridge -- confirmed live on a Hero 4G+/KN-2311
-	# (`ip -4 addr show`: br0 carries the LAN subnet) and independently
-	# assumed by zxc-rv/XKeen-UI's own setup.sh (`ip -4 a s br0` to find
-	# "the router's own LAN IP" for its post-install summary) -- a third
-	# party already treating this as a safe constant for this platform, not
-	# just this one router's own layout.
-	LAN_DEVICE="br0"
-fi
+# LAN_DEVICE itself comes from common.sh now (lib/killswitch.sh needs the
+# exact same value -- see its own comment there for why this moved).
 REDIRECT_PORT=61219
 IPT_CHAIN_REDIRECT="SR_SMARTROUTE_REDIRECT"
 IPT_CHAIN_QUIC="SR_SMARTROUTE_BLOCK_QUIC"
