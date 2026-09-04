@@ -22,14 +22,15 @@
 #      the primary UI on KeeneticOS, since there's no LuCI there.
 #   6. Sets up a cron job to refresh geosite/geoip data periodically.
 #
-# Transparent redirect (lib/redirect.sh) has a real backend on both
-# platforms -- nftables/fw4 on OpenWrt, legacy iptables/ip6tables on
-# KeeneticOS (that's what KeeneticOS's own NDM firewall already runs on
-# too, confirmed live). The hard, per-profile kill-switch
-# (lib/killswitch.sh) is still OpenWrt-only -- it's built on system
-# dnsmasq's ipset/nftset support and fw4/nftables.d, neither of which
-# KeeneticOS has; skipped there with a warning, pending a native
-# NDM-firewall port (a separate, larger task).
+# Both transparent redirect (lib/redirect.sh) and the hard, per-profile
+# kill-switch (lib/killswitch.sh) have a real backend on both platforms now
+# -- nftables/fw4 + system dnsmasq on OpenWrt, legacy iptables/ip6tables +
+# a dedicated Entware dnsmasq-full instance on KeeneticOS (that iptables
+# space is what KeeneticOS's own NDM firewall already runs on too,
+# confirmed live; KeeneticOS has no system dnsmasq at all, its DNS is NDM's
+# own ndnproxy). See each script's own top-of-file comment for the full
+# mechanism, and killswitch.sh's specifically for why KeeneticOS needs a
+# whole shadow DNS resolver just to watch queries.
 #
 # Safe to re-run (idempotent): existing installs are detected and skipped/updated.
 
@@ -284,6 +285,19 @@ export PATH="/opt/bin:/opt/sbin:$PATH"
 # process to an unprivileged "xkeen" user — without it xray fails to start
 # with "exec: line ...: su: not found", even though everything else installed
 # fine.
+
+# dnsmasq-full + ipset (KeeneticOS only) -- lib/killswitch.sh's hard
+# kill-switch needs both: KeeneticOS has no system dnsmasq at all (its own
+# DNS is NDM's ndnproxy, already bound to :53), so unlike OpenWrt's swap of
+# the *system* dnsmasq above, this installs a dedicated Entware instance
+# purely as an ipset populator -- see killswitch.sh's own top-of-file
+# comment for the full mechanism. Cheap no-op if already present (a
+# reinstall, or a router that already had these from something else).
+if [ "$PLATFORM" != "openwrt" ]; then
+	log "dnsmasq-full + ipset (нужны для hard kill-switch)"
+	/opt/bin/opkg install dnsmasq-full ipset >/dev/null 2>&1 \
+		|| log "ПРЕДУПРЕЖДЕНИЕ: не удалось поставить dnsmasq-full/ipset -- hard kill-switch будет недоступен, пока не поставите их вручную (opkg install dnsmasq-full ipset). / WARNING: could not install dnsmasq-full/ipset -- hard kill-switch unavailable until installed manually."
+fi
 
 # ---------------------------------------------------------------------------
 log "Шаг 2/6: xkeen"
@@ -899,36 +913,37 @@ if [ -s "$SR_ETC_DIR/state/outbounds.json" ]; then
 		>/opt/etc/xray/configs/04_outbounds.smartroute.json.tmp \
 		&& mv /opt/etc/xray/configs/04_outbounds.smartroute.json.tmp /opt/etc/xray/configs/04_outbounds.smartroute.json
 fi
-# redirect.sh now has a real backend on both platforms (rd_write_nft /
-# rd_write_iptables -- see its own top-of-file comment), so this restore is
-# unconditional. killswitch.sh's hard kill-switch is still OpenWrt-only
-# (built on system dnsmasq's ipset/nftset support, which KeeneticOS has
-# neither the dnsmasq nor the fw4/nftables.d half of -- a separate, larger
-# task from transparent redirect).
+# redirect.sh and killswitch.sh both now have a real backend on both
+# platforms (rd_write_nft/rd_write_iptables, ks_apply_openwrt/
+# ks_apply_keenetic -- see their own top-of-file comments), so both restores
+# below are unconditional.
 if [ "$(cat "$SR_ETC_DIR/state/redirect_enabled" 2>/dev/null)" = "1" ]; then
 	sh "$SR_LIB_DIR/redirect.sh" enable >/dev/null 2>&1 || true
 fi
-if [ "$PLATFORM" = "openwrt" ]; then
-	for f in "$SR_ETC_DIR/state/killswitch"/*.name; do
-		[ -e "$f" ] || continue
-		sh "$SR_LIB_DIR/killswitch.sh" enable "$(cat "$f")" >/dev/null 2>&1 || true
-	done
-else
-	log "ПРЕДУПРЕЖДЕНИЕ: жёсткий kill-switch пока поддержан только на OpenWrt -- на KeeneticOS в разработке. / WARNING: hard kill-switch is OpenWrt-only for now -- not yet available on KeeneticOS."
+for f in "$SR_ETC_DIR/state/killswitch"/*.name; do
+	[ -e "$f" ] || continue
+	sh "$SR_LIB_DIR/killswitch.sh" enable "$(cat "$f")" >/dev/null 2>&1 || true
+done
 
+if [ "$PLATFORM" != "openwrt" ]; then
 	# OpenWrt's fw4 auto-loads every /etc/nftables.d/*.nft file on its own on
-	# every boot/reload -- rd_write_nft only ever needs to write that file
-	# once per toggle. KeeneticOS has no equivalent "reapply my custom rules
-	# on boot" mechanism for iptables, and a plain reboot clears the live
-	# ruleset rd_write_iptables builds entirely (it's runtime-only, nothing
-	# like iptables-persistent is set up) -- without this hook, transparent
-	# redirect would silently stop working after every router reboot even
-	# though the panel still shows it as "enabled" (the on-disk flag survives
-	# fine, only the actual iptables rules don't). Entware's own S* init.d
-	# convention (same mechanism S23xray-logdir already uses above) runs this
-	# on every boot after Entware itself comes up. `reapply`, not `enable` --
-	# a router that rebooted with redirect *disabled* must come back up
-	# disabled too, see redirect.sh's own comment on that verb.
+	# every boot/reload, and its own system dnsmasq/firewall UCI config
+	# survives a reboot the same way any other UCI config does -- rd_write_nft
+	# and ks_apply_openwrt only ever need to write their config once per
+	# toggle. KeeneticOS has no equivalent "reapply my custom rules on boot"
+	# mechanism for iptables, and a plain reboot clears every bit of runtime
+	# state both backends build here (the live iptables/ip6tables rules,
+	# the ipset, and killswitch's own shadow dnsmasq process) -- without
+	# these hooks, transparent redirect and hard kill-switch would both
+	# silently stop working after every router reboot even though the panel
+	# still shows them as enabled (the on-disk flags survive fine, only the
+	# actual enforcement doesn't). Entware's own S* init.d convention (same
+	# mechanism S23xray-logdir already uses above) runs these on every boot
+	# after Entware itself comes up. `reapply`, not `enable` -- a router that
+	# rebooted with either feature *disabled* (or with zero kill-switch
+	# profiles armed) must come back up that way too, not have a boot hook
+	# silently turn something back on; see each script's own comment on its
+	# reapply verb.
 	cat > /opt/etc/init.d/S97smartroute-redirect <<REDIRECT_BOOT_EOF
 #!/bin/sh
 # Re-applies XKeen SmartRoute's transparent-redirect iptables rules on boot
@@ -941,6 +956,19 @@ case "\${1:-start}" in
 esac
 REDIRECT_BOOT_EOF
 	chmod +x /opt/etc/init.d/S97smartroute-redirect
+
+	cat > /opt/etc/init.d/S99smartroute-killswitch <<KILLSWITCH_BOOT_EOF
+#!/bin/sh
+# Re-applies XKeen SmartRoute's hard kill-switch iptables rules and (re)starts
+# its shadow dnsmasq instance on boot (KeeneticOS only -- see
+# lib/killswitch.sh's own top-of-file comment for why).
+case "\${1:-start}" in
+	start|boot) sh "$SR_LIB_DIR/killswitch.sh" reapply >/dev/null 2>&1 || true ;;
+	stop) : ;;
+	*) echo "usage: \$0 {start|stop}" >&2; exit 1 ;;
+esac
+KILLSWITCH_BOOT_EOF
+	chmod +x /opt/etc/init.d/S99smartroute-killswitch
 fi
 # The CLI `regen` verb always does a real, network-bound ping pass per
 # balancer-mode profile (see sr_regen's own comment) -- fine for cron every
@@ -1150,6 +1178,19 @@ CRON_PING="0 */2 * * * sh $SR_LIB_DIR/subscription.sh ping >/dev/null 2>&1 #xkee
 # routing regen (whose own worst case if delayed is just serving slightly
 # stale server picks, not silence).
 CRON_REDIRECT_SYNC="* * * * * sh $SR_LIB_DIR/redirect.sh reapply >/dev/null 2>&1 #xkeen-smartroute-cron"
+# KeeneticOS only, unlike CRON_REDIRECT_SYNC above: OpenWrt's hard
+# kill-switch is explicitly gap-free without polling (see killswitch.sh's
+# own top-of-file comment -- DNAT-to-a-local-address routes properly
+# redirected traffic through INPUT, never FORWARD, so the REJECT rule is
+# inert but correct regardless of timing). Running this on OpenWrt too would
+# be worse than a no-op: ks_apply_openwrt restarts the system dnsmasq and
+# reloads the firewall every time it runs, which would mean a real DHCP/DNS
+# blip every single minute on a platform that never needed re-syncing in
+# the first place. KeeneticOS's shadow dnsmasq instance is a real process
+# that can crash on its own, unlike OpenWrt's already-persistent system
+# dnsmasq -- see killswitch.sh's reapply comment for the failure mode this
+# specifically catches.
+CRON_KILLSWITCH_SYNC="* * * * * sh $SR_LIB_DIR/killswitch.sh reapply >/dev/null 2>&1 #xkeen-smartroute-cron"
 # `grep -v` exits 1 (no lines selected) whenever root has no crontab yet --
 # every first-ever install, and every reinstall after uninstall.sh, which
 # clears out the xkeen-smartroute-cron entries entirely. Under `set -e`,
@@ -1162,7 +1203,11 @@ CRON_REDIRECT_SYNC="* * * * * sh $SR_LIB_DIR/redirect.sh reapply >/dev/null 2>&1
 # and 00_api.smartroute.json from already-imported subscription data -- so
 # a router in this state looked installed (check.sh: everything else [OK])
 # but silently had zero working outbound routing until someone noticed.
-( crontab -l 2>/dev/null | grep -v 'xkeen-smartroute-cron' || true ; echo "$CRON_GEO" ; echo "$CRON_SUB" ; echo "$CRON_RESTART" ; echo "$CRON_REGEN" ; echo "$CRON_PING" ; echo "$CRON_REDIRECT_SYNC" ) | crontab -
+if [ "$PLATFORM" = "openwrt" ]; then
+	( crontab -l 2>/dev/null | grep -v 'xkeen-smartroute-cron' || true ; echo "$CRON_GEO" ; echo "$CRON_SUB" ; echo "$CRON_RESTART" ; echo "$CRON_REGEN" ; echo "$CRON_PING" ; echo "$CRON_REDIRECT_SYNC" ) | crontab -
+else
+	( crontab -l 2>/dev/null | grep -v 'xkeen-smartroute-cron' || true ; echo "$CRON_GEO" ; echo "$CRON_SUB" ; echo "$CRON_RESTART" ; echo "$CRON_REGEN" ; echo "$CRON_PING" ; echo "$CRON_REDIRECT_SYNC" ; echo "$CRON_KILLSWITCH_SYNC" ) | crontab -
+fi
 /etc/init.d/cron restart >/dev/null 2>&1 || true
 
 # ---------------------------------------------------------------------------
