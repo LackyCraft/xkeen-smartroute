@@ -171,6 +171,22 @@ sr_log_free_mb() {
 # idea of "off" byte-for-byte -- see install.sh.
 sr_apply_log_config() {
 	mkdir -p "$XRAY_LOG_DIR"
+	# world-writable (sticky, like /tmp itself): this directory is created
+	# by root (install.sh, or this function itself running from an rpcd
+	# call), but Xray -- since install.sh's own #3 fix made the "xkeen"
+	# account genuinely unprivileged everywhere, not just on KeeneticOS --
+	# writes its own log files as "xkeen", a different uid. Confirmed live:
+	# without this, turning logging on (loglevel != "none") made Xray fail
+	# to even start ("xray did not come back up after restart") the moment
+	# it tried to open a log file it couldn't write to -- mkdir's default
+	# mode (root-owned, 755) never let anyone else in. Also drop any
+	# stale, root-owned log files left over from before this fix (or from
+	# a previous level toggle) -- a leftover 644 file blocks a write open
+	# just as effectively as a non-writable directory would, and this
+	# function already restarts Xray right after, which recreates them
+	# fresh as whichever user actually owns the process this time.
+	chmod 1777 "$XRAY_LOG_DIR"
+	rm -f "$XRAY_LOG_DIR/access.log" "$XRAY_LOG_DIR/error.log"
 	if [ "$(sr_get_log_enabled)" = "1" ]; then
 		level="$(sr_get_log_level)"
 	else
@@ -527,6 +543,23 @@ _sr_xray_launch() {
 			# flag through `su -c` as part of the command string (not a
 			# separately-exported env var, which some `su` implementations don't
 			# forward to the child shell at all) is what actually works.
+			#
+			# rm -f the log files first, still as root here (before `su` drops
+			# to $XRAY_RUN_USER below): confirmed live that _sr_xray_validate's
+			# own `xray run -test` a moment ago -- running as root, same as
+			# this whole function -- opens Xray's configured access/error log
+			# paths too, not just checking syntax, and recreates them
+			# root-owned at mode 0600 (Xray's own log app, not this project's
+			# umask) every single time. The real launch below runs as
+			# "$XRAY_RUN_USER" (genuinely unprivileged since install.sh's #3
+			# fix, on every platform now) and fails outright trying to open a
+			# root-600 file it doesn't own -- "Failed to start ... failed to
+			# initialize access logger ... permission denied", Xray never
+			# comes up at all. Deleting them here means whichever user
+			# actually runs long-term is the one who creates them, every
+			# time, regardless of what the root-run validation step left
+			# behind a moment before.
+			rm -f "$XRAY_LOG_DIR"/*.log 2>/dev/null || true
 			exec su -c "XRAY_LOCATION_ASSET='$XRAY_ASSET_DIR' xray run -confdir '$XKEEN_CONFIGS_DIR'" "$XRAY_RUN_USER" >"$SR_STATE_DIR/xray-launch.log" 2>&1 </dev/null
 		) &
 		i=0
