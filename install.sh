@@ -466,8 +466,26 @@ log "Проверяю, что Xray — сборка из Entware (совмест
 # real shell in its passwd entry (shadow's su falls back to /bin/bash,
 # which doesn't exist here — only busybox ash). Some OpenWrt builds also
 # lack the busybox `adduser` applet entirely, so don't depend on it.
+#
+# No -u/-g: reported live (GitHub issue #2, OpenWrt 24.10.4/mediatek-
+# filogic) that busybox's own `adduser` rejects *any* explicit -u above 0
+# on stock OpenWrt -- confirmed against busybox's own source
+# (loginutils/adduser.c's `xatou_range(uid, 0, CONFIG_LAST_ID)`) and
+# OpenWrt's build config (package/utils/busybox/Config-defaults.in sets
+# BUSYBOX_DEFAULT_LAST_ID=0), so this isn't one router's quirk -- it's
+# every stock OpenWrt image that actually ships the adduser applet at
+# all. `-u 11111` failed with "number 11111 is not in 0..0 range", and
+# because this was the last command in the line, that failure killed the
+# whole install under `set -eu` *before* ever reaching the fallback three
+# lines down that would have handled it correctly -- silently, since the
+# real error was routed to /dev/null. `-g 11111` was also just wrong on
+# busybox regardless (`-g` there is the GECOS comment field, not a group
+# -- `-G` is the group flag), so dropping it isn't a loss either. Leaving
+# both id numbers unset lets busybox pick its own free uid/gid, and
+# `|| true` makes sure this line can never take the rest of the install
+# down with it again, whatever adduser decides to reject next.
 if ! id xkeen >/dev/null 2>&1; then
-	command -v adduser >/dev/null 2>&1 && adduser -D -H -u 11111 -g 11111 xkeen 2>/dev/null
+	command -v adduser >/dev/null 2>&1 && adduser -D -H xkeen 2>/dev/null || true
 	if ! id xkeen >/dev/null 2>&1; then
 		for f in /etc/passwd /etc/group /opt/etc/passwd /opt/etc/group; do
 			case "$f" in
