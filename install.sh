@@ -490,7 +490,20 @@ if ! id xkeen >/dev/null 2>&1; then
 		for f in /etc/passwd /etc/group /opt/etc/passwd /opt/etc/group; do
 			case "$f" in
 				*group) grep -q '^xkeen:' "$f" 2>/dev/null || echo 'xkeen:x:11111:' >> "$f" ;;
-				*passwd) grep -q '^xkeen:' "$f" 2>/dev/null || echo 'xkeen:x:0:11111:::/bin/sh' >> "$f" ;;
+				# uid 11111, not 0: reported live (GitHub issue #3, filed
+				# after #2 above) that this line hardcoded uid 0 -- on
+				# exactly the hardware this fallback exists for (no
+				# `adduser` applet at all, confirmed live on a Netis N6),
+				# "xkeen" ended up root-equivalent instead of the
+				# unprivileged account S24xray/_sr_xray_launch's whole
+				# `su ... xkeen` setup assumes, defeating the entire point
+				# of dropping Xray to a separate user. 11111 is the same
+				# id `adduser -u 11111` (see the comment above) always
+				# intended to use, and matches the gid this same fallback
+				# already writes to /etc/group on the line above -- not a
+				# new number, just applying it to the field that was
+				# actually wrong.
+				*passwd) grep -q '^xkeen:' "$f" 2>/dev/null || echo 'xkeen:x:11111:11111:::/bin/sh' >> "$f" ;;
 			esac
 		done
 	fi
@@ -505,16 +518,10 @@ fi
 # script and this project's lib/common.sh _sr_xray_launch, neither of which
 # invoke xray by full path -- fails with "xray: not found" even though xray
 # is right there in root's own $PATH, because the su'd child shell never
-# sees it. Confirmed live this only actually bites when the "xkeen" account
-# created above is a genuine non-root uid (busybox/Entware `adduser`
-# succeeding, as on KeeneticOS) -- on hardware where `adduser` isn't
-# available and the manual passwd-line fallback above runs instead, that
-# fallback's own hardcoded "0" uid field makes "xkeen" a root-equivalent
-# account, which sidesteps this specific gap via ENV_SUPATH instead (a
-# separate, pre-existing privilege issue in that fallback line, not
-# something this fix touches). Applying this rewrite unconditionally on
-# both platforms is still correct either way: a no-op change in behavior
-# for a root-equivalent "xkeen", the actual fix for a genuine non-root one.
+# sees it. This matters on every path that creates "xkeen" now: both a
+# real `adduser` success and the manual passwd-line fallback above produce
+# a genuine non-root uid (11111) since #3's fix, not just the
+# `adduser`-succeeded case this comment originally described.
 if [ -f /opt/etc/login.defs ] && ! grep -q '^ENV_PATH.*opt' /opt/etc/login.defs; then
 	sed -i 's#^ENV_PATH[[:space:]].*#ENV_PATH\tPATH=/opt/sbin:/opt/bin:/sbin:/bin:/usr/sbin:/usr/bin#' /opt/etc/login.defs
 fi
@@ -594,11 +601,29 @@ XRAY_API_EOF
 # to fire before Xray does, every boot, regardless of which of the several
 # things that can start Xray (boot, cron restart, a manual restart from any
 # UI) ends up doing it this time.
+# chmod 1777, not mkdir's own default (root-owned, 755): Xray runs as the
+# unprivileged "xkeen" account (see the #3 fix above -- a genuine non-root
+# uid on every path that creates it now, not just when adduser succeeds),
+# and writes its own access/error log files directly into this directory.
+# Confirmed live: with the directory left at mkdir's default mode, turning
+# logging on (loglevel != "none", lib/common.sh's sr_apply_log_config)
+# made Xray fail to even start ("xray did not come back up after
+# restart") the moment it tried to open a log file "xkeen" had no
+# permission to create. World-writable and sticky, same as /tmp itself,
+# since this is the one directory Xray (as a different uid than whoever
+# creates the directory) always needs to write into regardless of which
+# of several entry points (this install-time mkdir, the boot script
+# below, sr_apply_log_config's own toggle-time mkdir) got there first.
 mkdir -p /tmp/xray-logs /opt/etc/init.d
+chmod 1777 /tmp/xray-logs
 cat > /opt/etc/init.d/S23xray-logdir <<'XRAY_LOGDIR_EOF'
 #!/bin/sh
-# Ensures Xray's tmpfs log directory exists before S24xray starts it.
+# Ensures Xray's tmpfs log directory exists (and is writable by the
+# unprivileged "xkeen" account Xray actually runs as) before S24xray
+# starts it. tmpfs is wiped every reboot, so this has to run every boot,
+# not just once at install time -- see install.sh's own comment above.
 mkdir -p /tmp/xray-logs
+chmod 1777 /tmp/xray-logs
 XRAY_LOGDIR_EOF
 chmod +x /opt/etc/init.d/S23xray-logdir
 
