@@ -43,6 +43,8 @@
 
 ## Быстрый старт
 
+### OpenWrt
+
 ```sh
 # Установка — по SSH на роутере
 sh <(wget -q -O - https://raw.githubusercontent.com/LackyCraft/xkeen-smartroute/master/install.sh)
@@ -63,7 +65,49 @@ sh <(wget -q -O - https://raw.githubusercontent.com/LackyCraft/xkeen-smartroute/
 sh <(wget -q -O - https://raw.githubusercontent.com/LackyCraft/xkeen-smartroute/master/uninstall.sh) --purge
 ```
 
+### KeeneticOS
+
+Entware-шелл на KeeneticOS не поддерживает `/dev/fd`, поэтому `sh <(...)`
+(process substitution) здесь не работает — используйте обычный пайп:
+
+```sh
+# Установка — по SSH на роутере (Entware уже должен быть установлен, см. docs/install-keenetic.md)
+wget -O - https://raw.githubusercontent.com/LackyCraft/xkeen-smartroute/master/install.sh | sh
+```
+
+```sh
+# Обновление — та же команда, скрипт идемпотентен
+wget -O - https://raw.githubusercontent.com/LackyCraft/xkeen-smartroute/master/install.sh | sh
+```
+
+```sh
+# Удаление
+wget -O - https://raw.githubusercontent.com/LackyCraft/xkeen-smartroute/master/uninstall.sh | sh
+```
+
+```sh
+# Удаление + все профили/списки/подписки
+wget -O - https://raw.githubusercontent.com/LackyCraft/xkeen-smartroute/master/uninstall.sh | sh -s -- --purge
+```
+
 `xkeen`, `xkeen-UI` и Entware не трогаются — отдельные проекты, удаляйте своими средствами.
+
+> **Если на свежепоставленном Entware команда выше падает с ошибкой при
+> HTTPS** (например, `wget` молча не может скачать `install.sh` по `https://`)
+> — дело не в самом install.sh. На только что установленном Entware в `$PATH`
+> может раньше настоящего `wget-ssl` попадаться другой, urlless-совместимый,
+> но **без поддержки SSL** апплет с тем же именем `wget` — обычный `wget`
+> тогда резолвится не в тот бинарник и не умеет `https://` вовсе. Сначала
+> поставьте нормальный wget с SSL и сертификаты:
+> ```sh
+> opkg update && opkg install wget-ssl ca-certificates
+> ```
+> и для самой первой, «загрузочной» команды выше вызовите wget по полному
+> пути, а не как есть в `$PATH`, чтобы гарантированно взять именно
+> только что поставленный бинарник:
+> ```sh
+> /opt/bin/wget -O - https://raw.githubusercontent.com/LackyCraft/xkeen-smartroute/master/install.sh | sh
+> ```
 
 ## Что и куда устанавливается
 

@@ -43,6 +43,8 @@ Per-domain routing over a VLESS/Trojan subscription on OpenWrt routers — one c
 
 ## Quick start
 
+### OpenWrt
+
 ```sh
 # Install -- over SSH on the router
 sh <(wget -q -O - https://raw.githubusercontent.com/LackyCraft/xkeen-smartroute/master/install.sh)
@@ -63,7 +65,48 @@ sh <(wget -q -O - https://raw.githubusercontent.com/LackyCraft/xkeen-smartroute/
 sh <(wget -q -O - https://raw.githubusercontent.com/LackyCraft/xkeen-smartroute/master/uninstall.sh) --purge
 ```
 
+### KeeneticOS
+
+Entware's shell on KeeneticOS has no `/dev/fd`, so `sh <(...)` (process
+substitution) doesn't work here -- use a plain pipe instead:
+
+```sh
+# Install -- over SSH on the router (Entware must already be installed, see docs/install-keenetic.md)
+wget -O - https://raw.githubusercontent.com/LackyCraft/xkeen-smartroute/master/install.sh | sh
+```
+
+```sh
+# Update -- same command, the script is idempotent
+wget -O - https://raw.githubusercontent.com/LackyCraft/xkeen-smartroute/master/install.sh | sh
+```
+
+```sh
+# Uninstall
+wget -O - https://raw.githubusercontent.com/LackyCraft/xkeen-smartroute/master/uninstall.sh | sh
+```
+
+```sh
+# Uninstall + remove all profiles/lists/subscriptions
+wget -O - https://raw.githubusercontent.com/LackyCraft/xkeen-smartroute/master/uninstall.sh | sh -s -- --purge
+```
+
 `xkeen`, `xkeen-UI`, and Entware are left untouched — separate projects, remove them with their own tooling.
+
+> **If the command above fails over HTTPS on a freshly-installed Entware**
+> (e.g. `wget` silently can't fetch `install.sh` over `https://`) — that's
+> not install.sh's fault. On a brand-new Entware install, `$PATH` can resolve
+> a same-named `wget` applet that predates the real `wget-ssl` and has **no
+> SSL support at all**, so plain `wget` can't speak `https://` yet. Install a
+> real SSL-capable wget and CA certificates first:
+> ```sh
+> opkg update && opkg install wget-ssl ca-certificates
+> ```
+> and for this very first "bootstrap" command, call wget by its full path
+> instead of whatever `$PATH` resolves, to guarantee you get the binary you
+> just installed:
+> ```sh
+> /opt/bin/wget -O - https://raw.githubusercontent.com/LackyCraft/xkeen-smartroute/master/install.sh | sh
+> ```
 
 ## What gets installed where
 
