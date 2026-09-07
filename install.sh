@@ -376,79 +376,38 @@ fi
 # installer wizard already pulls Xray from Entware's opkg repo itself during
 # `xkeen -i` -- confirmed live on a Hero 4G+/KN-2311: it installs package
 # "xray_s" (not "xray-core"), correctly matched to this CPU (mipsel-3.4,
-# softfloat, runs fine, no crash) -- so this used to skip the swap there
-# entirely, reasoning the CPU-crash problem this whole block exists for
-# didn't apply. It does still matter, just differently: "xray_s" (Entware's
-# own package) turned out to be stuck at 1.8.4, an old version with no
-# "xhttp" transport support -- confirmed live, a real subscription with an
+# softfloat, runs fine, no crash), but stuck at 1.8.4 -- an old version with
+# no "xhttp" transport support, confirmed live: a real subscription with an
 # xhttp-transport server made every restart fail Xray-core's own config
 # validation ("unknown transport protocol: xhttp") on a completely bare,
-# freshly-installed router, before the user ever touched anything. "xray-
-# core" (the same package used on OpenWrt above) is Entware's actively
-# maintained one -- 26.2.6 vs. xray_s's 1.8.4 -- and is available for this
-# exact target too. Removing "xray_s" first (skipped harmlessly if it's not
-# there -- a re-run once this has already swapped once, or an OpenWrt box
-# that never had it) avoids the same file-ownership conflict on
-# /opt/sbin/xray this block hit the first time it forced "xray-core" over
-# an already-installed "xray_s" without removing it first.
-if [ "$PLATFORM" != "openwrt" ] && opkg list-installed 2>/dev/null | grep -q '^xray_s '; then
-	log "Убираю устаревший xray_s (1.8.4, без поддержки xhttp) перед установкой xray-core..."
-	/opt/bin/opkg remove xray_s >/dev/null 2>&1 || true
-
-	# Removing xray_s took xkeen's own geosite_v2fly.dat/geoip_v2fly.dat
-	# with it -- confirmed live: gone from /opt/etc/xray/dat right after
-	# `opkg remove xray_s`, even though xkeen's own wizard had just
-	# installed them moments earlier as part of the same `xkeen -i` run.
-	# Left alone this reliably breaks the very next Xray start: every
-	# routing rule using geosite:/geoip: (every profile this project's own
-	# UI creates) fails to parse with "open .../geosite.dat: no such file
-	# or directory", on a completely bare, just-installed router. xkeen's
-	# own `-ugs`/`-ugi` CLI flags look like the fix but confirmed live
-	# aren't: both are pure *update* paths gated on the file already
-	# existing (`[ -f "$geo_dir/geosite_v2fly.dat" ]` inside xkeen's own
-	# 02_install/04_install_geosite.sh) -- they report success and do
-	# nothing when the file is missing, which is exactly this case. Fetch
-	# the same two files directly instead, from the same upstream xkeen's
-	# own installer uses -- the geosite.dat/geoip.dat symlinks created
-	# further down already point here, so nothing else needs to change.
-	for f in "geosite_v2fly.dat:https://github.com/v2fly/domain-list-community/releases/latest/download/dlc.dat" \
-	         "geoip_v2fly.dat:https://github.com/loyalsoldier/v2ray-rules-dat/releases/latest/download/geoip.dat"; do
-		name="${f%%:*}"; url="${f#*:}"
-		[ -s "/opt/etc/xray/dat/$name" ] || wget -O "/opt/etc/xray/dat/$name" "$url" \
-			|| log "ПРЕДУПРЕЖДЕНИЕ: не удалось скачать $name -- geosite/geoip-правила профилей не будут работать, пока не появится этот файл. / WARNING: could not download $name -- geosite/geoip-based profile rules won't work until this file exists."
-	done
-
-	# Same removal also takes /opt/etc/init.d/S24xray with it (xkeen's own
-	# boot-start hook for Xray) -- without it Xray simply never starts
-	# again after a reboot, silently, since nothing else on this router
-	# calls it. `-ri` is xkeen's own documented CLI flag for exactly this
-	# ("Автоматический запуск Xray средствами init.d" / automatic Xray
-	# startup via init.d) -- confirmed live it recreates S24xray correctly.
-	xkeen -ri >/dev/null 2>&1 || true
-fi
-log "Проверяю, что Xray — сборка из Entware (совместимая с этим CPU)..."
-# --force-overwrite, not a plain install: confirmed live on a fresh OpenWrt
-# 25.12.5 install that xkeen's own installer (Skrill0/XKeen) self-registers
-# its own "xray_s" entry straight into Entware's opkg status db to track
-# every file it wrote itself (the xray binary, its config templates, geoip/
-# geosite .dat files, logs) -- xray_s was never a real, downloadable
-# Entware feed package on OpenWrt, just xkeen's own bookkeeping, but opkg
-# doesn't know that: a plain `opkg install xray-core` correctly refuses the
-# clash on /opt/sbin/xray ("already provided by package xray_s") the same
-# way it would for two genuinely conflicting real packages.
+# freshly-installed router, before the user ever touched anything. So this
+# swap matters on both platforms, for two different reasons -- crash
+# avoidance on OpenWrt, xhttp support on KeeneticOS.
 #
-# Not the same fix as the KeeneticOS block above (which removes xray_s
-# outright, then re-downloads the geoip/geosite .dat files that removal
-# collaterally deletes, then re-runs `xkeen -ri`) -- deliberately simpler:
-# confirmed live this leaves xkeen's whole /opt/etc/xray/configs template
-# tree and dat files untouched, since --force-overwrite only lets
-# xray-core's real files win the one specific path they both claim,
-# without touching xray_s's status entry or removing anything else it
-# claims. Left the KeeneticOS block itself alone rather than unifying the
-# two -- that one docs a second, unrelated reason to prefer xray-core
-# there (xray_s stuck at 1.8.4, no xhttp transport support) and is already
-# confirmed working; no reason to risk it for a simplification this fix
-# doesn't need.
+# --force-overwrite, not a plain install, and not `opkg remove xray_s`
+# first either (an earlier version of this fix did that, on KeeneticOS
+# only): xkeen's own installer -- on *either* platform, confirmed live on
+# both -- self-registers a "xray_s" entry straight into Entware's own opkg
+# status db to track every file it wrote itself (the xray binary, its
+# config templates, geoip/geosite .dat files, logs, its S24xray boot
+# hook), whether or not xray_s was ever a real, separately-downloadable
+# Entware feed package. A plain `opkg install xray-core` correctly refuses
+# the resulting clash on /opt/sbin/xray ("already provided by package
+# xray_s"), same as it would for two genuinely conflicting real packages --
+# and `opkg remove xray_s` "fixes" that by deleting every path in that
+# package's file list, xkeen's own /opt/etc/xray/configs *and*
+# /opt/etc/xray/dat template directories included, not just their
+# contents. Confirmed live on a real KeeneticOS install (reported by a
+# user, GitHub issue): the geosite/geoip .dat re-download this used to do
+# right after the removal failed outright too ("No such file or
+# directory") since the whole /opt/etc/xray/dat directory was already
+# gone, not just the two files in it -- and the install died moments later
+# writing 04_outbounds.json into the also-now-missing configs directory.
+# --force-overwrite sidesteps all of it: it only lets xray-core's real
+# files win the one specific path both claim, without touching xray_s's
+# status entry or removing anything else it claims, so nothing downstream
+# ever needs to re-create what never got deleted in the first place.
+log "Проверяю, что Xray — сборка из Entware (совместимая с этим CPU)..."
 /opt/bin/opkg install --force-overwrite xray-core >/dev/null 2>&1 \
 	|| die "не удалось поставить entware xray-core / failed to install entware's xray-core"
 
@@ -1287,6 +1246,6 @@ log "  xkeen-UI:  http://$LAN_IP:1000/"
 log "  Панель:    http://$LAN_IP:$SR_GATEWAY_PORT/"
 log "  Списки:    $SR_ETC_DIR/lists/"
 if [ "$PLATFORM" = "keenetic" ]; then
-	log "  ПРИМЕЧАНИЕ: LuCI на KeeneticOS нет -- панель и xkeen-UI выше единственный UI. Жёсткий kill-switch пока не поддержан на KeeneticOS (в разработке)."
+	log "  ПРИМЕЧАНИЕ: LuCI на KeeneticOS нет -- панель и xkeen-UI выше единственный UI."
 fi
 log "Диагностика: sh $SR_LIB_DIR/../check.sh (или ./check.sh из репозитория)"
