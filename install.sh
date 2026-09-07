@@ -304,9 +304,26 @@ log "Шаг 2/6: xkeen"
 
 if ! command -v xkeen >/dev/null 2>&1; then
 	log "Ставлю xkeen (Skrill0/XKeen)..."
+	# Skrill0/XKeen's own bootstrap unpacks Xray into this scratch directory
+	# with a plain `unzip` (no `-o`) -- if a previous install attempt on this
+	# router died partway through (network hiccup, an earlier run of this
+	# exact 5-minute timeout below, ...), leftover files here make that
+	# `unzip` ask "replace .../geoip.dat? [y]es, [n]o, ...:" the next time
+	# around instead of just overwriting silently. Confirmed live: that
+	# extra, unplanned prompt eats the wizard's own piped answer sequence
+	# below one line per retry ("invalid response" for each), leaving
+	# nothing left to answer the wizard's real questions once unzip finally
+	# gives up and moves on -- the exact "moving target with plain stdin"
+	# failure mode this block's own timeout comment already warned about,
+	# just triggered by leftover scratch files instead of an xkeen update.
+	# Wiping it first makes every attempt start from the same clean state
+	# unzip never has anything to ask about, self-healing a stuck prior
+	# attempt instead of just repeating its failure.
+	rm -rf /opt/tmp/xkeen 2>/dev/null
 	# `xkeen -i` (called at the end of the upstream bootstrap script) is an
 	# interactive wizard, not a flag-driven installer. Piped stdin answers
-	# feed its `read` prompts in order (verified against xkeen 1.1.3):
+	# feed its `read` prompts in order (verified against xkeen 1.1.3, on a
+	# genuinely blank router with no prior GeoIP/GeoSite/cron state):
 	#   4  -> GeoIP menu:  install/update "v2fly"
 	#   3  -> GeoSite menu: install/update "v2fly"
 	#   1  -> cron menu: enable the missing auto-update tasks
@@ -314,17 +331,49 @@ if ! command -v xkeen >/dev/null 2>&1; then
 	#   8  -> day selector -> "Ежедневно" (daily)
 	#   4  -> hour (0-23) -> 04:00 update time
 	#   0  -> minute (0-59)
-	# If a future xkeen release changes this wizard's flow, the answers will
-	# land on the wrong prompts — that's exactly what the check right after
-	# this block is for: it fails loudly instead of pretending success.
-	# Wrapped in `timeout`: this answer sequence was verified against xkeen
-	# 1.1.3, but it's still feeding a moving target with plain stdin (no real
-	# pty) — if a future version inserts one more prompt we didn't expect,
-	# stdin hits EOF and some xkeen releases retry a bad read in a tight loop
-	# instead of erroring. Better to hard-kill after 5 minutes and fail the
-	# install cleanly than let a busy-loop peg the router's CPU indefinitely.
-	timeout 300 sh -c "printf '%s\n' 4 3 1 1 8 4 0 | sh -c \"\$(wget -O - '$XKEEN_INSTALL_URL')\"" \
-		|| die "установка xkeen завершилась с ошибкой (или не уложилась в 5 минут) — запустите 'xkeen -i' вручную и ответьте на вопросы мастера. / xkeen install failed or exceeded its 5-minute budget — run 'xkeen -i' by hand and answer its wizard prompts."
+	# Confirmed live this flow isn't fixed-length: on a router where GeoIP/
+	# GeoSite/the auto-update cron tasks are already present (a retry after
+	# this exact block failed partway through once already, or any router
+	# xkeen previously set up) the auto-update menu inserts two *extra*
+	# yes/no prompts ("Хотите обновить задачи?" / "...единое время...") that
+	# don't exist on a blank router -- the fixed 7-answer list above shifts,
+	# runs out of answers one prompt early, and the wizard hits stdin EOF on
+	# a menu it's still waiting on. That's exactly the "moving target with
+	# plain stdin" busy-loop this block's `timeout` was already guarding
+	# against ("Некорректный номер действия" repeating until the 5-minute
+	# kill) -- just triggered by pre-existing state rather than a future
+	# xkeen release changing the flow, and easy to hit for real: it's what a
+	# retry of this very install after any earlier partial failure looks
+	# like. Padded with trailing 0's below rather than trying to enumerate
+	# every possible extra prompt -- 0 is consistently "skip/no/cancel" on
+	# every menu this wizard shows (GeoIP, GeoSite, the auto-update menu
+	# itself, both yes/no confirmations, the per-task day selector), and
+	# "skip" is always a terminal choice that never opens a further
+	# sub-menu needing its own answer, so it's safe to over-supply. Worst
+	# case if every pad digit gets consumed declining a day selector: xkeen's
+	# own internal auto-update schedule ends up unset per task ("Включение
+	# автоматического обновления X отменено") -- cosmetic only, since Шаг
+	# 6/6 below (CRON_GEO) already schedules `xkeen -ug`/`xkeen -uk` itself
+	# on its own cron line, independent of xkeen's internal scheduler.
+	# If a future xkeen release changes this wizard's flow in some other way
+	# entirely, the answers can still land on the wrong prompts -- that's
+	# exactly what the check right after this block is for: it fails loudly
+	# instead of pretending success.
+	#
+	# Budget is 15 minutes, not 5: confirmed live on a real KeeneticOS router
+	# (Entware on a slow/aging USB stick) that unzip alone -- extracting
+	# xray's ~60MB payload out of the downloaded zip, before the wizard's own
+	# Q&A even starts -- ran at roughly 100KB/s, ~10+ minutes on its own, on
+	# storage that was otherwise healthy (no I/O errors in dmesg, plenty of
+	# free space, `mv`/`unzip` both made steady if slow progress rather than
+	# actually hanging). A 5-minute budget kills a perfectly healthy install
+	# partway through extraction on exactly this kind of hardware -- the
+	# thing this timeout needs to bound is the busy-loop failure mode above
+	# (which spams its "invalid" message many times a second and so hits any
+	# reasonable timeout almost immediately), not ordinary slow flash, so
+	# there's no real cost to a much longer ceiling here.
+	timeout 900 sh -c "printf '%s\n' 4 3 1 1 8 4 0 0 0 0 0 0 0 0 0 0 | sh -c \"\$(wget -O - '$XKEEN_INSTALL_URL')\"" \
+		|| die "установка xkeen завершилась с ошибкой (или не уложилась в 15 минут) — запустите 'xkeen -i' вручную и ответьте на вопросы мастера. / xkeen install failed or exceeded its 15-minute budget — run 'xkeen -i' by hand and answer its wizard prompts."
 	[ -x /opt/sbin/xray ] || die "xray не появился после установки xkeen — мастер install мог измениться, запустите 'xkeen -i' вручную и ответьте на вопросы. / xray missing after xkeen install — its interactive wizard may have changed, run 'xkeen -i' by hand and answer its prompts."
 
 	# xkeen's own restart path writes a KeeneticOS NDM netfilter hook file
@@ -444,29 +493,95 @@ log "Проверяю, что Xray — сборка из Entware (совмест
 # `|| true` makes sure this line can never take the rest of the install
 # down with it again, whatever adduser decides to reject next.
 if ! id xkeen >/dev/null 2>&1; then
-	command -v adduser >/dev/null 2>&1 && adduser -D -H xkeen 2>/dev/null || true
-	if ! id xkeen >/dev/null 2>&1; then
-		for f in /etc/passwd /etc/group /opt/etc/passwd /opt/etc/group; do
-			case "$f" in
-				*group) grep -q '^xkeen:' "$f" 2>/dev/null || echo 'xkeen:x:11111:' >> "$f" ;;
-				# uid 11111, not 0: reported live (GitHub issue #3, filed
-				# after #2 above) that this line hardcoded uid 0 -- on
-				# exactly the hardware this fallback exists for (no
-				# `adduser` applet at all, confirmed live on a Netis N6),
-				# "xkeen" ended up root-equivalent instead of the
-				# unprivileged account S24xray/_sr_xray_launch's whole
-				# `su ... xkeen` setup assumes, defeating the entire point
-				# of dropping Xray to a separate user. 11111 is the same
-				# id `adduser -u 11111` (see the comment above) always
-				# intended to use, and matches the gid this same fallback
-				# already writes to /etc/group on the line above -- not a
-				# new number, just applying it to the field that was
-				# actually wrong.
-				*passwd) grep -q '^xkeen:' "$f" 2>/dev/null || echo 'xkeen:x:11111:11111:::/bin/sh' >> "$f" ;;
-			esac
-		done
-	fi
+	# -s /bin/sh: reported live (a user's real KeeneticOS router) that
+	# without an explicit shell, adduser can default "xkeen" to /bin/bash
+	# -- which doesn't exist on this class of hardware, only busybox ash
+	# does (see this whole block's own top comment) -- and every `su -c
+	# ... xkeen` afterward (this project's own _sr_xray_launch, xkeen's
+	# own S24xray) failed outright with "Cannot execute /bin/bash",
+	# repeated once per retry attempt, Xray never starting at all. That
+	# default isn't universal -- confirmed live on a different KeeneticOS
+	# router that adduser there already picks /opt/bin/sh on its own --
+	# so this can't be assumed either way; pin it explicitly instead of
+	# hoping.
+	command -v adduser >/dev/null 2>&1 && adduser -D -H -s /bin/sh xkeen 2>/dev/null || true
 fi
+
+# busybox adduser, when it's present and succeeds, only ever writes
+# /etc/passwd -- no group entry, and nothing at all in Entware's own
+# /opt/etc/passwd or /opt/etc/group. Entware's `su` (/opt/bin/su ->
+# su-shadow) reads *only* /opt/etc/passwd, not the system one. Confirmed
+# live (GitHub issue #4, OpenWrt 24.10.4/mediatek-filogic): before #2, a
+# plain `adduser -D -H xkeen` always failed on stock OpenWrt (see this
+# block's own #2 comment above), so execution always fell through to the
+# loop that backfills all four files -- masking this gap entirely. Once #2
+# made that adduser call succeed, the loop below used to be gated on
+# `adduser` having failed too, so it never ran at all: install.sh finished
+# all six steps and reported success while Xray never started even once,
+# su-shadow logging "No passwd entry for user 'xkeen'" forever.
+#
+# Runs unconditionally now, regardless of whether adduser just succeeded,
+# the account already existed from an earlier run, or the full manual
+# fallback below is what actually creates it -- and takes uid/gid from
+# whatever account actually exists right now (`id -u`/`id -g`) instead of
+# hardcoding 11111, so all four files agree with each other and with
+# whichever one adduser itself already wrote, whatever id it picked. Only
+# falls back to the literal 11111 when there's truly no account anywhere
+# yet (id fails) -- the same id `adduser -u 11111` always intended to use,
+# back before #2's fix found out busybox rejects that flag outright.
+#
+# `id -u`/`id -g` can themselves report 0 -- confirmed live on a real
+# KeeneticOS router: xkeen's own `xkeen -i` wizard (Step 2/6 above) creates
+# its OWN "xkeen" /opt/etc/passwd entry as part of its account/permission
+# bookkeeping, unrelated to this project's, and on that router it was
+# "xkeen:x:0:11111:::" -- uid 0, fully root-equivalent, defeating the
+# entire point of running Xray as a separate account, with a genuinely
+# *blank* shell field (not even a bad path like #4's "/bin/bash", just
+# nothing). Falling back to 11111 here too, the same as the "no account at
+# all" case just above, so the rewrite below never propagates a root uid
+# into any of the four files.
+xkeen_uid="$(id -u xkeen 2>/dev/null || echo 11111)"
+[ "$xkeen_uid" = "0" ] && xkeen_uid="11111"
+xkeen_gid="$(id -g xkeen 2>/dev/null || echo 11111)"
+[ "$xkeen_gid" = "0" ] && xkeen_gid="11111"
+
+# Canonicalizes the "xkeen" line in each of the four files -- appends it if
+# missing (the original gap this loop closed, GitHub issue #4), but now
+# also *rewrites* it if it already exists as something unsafe: uid 0 (the
+# xkeen-wizard case above) or a shell that's missing/blank/not actually
+# executable here (the #4 self-heal that used to live in a second loop
+# below, folded in here since both are really the same "is this line
+# trustworthy" check). A previous version of this loop only ever appended
+# when the line was missing entirely, so an existing-but-wrong line --
+# root uid, blank shell, whichever -- was left untouched forever; a
+# previous version of the shell self-heal also specifically skipped a
+# *blank* shell field (treating "nothing to read" as "nothing to fix",
+# backwards for exactly this case) rather than treating it as broken too.
+# Together those left `su -c ... xkeen` failing with "Cannot execute
+# /bin/bash" (su's own compiled-in fallback for an account with no usable
+# shell) on a router that every earlier, narrower check here already
+# considered clean.
+for f in /etc/passwd /etc/group /opt/etc/passwd /opt/etc/group; do
+	[ -f "$f" ] || continue
+	case "$f" in
+		*group)
+			grep -q '^xkeen:' "$f" 2>/dev/null || echo "xkeen:x:$xkeen_gid:" >> "$f"
+			;;
+		*passwd)
+			xkeen_line="$(awk -F: '$1 == "xkeen"' "$f" 2>/dev/null)"
+			if [ -z "$xkeen_line" ]; then
+				echo "xkeen:x:$xkeen_uid:$xkeen_gid:::/bin/sh" >> "$f"
+			else
+				xkeen_line_uid="$(printf '%s' "$xkeen_line" | awk -F: '{print $3}')"
+				xkeen_line_shell="$(printf '%s' "$xkeen_line" | awk -F: '{print $NF}')"
+				if [ "$xkeen_line_uid" = "0" ] || [ -z "$xkeen_line_shell" ] || [ ! -x "$xkeen_line_shell" ]; then
+					log "У «xkeen» в $f небезопасная запись (uid=$xkeen_line_uid, shell=\"$xkeen_line_shell\"), исправляю на uid=$xkeen_uid, shell=/bin/sh... / \"xkeen\"'s entry in $f is unsafe (uid=$xkeen_line_uid, shell=\"$xkeen_line_shell\"), fixing to uid=$xkeen_uid, shell=/bin/sh..."
+					sed -i "s#^xkeen:[^:]*:[^:]*:[^:]*:.*#xkeen:x:$xkeen_uid:$xkeen_gid:::/bin/sh#" "$f"
+				fi
+			fi
+			;;
+	esac
+done
 
 # shadow-su's own `su` resets $PATH for any non-root target user to
 # login.defs' ENV_PATH (confirmed live on KeeneticOS: default
@@ -1234,6 +1349,55 @@ else
 	( crontab -l 2>/dev/null | grep -v 'xkeen-smartroute-cron' || true ; echo "$CRON_GEO" ; echo "$CRON_SUB" ; echo "$CRON_RESTART" ; echo "$CRON_REGEN" ; echo "$CRON_PING" ; echo "$CRON_REDIRECT_SYNC" ; echo "$CRON_KILLSWITCH_SYNC" ) | crontab -
 fi
 /etc/init.d/cron restart >/dev/null 2>&1 || true
+
+# ---------------------------------------------------------------------------
+# One real attempt to get Xray running via this project's own starter,
+# before anything below checks whether it's up. `xkeen -restart` (Step
+# 2/6, way above) is the only other place this script tries to start
+# Xray at all -- and that attempt necessarily happens *before* the
+# account-canonicalization block further up this same step (xkeen itself
+# has to be installed, and whatever it did to the "xkeen" account
+# understood, before anything can safely su into it), so an account that
+# was still broken at that point (root-equivalent uid, unusable shell,
+# whatever the wizard or a previous partial run left behind) makes that
+# early attempt fail, and nothing later ever asks Xray to start over with
+# the now-fixed account. Confirmed live: a router hit exactly this
+# sequence -- account fixed by this script, Xray still not running by
+# Step 6/6, `check.sh` reporting it broken -- while a plain, unassisted
+# `sr_restart_xray` right afterward worked immediately, on the very same
+# account, with nothing else changed. sr_restart_xray already validates
+# the merged config and retries through Xray-core's own confdir race (see
+# its own comment in lib/common.sh) before giving up, so this is cheap and
+# safe to call unconditionally even when Xray already came up fine on its
+# own.
+. "$SR_LIB_DIR/common.sh"
+sr_xray_pids >/dev/null 2>&1 || sr_restart_xray >/dev/null 2>&1 || true
+
+# ---------------------------------------------------------------------------
+# Auto-enable transparent redirect on a genuinely fresh install. Without
+# this, FLAG_ENABLED defaults to "0" (see lib/redirect.sh) and a brand-new
+# router captures zero LAN traffic until someone finds and flips the
+# Protection toggle by hand -- not obvious from the panel alone, reported
+# directly as confusing/inconvenient. Fresh install only: guarded on the
+# flag file not existing at all yet, so the reinstall-restore block earlier
+# in this script (which reapplies whatever the flag file already says,
+# "0" included) is never second-guessed here -- a router where this was
+# already explicitly turned off before a reinstall must come back off, not
+# get silently re-enabled. Also gated on Xray actually being up (same check
+# lib/redirect.sh's own rd_xray_up uses): enabling capture while Xray isn't
+# running would just recreate the "leak-protect" blackout described in
+# lib/redirect.sh's FLAG_LEAK_PROTECT comment, for no reason.
+if [ ! -e "$SR_ETC_DIR/state/redirect_enabled" ]; then
+	if sr_xray_pids >/dev/null 2>&1; then
+		if sh "$SR_LIB_DIR/redirect.sh" enable >/dev/null 2>&1; then
+			log "Перехват трафика включён автоматически (все компоненты в норме). / Traffic capture enabled automatically (all components healthy)."
+		else
+			log "ПРЕДУПРЕЖДЕНИЕ: не удалось автоматически включить перехват трафика -- включите вручную на вкладке Protection. / WARNING: failed to auto-enable traffic capture -- enable it manually on the Protection tab."
+		fi
+	else
+		log "Xray не отвечает после установки, перехват трафика НЕ включён автоматически -- проверьте диагностику (check.sh) и включите вручную на вкладке Protection после устранения проблемы. / Xray isn't responding after install, traffic capture was NOT auto-enabled -- run check.sh and enable it manually on the Protection tab once fixed."
+	fi
+fi
 
 # ---------------------------------------------------------------------------
 # $LAN_IP was already computed once, right after platform detection.
