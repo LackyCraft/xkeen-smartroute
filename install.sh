@@ -444,29 +444,69 @@ log "Проверяю, что Xray — сборка из Entware (совмест
 # `|| true` makes sure this line can never take the rest of the install
 # down with it again, whatever adduser decides to reject next.
 if ! id xkeen >/dev/null 2>&1; then
-	command -v adduser >/dev/null 2>&1 && adduser -D -H xkeen 2>/dev/null || true
-	if ! id xkeen >/dev/null 2>&1; then
-		for f in /etc/passwd /etc/group /opt/etc/passwd /opt/etc/group; do
-			case "$f" in
-				*group) grep -q '^xkeen:' "$f" 2>/dev/null || echo 'xkeen:x:11111:' >> "$f" ;;
-				# uid 11111, not 0: reported live (GitHub issue #3, filed
-				# after #2 above) that this line hardcoded uid 0 -- on
-				# exactly the hardware this fallback exists for (no
-				# `adduser` applet at all, confirmed live on a Netis N6),
-				# "xkeen" ended up root-equivalent instead of the
-				# unprivileged account S24xray/_sr_xray_launch's whole
-				# `su ... xkeen` setup assumes, defeating the entire point
-				# of dropping Xray to a separate user. 11111 is the same
-				# id `adduser -u 11111` (see the comment above) always
-				# intended to use, and matches the gid this same fallback
-				# already writes to /etc/group on the line above -- not a
-				# new number, just applying it to the field that was
-				# actually wrong.
-				*passwd) grep -q '^xkeen:' "$f" 2>/dev/null || echo 'xkeen:x:11111:11111:::/bin/sh' >> "$f" ;;
-			esac
-		done
-	fi
+	# -s /bin/sh: reported live (a user's real KeeneticOS router) that
+	# without an explicit shell, adduser can default "xkeen" to /bin/bash
+	# -- which doesn't exist on this class of hardware, only busybox ash
+	# does (see this whole block's own top comment) -- and every `su -c
+	# ... xkeen` afterward (this project's own _sr_xray_launch, xkeen's
+	# own S24xray) failed outright with "Cannot execute /bin/bash",
+	# repeated once per retry attempt, Xray never starting at all. That
+	# default isn't universal -- confirmed live on a different KeeneticOS
+	# router that adduser there already picks /opt/bin/sh on its own --
+	# so this can't be assumed either way; pin it explicitly instead of
+	# hoping.
+	command -v adduser >/dev/null 2>&1 && adduser -D -H -s /bin/sh xkeen 2>/dev/null || true
 fi
+
+# busybox adduser, when it's present and succeeds, only ever writes
+# /etc/passwd -- no group entry, and nothing at all in Entware's own
+# /opt/etc/passwd or /opt/etc/group. Entware's `su` (/opt/bin/su ->
+# su-shadow) reads *only* /opt/etc/passwd, not the system one. Confirmed
+# live (GitHub issue #4, OpenWrt 24.10.4/mediatek-filogic): before #2, a
+# plain `adduser -D -H xkeen` always failed on stock OpenWrt (see this
+# block's own #2 comment above), so execution always fell through to the
+# loop that backfills all four files -- masking this gap entirely. Once #2
+# made that adduser call succeed, the loop below used to be gated on
+# `adduser` having failed too, so it never ran at all: install.sh finished
+# all six steps and reported success while Xray never started even once,
+# su-shadow logging "No passwd entry for user 'xkeen'" forever.
+#
+# Runs unconditionally now, regardless of whether adduser just succeeded,
+# the account already existed from an earlier run, or the full manual
+# fallback below is what actually creates it -- and takes uid/gid from
+# whatever account actually exists right now (`id -u`/`id -g`) instead of
+# hardcoding 11111, so all four files agree with each other and with
+# whichever one adduser itself already wrote, whatever id it picked. Only
+# falls back to the literal 11111 when there's truly no account anywhere
+# yet (id fails) -- the same id `adduser -u 11111` always intended to use,
+# back before #2's fix found out busybox rejects that flag outright.
+xkeen_uid="$(id -u xkeen 2>/dev/null || echo 11111)"
+xkeen_gid="$(id -g xkeen 2>/dev/null || echo 11111)"
+for f in /etc/passwd /etc/group /opt/etc/passwd /opt/etc/group; do
+	[ -f "$f" ] || continue
+	case "$f" in
+		*group)  grep -q '^xkeen:' "$f" 2>/dev/null || echo "xkeen:x:$xkeen_gid:" >> "$f" ;;
+		*passwd) grep -q '^xkeen:' "$f" 2>/dev/null || echo "xkeen:x:$xkeen_uid:$xkeen_gid:::/bin/sh" >> "$f" ;;
+	esac
+done
+
+# Self-heals an existing "xkeen" account whose shell field points at
+# something that isn't actually executable here -- the `-s /bin/sh` fix
+# above only ever applies to a *fresh* adduser call (and the backfill loop
+# above it only ever fills in entries that are missing, not ones that
+# already exist with a bad shell), so a router already affected before
+# this fix shipped (adduser having already defaulted "xkeen" to
+# /bin/bash, confirmed live) would otherwise keep failing forever. Runs
+# unconditionally, every time, checking whatever account is actually
+# there right now rather than only the moment of creation.
+for f in /etc/passwd /opt/etc/passwd; do
+	[ -f "$f" ] || continue
+	xkeen_shell="$(awk -F: '$1 == "xkeen" { print $NF }' "$f" 2>/dev/null)"
+	[ -n "$xkeen_shell" ] || continue
+	[ -x "$xkeen_shell" ] && continue
+	log "У «xkeen» нерабочий shell ($xkeen_shell) в $f, чиню на /bin/sh... / \"xkeen\"'s shell ($xkeen_shell) in $f doesn't work here, fixing to /bin/sh..."
+	sed -i "s#^\(xkeen:[^:]*:[^:]*:[^:]*:[^:]*:[^:]*:\).*#\1/bin/sh#" "$f"
+done
 
 # shadow-su's own `su` resets $PATH for any non-root target user to
 # login.defs' ENV_PATH (confirmed live on KeeneticOS: default
