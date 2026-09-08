@@ -754,23 +754,33 @@ XRAY_INBOUNDS_EOF
 # Same content as xkeen's own template, minus comments, MINUS the ".ru/.su/...
 # domains always go direct" rule xkeen ships by default.
 #
-# That rule used to be kept on the (wrong) assumption that Xray's confdir
-# merge always evaluates lib/genroute.sh's own 05_routing.smartroute.json
-# rules first, making this file's rules dead/unreachable regardless of their
-# content. Real on-router testing proved the opposite: a profile that
-# explicitly included 2ip.ru (a .ru domain) still leaked the real IP with
-# leak-protection fully enabled, because THIS file's domain-specific ".ru ->
-# direct" rule was actually winning over the user's own SmartRoute rule for
-# that same domain. Xray's actual confdir load order interleaves same-prefix
-# files by full filename, and "05_routing.json" sorts before
-# "05_routing.smartroute.json" -- so this rule was live and taking priority
-# the entire time. See AGENTS.md ("05_routing.json .ru precedence leak") for
-# the full writeup if this resurfaces.
+# That rule is dropped because it can never take effect once
+# lib/genroute.sh's own 05_routing.smartroute.json exists -- and it's this
+# file, not that one, that's harmless when overridden: it's the only routing
+# source for the short window before genroute.sh's first run (fresh install).
+#
+# It is NOT dropped because it "wins" the merge -- it cannot. Xray does not
+# concatenate routing.rules across confdir files (XTLS/Xray-core#4593): when
+# several files each declare a top-level "routing" key, the LAST one by
+# filename wins *entirely* and every earlier one is discarded, nothing
+# logged -- confirmed live with a minimal repro (issue #6): a two-file
+# confdir with "05_routing.json" then "05_routing.smartroute.json" keeps
+# only the second file's rule, not the first's. "05_routing.json" sorts
+# BEFORE "05_routing.smartroute.json", so whatever's written here always
+# loses the moment genroute.sh has produced its own file -- the exact
+# opposite of what an earlier version of this comment claimed. Same
+# collision class as the "policy" key documented in AGENTS.md.
+#
+# Never add a routing rule to any other confdir file expecting it to take
+# effect alongside 05_routing.smartroute.json -- it will vanish with
+# nothing logged. Verify with: xray run -test -confdir <dir> -dump | jq
+# '.routing.rules'.
 #
 # The plain, domain-unrestricted catch-all rule below is left in (still
-# pointed at "direct", not xkeen's broken placeholder "vless-reality" tag) --
-# it's harmless regardless of load order since it's the exact same fallback
-# lib/genroute.sh's own catch-all already provides, just redundant.
+# pointed at "direct", not xkeen's broken placeholder "vless-reality" tag)
+# purely because it's harmless *while this file is the only routing source*
+# -- it's the exact same fallback lib/genroute.sh's own catch-all already
+# provides once that file exists and wins the merge instead.
 cat > /opt/etc/xray/configs/05_routing.json <<'XRAY_ROUTING_EOF'
 {
   "routing": {
