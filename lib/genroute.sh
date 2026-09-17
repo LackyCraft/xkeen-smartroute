@@ -322,7 +322,31 @@ sr_regen() {
 	fi
 	trap 'rm -rf "$lock_dir"' EXIT INT TERM
 
-	rules="[]"
+	# api_rule seeded as the FIRST rule, not appended last -- Xray evaluates
+	# routing.rules top-to-bottom, first match wins. It used to be appended
+	# after every profile rule (see the comment that lived here before this
+	# fix), which was safe only as long as no earlier rule's "ip" list ever
+	# matched 127.0.0.1. Confirmed live that assumption breaks: a
+	# subscription-derived profile picked up a geoip-style CIDR entry
+	# ("126.0.0.0/7") that -- almost certainly unintentionally on the
+	# upstream list's part -- covers the entire 127.0.0.0/8 loopback block
+	# alongside its real target range. With that rule ahead of api_rule,
+	# every connection to Xray's own internal API (127.0.0.1:10085, used by
+	# smartroute-gateway for health/Observatory/traffic data) got silently
+	# diverted into a real VLESS outbound instead of Xray's internal API
+	# handler: the dokodemo-door "api" inbound still accepted the TCP
+	# connection (so the port looked up and reachable), but nothing ever
+	# proxies loopback traffic out to a real remote server correctly, so no
+	# response ever came back -- "error reading server preface: EOF" on
+	# every gateway call, forever, until Xray is restarted (which doesn't
+	# even fix it, since the same bad rule just gets rebuilt the same way).
+	# inboundTag:["api"] only matches traffic actually arriving on Xray's
+	# own internal API inbound -- nothing else in this project's confdir is
+	# tagged "api" -- so putting it first can't shadow any profile's real
+	# domain/IP routing; it only forecloses this exact accidental-CIDR-
+	# capture class of bug regardless of what ends up in any profile's list.
+	api_rule='{"type":"field","inboundTag":["api"],"outboundTag":"api"}'
+	rules="[$api_rule]"
 	current="{}"
 	profile_tags="[]"
 
@@ -423,22 +447,14 @@ sr_regen() {
 	catchall='{"type":"field","inboundTag":["redirect","tproxy"],"outboundTag":"direct"}'
 	rules="$(echo "$rules" | jq --argjson r "$catchall" '. + [$r]')"
 
-	# Same class of problem as the catchall above, found the same way (a real
-	# leak, not a hypothetical): 00_api.smartroute.json's own routing rule
-	# (inboundTag:["api"] -> outboundTag:"api", the only thing that makes
-	# Xray's internal gRPC API service on 127.0.0.1:10085 actually reachable
-	# through its dokodemo-door inbound) never survives Xray's confdir merge
-	# once this file also defines a "routing" key -- confirmed live via
-	# `xray run -test -confdir ... -dump`: the merged config's routing.rules
-	# only ever contains what THIS file emits, 00_api.smartroute.json's own
-	# routing block is gone without a trace, no error anywhere. Symptom was
-	# nasty precisely because nothing crashes: Xray runs, proxies traffic
-	# fine, and only the gateway panel's gRPC connection to it breaks --
-	# "error reading server preface: EOF" on every call, health/Observatory/
-	# traffic-graph data silently going stale. Emit it here instead, in the
-	# one file that's actually guaranteed to win.
-	api_rule='{"type":"field","inboundTag":["api"],"outboundTag":"api"}'
-	rules="$(echo "$rules" | jq --argjson r "$api_rule" '. + [$r]')"
+	# api_rule itself is seeded at the very front of $rules now, before the
+	# profile loop even starts -- see that comment for why (issue: it used
+	# to be appended here, last, which let an overly-broad profile CIDR
+	# shadow it). 00_api.smartroute.json's own copy of this same rule still
+	# never survives Xray's confdir merge once this file also defines a
+	# "routing" key (this file's own top-level "routing" key always wins
+	# that particular collision) -- so this file staying the single source
+	# for it, just first instead of last, is still required, not optional.
 
 	new_routing="$(jq -n --argjson rules "$rules" '{routing:{domainStrategy:"IPIfNonMatch", rules:$rules}}')"
 
