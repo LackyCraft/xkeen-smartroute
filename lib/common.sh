@@ -683,6 +683,27 @@ _sr_xray_lock_acquire() {
 			continue
 		fi
 		i=$((i + 1))
+		# Confirmed live: an empty pid file left this lock permanently
+		# unreclaimable for 10+ hours, blocking every single restart attempt
+		# (cron regen, manual, everything) with "held the lock for 90s+ (pid
+		# unknown)" until someone noticed and removed it by hand. The mkdir
+		# above and the `echo "$$" > .../pid` below are two separate
+		# statements -- whatever held this lock got killed (OOM, a crash,
+		# `kill -9` from an impatient SSH session) in the sliver of time
+		# between them, leaving a lock dir with nothing inside to ever prove
+		# dead. The `[ -n "$holder" ]` branch above can never fire for this
+		# case -- it only ever reclaims a lock that recorded a real, now-dead
+		# pid, not one that never got the chance to record any pid at all. A
+		# real, still-alive holder always finishes writing its own pid
+		# essentially instantly (nothing runs between these two lines) --
+		# 2 full seconds of an empty pid file is already far longer than that
+		# legitimately takes, so treating it as orphaned this early is safe,
+		# not a race against a genuine in-flight acquire.
+		if [ -z "$holder" ] && [ "$i" -ge 2 ]; then
+			sr_log "WARNING: reclaiming xray restart lock with an empty pid file (held since before this check could ever see a holder -- a previous acquirer likely died between mkdir and recording its pid)"
+			rm -rf "$SR_XRAY_LOCK_DIR"
+			continue
+		fi
 		if [ "$i" -ge 90 ]; then
 			sr_log "ERROR: another xray start/stop/restart has held the lock for 90s+ (pid ${holder:-unknown}) -- giving up rather than racing it."
 			return 1
