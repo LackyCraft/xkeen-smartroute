@@ -135,7 +135,25 @@ build_outbound() {
 	# $1=proto $2=id/password $3=host $4=port $5=query(raw, still % encoded) $6=fragment(decoded) $7=tag
 	proto="$1"; secret="$2"; host="$3"; port="$4"; query="$5"; tag="$7"
 
-	security="$(qval "$query" security)"; security="${security:-none}"
+	# Confirmed live: a real subscription's trojan:// node with no explicit
+	# security= query param (the provider apparently assumes every client
+	# already knows Trojan implies TLS, so didn't bother setting it) produced
+	# streamSettings.security:"none" here -- Xray's own config validator
+	# hard-rejects that outright for any public-IP target ("trojan without
+	# TLS is prohibited unless the server address is a private IP or
+	# domain"), and since this is a single merged confdir, that ONE bad
+	# outbound took the entire Xray process down at every single launch
+	# attempt ("Failed to start: ... failed to build outbound config with
+	# tag ...") until the whole subscription was removed -- same failure
+	# shape as the XHTTP "extra" field bug this file already documents
+	# above, just a different field. VLESS has no equivalent real-world
+	# assumption (REALITY/plain TCP are both common and legitimate without
+	# an explicit security= either), so this default is deliberately
+	# trojan-specific, not a blanket "assume tls" for every protocol.
+	security="$(qval "$query" security)"
+	if [ -z "$security" ]; then
+		if [ "$proto" = "trojan" ]; then security="tls"; else security="none"; fi
+	fi
 	net="$(qval "$query" type)"; net="${net:-tcp}"
 	sni_raw="$(qval "$query" sni)"; sni="$(urldecode "${sni_raw:-$host}")"
 	fp="$(urldecode "$(qval "$query" fp)")"
