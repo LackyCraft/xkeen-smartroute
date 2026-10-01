@@ -91,7 +91,19 @@ sr_fetch_sub() {
 	[ -z "$ver_ov" ] || dver="$ver_ov"
 	hwid="${hwid_ov:-$(client_hwid)}"
 
-	set -- -fsSL --max-time 20 -H "User-Agent: $ua"
+	# --compressed: confirmed live against a real provider (issue #8) --
+	# without it, this specific panel's response came back as raw garbage
+	# bytes (not valid base64, not a real subscription body) even though no
+	# Content-Encoding header was present in the reply at all; adding
+	# --compressed (which also sends "Accept-Encoding: gzip, deflate, br" on
+	# the request) made the same URL immediately return a clean, correctly
+	# formatted body. Whatever the provider's edge/CDN is actually keying
+	# this behavior on isn't fully clear (no encoding header to point at
+	# directly), but the fix is confirmed effective, not a guess -- and it's
+	# a strict improvement even for providers that never compress at all:
+	# curl auto-decompresses only if a real Content-Encoding is present,
+	# otherwise this is a no-op.
+	set -- -fsSL --compressed --max-time 20 -H "User-Agent: $ua"
 	[ -z "$dos" ]     || set -- "$@" -H "X-Device-Os: $dos"
 	[ -z "$dlocale" ] || set -- "$@" -H "X-Device-Locale: $dlocale"
 	[ -z "$dmodel" ]  || set -- "$@" -H "X-Device-Model: $dmodel"
@@ -119,6 +131,55 @@ redact_url() {
 urldecode() {
 	# percent-decode + turn '+' into space, POSIX-portable (no bash-isms)
 	printf '%b' "$(printf '%s' "$1" | sed 's/+/ /g; s/%\(..\)/\\x\1/g')"
+}
+
+# urlencode: the reverse of urldecode, used when *we* synthesize a query
+# string ourselves (from a vmess:// JSON blob, a shadowsocks:// URI, or a
+# JSON-config subscription -- see json_body_to_uri_lines below) rather than
+# just relaying one a provider already wrote. Every value that flows into
+# build_outbound() eventually gets run through urldecode() again on the way
+# out (qval + urldecode is how it reads every field), so anything containing
+# a literal "&" (would corrupt qval's own "&"-split) or "%" (would make
+# urldecode misinterpret a literal percent sign as the start of an escape)
+# has to be escaped going in, not just left alone because "real" providers
+# tend not to need it. Blanket %XX-encoding every byte is simpler and always
+# correct (over-encoding plain ASCII round-trips fine through urldecode)
+# rather than trying to allowlist which characters are actually safe.
+#
+# Routed through jq's own `@uri` rather than a byte-munging `od`/`sed`
+# pipeline -- confirmed live this project's byte-level tooling is not
+# consistent across real routers (the exact same gap `gen_random_id` above
+# already works around for `od`/`hexdump`): on this router `od` does not
+# exist at all, so the original od-based encoder silently produced nothing
+# for every call, which in turn made every vmess/shadowsocks query string
+# come out with its type/security/method fields empty -- caught only by
+# actually importing a real vmess/ss line end-to-end and inspecting the
+# resulting Xray outbound, not by eyeballing the encoder in isolation. `jq`
+# itself is already a hard dependency of this whole script (`sr_require
+# jq`), so this trades a shaky, inconsistently-available tool for one this
+# project can never run without anyway.
+urlencode() {
+	[ -n "$1" ] || return 0
+	printf '%s' "$1" | jq -sRr '@uri'
+}
+
+# b64norm_decode: like `base64 -d`, but tolerant of the two variants every
+# real-world vmess:// JSON blob / shadowsocks:// userinfo / bare subscription
+# body actually shows up in: URL-safe alphabet (- and _ instead of + and /)
+# and missing "=" padding (many providers strip it since it's meaningless in
+# a URL's own path/query grammar). Confirmed necessary live -- a provider's
+# vmess link decoded to nothing (`base64 -d` on it silently produced empty
+# output, no error) until the URL-safe characters were normalized back to
+# the standard alphabet first. Padding is restored by rounding the length up
+# to a multiple of 4, the only ambiguity-free way to do it (the original
+# unpadded length alone doesn't say whether 1, 2, or 3 "=" were trimmed).
+b64norm_decode() {
+	s="$(printf '%s' "$1" | tr -d '\r\n' | tr '_-' '/+')"
+	rem=$(( ${#s} % 4 ))
+	if [ "$rem" -eq 2 ]; then s="${s}=="
+	elif [ "$rem" -eq 3 ]; then s="${s}="
+	fi
+	printf '%s' "$s" | base64 -d 2>/dev/null
 }
 
 qval() {
@@ -221,12 +282,24 @@ build_outbound() {
 	extra_json="$(printf '%s' "$extra_raw" | jq -c . 2>/dev/null)"
 	[ -n "$extra_json" ] || extra_json='null'
 
+	# vmess (its own two fields, absent for every other protocol -- see
+	# build_outbound's vmess branch below): alterId (legacy VMess AEAD
+	# negotiation counter -- 0 is standard/expected for any modern server)
+	# and the cipher ("auto" lets Xray pick, matching what every real client
+	# also defaults to when a vmess:// link's own "scy" field is absent).
+	aid="$(qval "$query" alterId)"; aid="${aid:-0}"
+	scy="$(qval "$query" scy)"; scy="${scy:-auto}"
+	# shadowsocks's own single extra field -- the cipher/method name
+	# (e.g. "aes-256-gcm", "chacha20-ietf-poly1305", "2022-blake3-aes-256-gcm").
+	method="$(urldecode "$(qval "$query" method)")"
+
 	jq -n \
 		--arg tag "$tag" --arg proto "$proto" --arg address "$host" --argjson port "$port" \
 		--arg id "$secret" --arg net "$net" --arg security "$security" --arg sni "$sni" \
 		--arg fp "$fp" --arg pbk "$pbk" --arg sid "$sid" --arg spx "$spx" --arg alpn "$alpn" \
 		--arg path "$path" --arg hosthdr "$hosthdr" --arg mode "$mode" --arg flow "$flow" \
-		--arg svcname "$svcname" --argjson extra "$extra_json" --arg pktenc "$pktenc" '
+		--arg svcname "$svcname" --argjson extra "$extra_json" --arg pktenc "$pktenc" \
+		--arg aid "$aid" --arg scy "$scy" --arg method "$method" '
 		def alpnArr: if $alpn=="" then null else ($alpn|split(",")) end;
 		{
 			tag: $tag,
@@ -234,11 +307,20 @@ build_outbound() {
 			settings: (
 				if $proto=="vless" then
 					{vnext: [{address:$address, port:$port, users:[({id:$id, encryption:"none", flow:$flow} + (if $pktenc!="" then {packetEncoding:$pktenc} else {} end))]}]}
+				elif $proto=="vmess" then
+					{vnext: [{address:$address, port:$port, users:[({id:$id, alterId:($aid|tonumber), security:$scy} + (if $pktenc!="" then {packetEncoding:$pktenc} else {} end))]}]}
+				elif $proto=="shadowsocks" then
+					{servers: [{address:$address, port:$port, method:$method, password:$id}]}
 				else
 					{servers: [{address:$address, port:$port, password:$id}]}
 				end
-			),
-			streamSettings: (
+			)
+		} + (
+			# Plain shadowsocks (no plugin -- not supported here yet) has no
+			# TLS/transport layer of its own, so its Xray outbound carries no
+			# "streamSettings" key at all -- every other supported protocol
+			# always does, even when security ends up "none".
+			if $proto=="shadowsocks" then {} else {streamSettings: (
 				{network: $net}
 				+ (if $security=="tls" then
 					{security:"tls", tlsSettings: ({serverName:$sni} + (if $fp!="" then {fingerprint:$fp} else {} end) + (if alpnArr then {alpn:alpnArr} else {} end))}
@@ -249,8 +331,137 @@ build_outbound() {
 				elif $net=="grpc" then {grpcSettings: {serviceName:$svcname}}
 				elif $net=="xhttp" or $net=="splithttp" then {xhttpSettings: ({path:$path, host:$hosthdr, mode:$mode} + (if $extra != null then {extra:$extra} else {} end))}
 				else {} end)
+			)} end
+		)'
+}
+
+# json_body_to_uri_lines: some subscription providers hand back a full
+# client-ready JSON config instead of the usual base64 vless://... list --
+# confirmed live against a real provider (issue #8): a JSON array of 40
+# "groups," each a complete standalone Xray-core config (dns/inbounds/log/
+# outbounds), where the real servers are buried in each group's own
+# .outbounds[] alongside boilerplate "freedom"/"blackhole" entries that are
+# not real servers at all. A different, also real family of providers (and
+# every sing-box-based client) uses the same overall idea -- one or more
+# JSON outbounds carrying the actual server/credentials -- but with
+# completely different field names (flat "server"/"server_port"/"uuid"
+# instead of Xray-core's own nested settings.vnext[].address/port/users[].id,
+# ".type" instead of ".protocol", TLS/Reality under ".tls"/".tls.reality"
+# instead of top-level streamSettings).
+#
+# Rather than teach sr_import a second, parallel outbound-construction path
+# for this, this just re-renders every recognized proxy outbound (vless,
+# trojan, vmess, shadowsocks -- whatever build_outbound already knows how to
+# build) back into the exact same "proto://secret@host:port?query#name" line
+# shape a normal subscription would have sent in the first place, so it can
+# flow through the one, already-tested per-line loop unchanged. Input that
+# is not valid JSON at all (the overwhelmingly common case -- a normal
+# base64/plain vless-list body) produces nothing; sr_import only switches to
+# these lines when this actually found something.
+json_body_to_uri_lines() {
+	jq -r '
+		def enc: if . == null then "" else (.|tostring|@uri) end;
+
+		def build_uri($proto; $secret; $host; $port; $net; $sec; $sni; $pbk; $sid; $fp; $alpn; $flow; $path; $hosthdr; $svcname; $mode; $aid; $scy; $method; $name):
+			"\($proto)://\($secret|enc)@\($host):\($port)?type=\($net|enc)"
+			+ (if $sec != "" and $sec != "none" then "&security=\($sec|enc)" else "" end)
+			+ (if $sni != "" then "&sni=\($sni|enc)" else "" end)
+			+ (if $pbk != "" then "&pbk=\($pbk|enc)" else "" end)
+			+ (if $sid != "" then "&sid=\($sid|enc)" else "" end)
+			+ (if $fp != "" then "&fp=\($fp|enc)" else "" end)
+			+ (if $alpn != "" then "&alpn=\($alpn|enc)" else "" end)
+			+ (if $flow != "" then "&flow=\($flow|enc)" else "" end)
+			+ (if $path != "" then "&path=\($path|enc)" else "" end)
+			+ (if $hosthdr != "" then "&host=\($hosthdr|enc)" else "" end)
+			+ (if $svcname != "" then "&serviceName=\($svcname|enc)" else "" end)
+			+ (if $mode != "" then "&mode=\($mode|enc)" else "" end)
+			+ (if $proto == "vmess" then "&alterId=\($aid|enc)&scy=\($scy|enc)" else "" end)
+			+ (if $proto == "shadowsocks" then "&method=\($method|enc)" else "" end)
+			+ "#\($name|enc)";
+
+		(if type == "array" then . else [.] end) as $root
+		| (
+			(
+				# Xray-core dialect: a "group" is anything carrying "outbounds";
+				# a real proxy entry inside it has ".protocol" plus nested
+				# settings/streamSettings, the exact shape Xray-core itself
+				# consumes. One subscription "group" can bundle several
+				# candidate servers together (seen live: a 13-server "best
+				# auto pick" group) -- each becomes its own line, numbered
+				# only when the group actually has more than one.
+				($root[] | select(has("outbounds"))) as $group
+				| ($group.remarks // $group.remark // $group.name // "server") as $gname
+				| [$group.outbounds[]? | select(.protocol as $p | ["vless","trojan","vmess","shadowsocks"] | index($p) != null)] as $obs
+				| ($obs | length) as $n
+				| range(0; $n) as $idx
+				| $obs[$idx] as $ob
+				| ($ob.protocol) as $proto
+				| ($ob.streamSettings // {}) as $ss
+				| ($ss.network // "tcp") as $net
+				| ($ss.security // "none") as $sec
+				| (if $proto == "vless" or $proto == "vmess" then ($ob.settings.vnext[0] // {}) else ($ob.settings.servers[0] // {}) end) as $srv
+				| ($srv.address) as $host
+				| ($srv.port) as $port
+				| (if $proto == "shadowsocks" then $srv.password else ($srv.users[0].id // $srv.password) end) as $secret
+				| select($host != null and $port != null and $secret != null)
+				| (if $proto == "vless" then ($srv.users[0].flow // "") else "" end) as $flow
+				| (if $proto == "vmess" then (($srv.users[0].alterId // 0)|tostring) else "" end) as $aid
+				| (if $proto == "vmess" then ($srv.users[0].security // "auto") else "" end) as $scy
+				| ($srv.method // "") as $method
+				| (if $sec == "reality" then ($ss.realitySettings // {}) elif $sec == "tls" then ($ss.tlsSettings // {}) else {} end) as $secset
+				| ($secset.serverName // "") as $sni
+				| ($secset.publicKey // "") as $pbk
+				| ($secset.shortId // "") as $sid
+				| ($secset.fingerprint // "") as $fp
+				| (($secset.alpn // []) | join(",")) as $alpn
+				| (if $net == "ws" then ($ss.wsSettings // {}) elif $net == "grpc" then ($ss.grpcSettings // {}) elif ($net == "xhttp" or $net == "splithttp") then ($ss.xhttpSettings // {}) else {} end) as $netset
+				| ($netset.path // "") as $path
+				| ($netset.host // ($netset.headers.Host // "")) as $hosthdr
+				| ($netset.serviceName // "") as $svcname
+				| ($netset.mode // "") as $mode
+				| ($gname + (if $n > 1 then " \($idx+1)" else "" end)) as $name
+				| build_uri($proto; $secret; $host; $port; $net; $sec; $sni; $pbk; $sid; $fp; $alpn; $flow; $path; $hosthdr; $svcname; $mode; $aid; $scy; $method; $name)
+			),
+			(
+				# sing-box dialect: flat per-outbound fields (".type"/
+				# ".server"/".server_port"/".uuid") instead of Xray-core own
+				# nested shape -- a genuinely different JSON schema, not a
+				# formatting variant of the one above. A plain Xray-core
+				# outbound has no ".type" field at all, and a plain sing-box
+				# one has no ".protocol" -- confirmed live the two selects
+				# below never both match the same object, so mixed input is
+				# never double counted.
+				($root[] | select(has("outbounds")) | .outbounds[]? | select(.type as $t | ["vless","trojan","vmess","shadowsocks"] | index($t) != null)) as $ob2
+				| ($ob2.type) as $proto
+				| ($ob2.server) as $host
+				| ($ob2.server_port) as $port
+				| (if $proto == "shadowsocks" then $ob2.password else ($ob2.uuid // $ob2.password) end) as $secret
+				| select($host != null and $port != null and $secret != null)
+				| ($ob2.flow // "") as $flow
+				| (($ob2.alter_id // 0)|tostring) as $aid
+				| ($ob2.security // "auto") as $scy
+				| ($ob2.method // "") as $method
+				| ($ob2.tls // {}) as $tlsblock
+				| (($tlsblock.enabled // false)) as $tls_on
+				| ($tlsblock.reality // {}) as $realblock
+				| (($realblock.enabled // false)) as $reality_on
+				| (if $reality_on then "reality" elif $tls_on then "tls" else "none" end) as $sec
+				| ($tlsblock.server_name // "") as $sni
+				| ($realblock.public_key // "") as $pbk
+				| ($realblock.short_id // "") as $sid
+				| ($tlsblock.utls.fingerprint // "") as $fp
+				| (($tlsblock.alpn // []) | join(",")) as $alpn
+				| ($ob2.transport // {}) as $tr
+				| ($tr.type // "tcp") as $net
+				| ($tr.path // "") as $path
+				| ($tr.headers.Host // "") as $hosthdr
+				| ($tr.service_name // "") as $svcname
+				| ($tr.method // "") as $mode
+				| ($ob2.tag // "server") as $name
+				| build_uri($proto; $secret; $host; $port; $net; $sec; $sni; $pbk; $sid; $fp; $alpn; $flow; $path; $hosthdr; $svcname; $mode; $aid; $scy; $method; $name)
 			)
-		}'
+		)
+	' 2>/dev/null
 }
 
 # _sr_compute_tag_remap: shared by sr_remap_profile_tags and
@@ -428,11 +639,28 @@ sr_import() {
 	trap 'rm -rf "$lock_dir"' EXIT INT TERM
 
 	raw="$(sr_fetch_sub "$client" "$url" "$os_ov" "$locale_ov" "$model_ov" "$ver_ov" "$hwid_ov")" || sr_die "failed to fetch subscription: $(redact_url "$url")"
-	decoded="$(printf '%s' "$raw" | base64 -d 2>/dev/null || true)"
-	case "$decoded" in
-		*"://"*) body="$decoded" ;;
-		*) body="$raw" ;;
-	esac
+	# A full-client-JSON-config subscription (see json_body_to_uri_lines's
+	# own comment -- issue #8) is never also valid base64 (JSON's own `{`/
+	# `[`/`"`/`:` punctuation falls outside the base64 alphabet), so this
+	# check has to come before the base64 attempt below, not after it --
+	# otherwise `body` would already be set to raw/garbage by the time
+	# anything looked at whether it was JSON at all.
+	# `|| true`: jq exits non-zero on the overwhelmingly common case here --
+	# input that is not JSON at all (a normal base64/plain vless-list body).
+	# Under this script's own `set -eu`, an unguarded failing command
+	# substitution on a plain assignment statement (not an if/while
+	# condition) aborts the whole script right here, every single time,
+	# before ever reaching the check below -- confirmed live the hard way.
+	json_lines="$(printf '%s' "$raw" | json_body_to_uri_lines)" || true
+	if [ -n "$json_lines" ]; then
+		body="$json_lines"
+	else
+		decoded="$(printf '%s' "$raw" | base64 -d 2>/dev/null || true)"
+		case "$decoded" in
+			*"://"*) body="$decoded" ;;
+			*) body="$raw" ;;
+		esac
+	fi
 
 	tmp_outbounds="$(mktemp)"
 	tmp_servers="$(mktemp)"
@@ -456,36 +684,121 @@ sr_import() {
 		case "$line" in
 			vless://*) proto=vless ;;
 			trojan://*) proto=trojan ;;
+			vmess://*) proto=vmess ;;
+			ss://*) proto=shadowsocks ;;
 			*) skipped=$((skipped + 1)); continue ;;
 		esac
 
-		rest="${line#*://}"
-		case "$rest" in
-			*"#"*) frag_raw="${rest#*#}"; rest_nofrag="${rest%%#*}" ;;
-			*) frag_raw=""; rest_nofrag="$rest" ;;
-		esac
-		case "$rest_nofrag" in
-			*"?"*) query="${rest_nofrag#*\?}"; userhostport="${rest_nofrag%%\?*}" ;;
-			*) query=""; userhostport="$rest_nofrag" ;;
-		esac
-		secret="${userhostport%%@*}"
-		hostport="${userhostport#*@}"
-		host="${hostport%:*}"
-		port="${hostport##*:}"
-		# Bracketed IPv6 literal ("[2001:db8::1]:443", RFC 3986 -- how a URI
-		# has to encode an IPv6 host, since a bare literal's own colons
-		# would be indistinguishable from the ":port" separator). The %:*
-		# split above correctly finds the port after the closing bracket
-		# (shortest match from the end lands on the last colon either way),
-		# but leaves the brackets themselves inside $host; Xray's own
-		# outbound "address" field wants the bare literal, not URI bracket
-		# syntax, so a real IPv6 server would silently fail to connect
-		# (address "[2001:db8::1]" is not a valid address, just a mangled
-		# one) without this.
-		case "$host" in
-			\[*\]) host="${host#\[}"; host="${host%\]}" ;;
-		esac
-		name="$(urldecode "$frag_raw")"; [ -n "$name" ] || name="$host:$port"
+		if [ "$proto" = "vmess" ]; then
+			# vmess:// is base64(JSON), not a "secret@host:port?query#frag"
+			# URI at all -- a completely different shape from vless/trojan/ss,
+			# so it gets its own decode here instead of the generic splitting
+			# below. Field names (add/port/id/aid/scy/net/host/path/tls/sni/
+			# alpn/ps) are the standard v2rayN-originated vmess share-link
+			# scheme every client that supports vmess:// also emits/reads.
+			vmess_json="$(b64norm_decode "${line#vmess://}")"
+			if ! printf '%s' "$vmess_json" | jq -e . >/dev/null 2>&1; then
+				skipped=$((skipped + 1)); continue
+			fi
+			host="$(printf '%s' "$vmess_json" | jq -r '.add // empty')"
+			port="$(printf '%s' "$vmess_json" | jq -r '.port // empty')"
+			secret="$(printf '%s' "$vmess_json" | jq -r '.id // empty')"
+			if [ -z "$host" ] || [ -z "$port" ] || [ -z "$secret" ]; then
+				skipped=$((skipped + 1)); continue
+			fi
+			v_aid="$(printf '%s' "$vmess_json" | jq -r '.aid // "0"')"
+			v_scy="$(printf '%s' "$vmess_json" | jq -r '.scy // "auto"')"
+			v_net="$(printf '%s' "$vmess_json" | jq -r '.net // "tcp"')"
+			v_tls="$(printf '%s' "$vmess_json" | jq -r '.tls // ""')"
+			v_sni="$(printf '%s' "$vmess_json" | jq -r '.sni // .host // ""')"
+			v_host="$(printf '%s' "$vmess_json" | jq -r '.host // ""')"
+			v_path="$(printf '%s' "$vmess_json" | jq -r '.path // ""')"
+			v_alpn="$(printf '%s' "$vmess_json" | jq -r '.alpn // ""')"
+			name="$(printf '%s' "$vmess_json" | jq -r '.ps // empty')"; [ -n "$name" ] || name="$host:$port"
+			v_sec=""; [ "$v_tls" = "tls" ] && v_sec="tls"
+			query="type=$(urlencode "$v_net")&alterId=$(urlencode "$v_aid")&scy=$(urlencode "$v_scy")"
+			[ -z "$v_sec" ]  || query="$query&security=$(urlencode "$v_sec")"
+			[ -z "$v_sni" ]  || query="$query&sni=$(urlencode "$v_sni")"
+			[ -z "$v_host" ] || query="$query&host=$(urlencode "$v_host")"
+			[ -z "$v_path" ] || query="$query&path=$(urlencode "$v_path")"
+			[ -z "$v_alpn" ] || query="$query&alpn=$(urlencode "$v_alpn")"
+		elif [ "$proto" = "shadowsocks" ]; then
+			# ss:// comes in two shapes still both seen in the wild: SIP002
+			# ("ss://" base64-or-plaintext(method:password) "@" host ":"
+			# port ["?" plugin] ["#" tag]) and the older legacy form that
+			# base64-encodes the whole "method:password@host:port" as one
+			# blob with no literal "@" anywhere in the URL itself -- the
+			# presence of a literal "@" in the raw line (outside any
+			# fragment/plugin query) is what tells the two apart, since
+			# neither base64 alphabet nor percent-encoding ever produces one.
+			# SIP002's own userinfo can itself be either base64 or, for
+			# AEAD-2022 ciphers, already-plaintext "method:password" --
+			# distinguished the same way: base64 never contains a literal
+			# ":", so a ":" in the raw userinfo means it was never encoded.
+			rest="${line#ss://}"
+			case "$rest" in
+				*"#"*) frag_raw="${rest#*#}"; rest_nofrag="${rest%%#*}" ;;
+				*) frag_raw=""; rest_nofrag="$rest" ;;
+			esac
+			case "$rest_nofrag" in
+				*"?"*) rest_nofrag="${rest_nofrag%%\?*}" ;;
+			esac
+			case "$rest_nofrag" in
+				*@*)
+					userinfo_raw="${rest_nofrag%%@*}"
+					hostport="${rest_nofrag#*@}"
+					case "$userinfo_raw" in
+						*:*) userinfo="$(urldecode "$userinfo_raw")" ;;
+						*) userinfo="$(b64norm_decode "$userinfo_raw")" ;;
+					esac
+					;;
+				*)
+					decoded_all="$(b64norm_decode "$rest_nofrag")"
+					userinfo="${decoded_all%%@*}"
+					hostport="${decoded_all#*@}"
+					;;
+			esac
+			ss_method="${userinfo%%:*}"
+			secret="${userinfo#*:}"
+			host="${hostport%:*}"
+			port="${hostport##*:}"
+			case "$host" in
+				\[*\]) host="${host#\[}"; host="${host%\]}" ;;
+			esac
+			if [ -z "$host" ] || [ -z "$port" ] || [ -z "$secret" ] || [ -z "$ss_method" ]; then
+				skipped=$((skipped + 1)); continue
+			fi
+			name="$(urldecode "$frag_raw")"; [ -n "$name" ] || name="$host:$port"
+			query="method=$(urlencode "$ss_method")"
+		else
+			rest="${line#*://}"
+			case "$rest" in
+				*"#"*) frag_raw="${rest#*#}"; rest_nofrag="${rest%%#*}" ;;
+				*) frag_raw=""; rest_nofrag="$rest" ;;
+			esac
+			case "$rest_nofrag" in
+				*"?"*) query="${rest_nofrag#*\?}"; userhostport="${rest_nofrag%%\?*}" ;;
+				*) query=""; userhostport="$rest_nofrag" ;;
+			esac
+			secret="${userhostport%%@*}"
+			hostport="${userhostport#*@}"
+			host="${hostport%:*}"
+			port="${hostport##*:}"
+			# Bracketed IPv6 literal ("[2001:db8::1]:443", RFC 3986 -- how a
+			# URI has to encode an IPv6 host, since a bare literal's own
+			# colons would be indistinguishable from the ":port" separator).
+			# The %:* split above correctly finds the port after the closing
+			# bracket (shortest match from the end lands on the last colon
+			# either way), but leaves the brackets themselves inside $host;
+			# Xray's own outbound "address" field wants the bare literal, not
+			# URI bracket syntax, so a real IPv6 server would silently fail
+			# to connect (address "[2001:db8::1]" is not a valid address,
+			# just a mangled one) without this.
+			case "$host" in
+				\[*\]) host="${host#\[}"; host="${host%\]}" ;;
+			esac
+			name="$(urldecode "$frag_raw")"; [ -n "$name" ] || name="$host:$port"
+		fi
 
 		i=$((i + 1))
 		# Tag is derived from the node's identity, not a sequential index -- a
