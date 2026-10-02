@@ -71,6 +71,41 @@
 		return activePoll;
 	}
 
+	// Observatory itself updates continuously in the background regardless
+	// of whether anyone has this page open (smartroute-gateway's own
+	// failover.go polls Xray every 20s and persists the result, see
+	// get_health's own comment in the rpcd script) -- but reloadAll() above
+	// only ever runs once on page load, or for a few minutes right after an
+	// explicit refresh/ping click. Confirmed live: a server correctly
+	// marked alive again minutes ago in health.json on disk still showed as
+	// "dead, 13m ago" in an open, expanded subscription card, because
+	// nothing had re-fetched health/pings since that card was first opened
+	// -- the on-disk truth was already current, only the browser's own copy
+	// of it was stale. get_health/get_pings are both a bare `cat` of an
+	// already-maintained state file on the router side (no probe triggered
+	// by asking), so polling them this way costs nothing beyond what was
+	// already happening anyway -- unlike reloadAll's own subscriptions/
+	// servers list, which rarely changes and isn't worth re-fetching this
+	// often. Scoped to "at least one card is actually expanded" so a page
+	// just sitting open with everything collapsed does not poll for data
+	// nobody can currently see, and skipped entirely while the heavier
+	// reloadAll loop is already in flight (a refresh/ping in progress) so
+	// the two never race each other over the same state.
+	var AMBIENT_HEALTH_POLL_MS = 20000;
+	var ambientPollTimer = null;
+	function startAmbientHealthPoll() {
+		if (ambientPollTimer) return;
+		ambientPollTimer = setInterval(function () {
+			if (activePoll) return;
+			var anyExpanded = Object.keys(st.expanded).some(function (label) { return st.expanded[label]; });
+			if (!anyExpanded) return;
+			Promise.all([api.getHealth(), api.getPings()]).then(function (d) {
+				st.health = d[0] || {}; st.pings = d[1] || {};
+				renderList();
+			});
+		}, AMBIENT_HEALTH_POLL_MS);
+	}
+
 	function renderList() {
 		var container = document.getElementById('sr-subscriptions-list');
 		if (!container) return;
@@ -275,6 +310,8 @@
 				autoRefreshToggle.checked = d[6] !== false;
 				renderList();
 			});
+
+		startAmbientHealthPoll();
 	}
 
 	renderers.subscriptions = render;
