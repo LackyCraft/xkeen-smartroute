@@ -1,4 +1,4 @@
-# YouTube (already in geosite -- IP snapshot is informational only) -- resolved IPv4 snapshot, auto-generated 2026-10-26 by scripts/update_lists.py
+# YouTube (already in geosite -- IP snapshot is informational only) -- resolved IPv4 snapshot, auto-generated 2026-11-02 by scripts/update_lists.py
 # Informational only: NOT used for routing (CDN IPs rotate; this is a point-in-time DNS snapshot).
 # source domains: youtube.com, www.youtube.com, googlevideo.com, ytimg.com
 142.251.150.4
@@ -9,5 +9,13 @@
 142.251.155.4
 142.251.156.4
 142.251.157.4
-142.251.215.164
-142.251.35.78
+192.178.209.136
+192.178.209.190
+192.178.209.91
+192.178.209.93
+192.178.212.103
+192.178.212.104
+192.178.212.105
+192.178.212.106
+192.178.212.147
+192.178.212.99
